@@ -5,7 +5,6 @@ from pathlib import Path
 
 from ehlib.config import get_config, Config
 from ehlib.core.downloader import Downloader
-from ehlib.core.login_helper import cmd_login_helper, cmd_sync_now, read_login_status, clear_login_status
 from ehlib.core.session_manager import SessionManager
 from ehlib.models.database import Database
 from ehlib.sites.nhentai import NhentaiSite
@@ -178,21 +177,6 @@ def main() -> None:
     exp.add_argument("--output", default="metadata.json", help="Output file path")
     exp.add_argument("--format", choices=["json"], default="json", help="Export format")
 
-    lh = subparsers.add_parser("login-helper", help="Launch browser to login and acquire cookies")
-    lh_sub = lh.add_subparsers(dest="lh_command", help="Login helper commands")
-
-    lh_start = lh_sub.add_parser("start", help="Start login helper (opens browser)")
-    lh_start.add_argument("source", choices=["nhentai", "exhentai"], help="Target site")
-
-    lh_sync = lh_sub.add_parser("sync", help="Force sync cookies from running browser")
-    lh_sync.add_argument("source", choices=["nhentai", "exhentai"], help="Target site")
-
-    lh_status = lh_sub.add_parser("status", help="Check login status")
-    lh_status.add_argument("source", choices=["nhentai", "exhentai"], help="Target site")
-
-    lh_clear = lh_sub.add_parser("clear", help="Clear login status file")
-    lh_clear.add_argument("source", choices=["nhentai", "exhentai"], help="Target site")
-
     args = parser.parse_args()
 
     if not args.command:
@@ -218,21 +202,6 @@ def main() -> None:
         if handler:
             await handler(args, config, db)
             return
-
-        if args.command == "login-helper":
-            if args.lh_command == "start":
-                await cmd_login_helper(args.source)
-            elif args.lh_command == "sync":
-                await cmd_sync_now(args.source)
-            elif args.lh_command == "status":
-                import json
-                status = read_login_status(args.source)
-                print(json.dumps(status, ensure_ascii=False))
-            elif args.lh_command == "clear":
-                clear_login_status(args.source)
-                print(f"Login status cleared for {args.source}")
-            else:
-                lh.print_help()
 
     asyncio.run(run())
 

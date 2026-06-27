@@ -83,26 +83,6 @@ function run_python($args, $timeout = 120) {
     ];
 }
 
-function run_python_background($args) {
-    global $root, $python;
-    $cmd = escapeshellcmd($python) . ' -m ehlib';
-    foreach ($args as $a) {
-        $cmd .= ' ' . escapeshellarg($a);
-    }
-
-    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        $fullCmd = 'start "" /B ' . $cmd;
-        $proc = popen($fullCmd, 'r');
-        if (is_resource($proc)) {
-            pclose($proc);
-        }
-    } else {
-        $fullCmd = 'nohup ' . $cmd . ' > /dev/null 2>&1 &';
-        exec($fullCmd);
-    }
-    return true;
-}
-
 function read_config() {
     global $root;
     $path = $root . '/config.yaml';
@@ -355,50 +335,25 @@ try {
             ]);
             break;
 
-        case 'launch_login_helper':
-            $source = $_POST['source'] ?? $_GET['source'] ?? '';
-            if (!$source) error_exit('Source required (nhentai or exhentai)');
-            $args = ['login-helper', 'start', $source];
-            run_python_background($args);
-            json_exit(['message' => "Login helper started for {$source}"]);
-            break;
-
-        case 'check_login_status':
-            $source = $_GET['source'] ?? '';
-            if (!$source) error_exit('Source required');
-            $status_file = $root . '/data/login_' . $source . '.json';
-            if (!is_file($status_file)) {
-                $config = read_config();
-                $saved = $config['cookies'][$source] ?? [];
-                $filled = [];
-                foreach ($saved as $k => $v) {
-                    $filled[$k] = !empty($v);
+        case 'parse_cookie_string':
+            $cookie_string = $_POST['cookie_string'] ?? $_GET['cookie_string'] ?? '';
+            if (!$cookie_string) error_exit('cookie_string required');
+            $pairs = explode(';', $cookie_string);
+            $result = [];
+            foreach ($pairs as $pair) {
+                $pair = trim($pair);
+                if (strpos($pair, '=') === false) continue;
+                [$key, $value] = explode('=', $pair, 2);
+                $result[trim($key)] = trim($value);
+            }
+            $known = ['ipb_member_id', 'ipb_pass_hash', 'cf_clearance', 'sk', 'star', 'hath_perks', 'igneous'];
+            $extracted = [];
+            foreach ($known as $k) {
+                if (isset($result[$k]) && $result[$k] !== '') {
+                    $extracted[$k] = $result[$k];
                 }
-                $all_filled = !in_array(false, $filled, true);
-                json_exit([
-                    'status' => $all_filled ? 'completed' : 'idle',
-                    'message' => $all_filled ? 'Cookies already configured' : 'Login helper not started',
-                    'cookies' => $saved,
-                    'is_empty' => true,
-                ]);
             }
-            $data = json_decode(file_get_contents($status_file), true);
-            if ($data['status'] === 'completed') {
-                @unlink($status_file);
-            }
-            json_exit($data);
-            break;
-
-        case 'sync_cookies':
-            $source = $_POST['source'] ?? $_GET['source'] ?? '';
-            if (!$source) error_exit('Source required');
-            $args = ['login-helper', 'sync', $source];
-            $result = run_python($args, 30);
-            $sync_result = json_decode($result['stdout'], true);
-            if (!$sync_result) {
-                json_exit(['error' => $result['stderr'] ?: 'Sync failed', 'output' => $result['stdout']], false);
-            }
-            json_exit($sync_result, $sync_result['status'] === 'completed');
+            json_exit(['parsed' => $extracted, 'all' => $result]);
             break;
 
         default:

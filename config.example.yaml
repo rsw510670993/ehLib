@@ -4,7 +4,6 @@ cookies:
   exhentai:
     ipb_member_id: ""
     ipb_pass_hash: ""
-    cf_clearance: ""
 
 download:
   path: "./downloads"
