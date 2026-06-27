@@ -1,0 +1,21 @@
+cookies:
+  nhentai:
+    csrftoken: ""
+    cf_clearance: ""
+  exhentai:
+    ipb_member_id: ""
+    ipb_pass_hash: ""
+    cf_clearance: ""
+
+download:
+  path: "./downloads"
+  max_concurrent: 3
+  retry_times: 3
+  retry_delay: 5
+
+request:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  delay_between_requests: 1.5
+
+browser:
+  headless: false
