@@ -123,11 +123,11 @@ class Downloader:
 
     async def _fetch_metadata_browser(self, site: SiteBase, identifier: str) -> Gallery:
         if site.name == "nhentai":
-            url = f"https://nhentai.net/api/gallery/{identifier}"
+            url = f"https://nhentai.net/api/v2/galleries/{identifier}"
             browser = AntiBotBrowser(self._config)
             try:
                 data = await browser.fetch_api_via_browser(url)
-                return site._parse_gallery_data(data)
+                return site._parse_gallery_detail(data)
             finally:
                 await browser.close()
         else:

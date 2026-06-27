@@ -19,7 +19,7 @@ class SessionManager:
                 "User-Agent": self._config.request.get("user_agent", ""),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9,ja;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
+                "Accept-Encoding": "gzip, deflate",
             }
             self._client = httpx.AsyncClient(
                 cookies=cookies,
