@@ -6,7 +6,7 @@ import yaml
 DEFAULT_CONFIG = {
     "cookies": {
         "nhentai": {"cf_clearance": ""},
-        "exhentai": {"ipb_member_id": "", "ipb_pass_hash": "", "cf_clearance": ""},
+        "exhentai": {"ipb_member_id": "", "ipb_pass_hash": ""},
     },
     "download": {
         "path": "./downloads",

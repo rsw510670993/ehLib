@@ -120,26 +120,35 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                     <div class="tab-content">
                         <div class="tab-pane fade show active" id="tab_nh_cookies">
                             <div class="mb-3">
-                                <label class="form-label">cf_clearance <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control font-monospace" id="cookie_nh_cf_clearance" placeholder="访问 nhentai.net 后从浏览器 DevTools → Application → Cookies → nhentai.net 复制">
-                                <div class="form-text">Cloudflare 验证 Cookie，访问 nhentai.net 后浏览器自动生成。这是 nhentai 唯一需要的 Cookie。</div>
+                                <label class="form-label">cf_clearance</label>
+                                <input type="text" class="form-control font-monospace" id="cookie_nh_cf_clearance" placeholder="可选：访问 nhentai.net 后从浏览器 DevTools → Application → Cookies 复制">
+                                <div class="form-text">nhentai v2 API 为公开接口，无需 Cookie 即可访问。<br>如遇到 Cloudflare 拦截（403），可通过登录助手自动获取或在此填写 cf_clearance。</div>
                             </div>
                         </div>
                         <div class="tab-pane fade" id="tab_ex_cookies">
+                            <div class="alert alert-success mb-3 py-2 small">
+                                <i class="fas fa-paste me-1"></i>
+                                在浏览器中通过 Cookie-Editor 插件导出后，将完整 Cookie 字符串粘贴到下方，点击「解析」自动填入。
+                            </div>
+                            <div class="input-group mb-3">
+                                <input type="text" class="form-control form-control-sm font-monospace" id="cookie_ex_raw" placeholder="ipb_member_id=3000860;ipb_pass_hash=xxxx;sk=xxxx;..." onkeydown="if(event.key==='Enter')parseExCookieString()">
+                                <button class="btn btn-sm btn-outline-success" onclick="parseExCookieString()"><i class="fas fa-wand-magic-invert me-1"></i>解析</button>
+                            </div>
+                            <hr class="my-3">
                             <div class="mb-3">
-                                <label class="form-label">ipb_member_id</label>
+                                <label class="form-label">ipb_member_id <span class="text-danger">*</span></label>
                                 <input type="text" class="form-control font-monospace" id="cookie_ex_ipb_member_id" placeholder="登录 exhentai 后的会员 ID">
                                 <div class="form-text">从 exhentai.org 的 Cookie 中获取，登录后自动生成</div>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">ipb_pass_hash</label>
+                                <label class="form-label">ipb_pass_hash <span class="text-danger">*</span></label>
                                 <input type="text" class="form-control font-monospace" id="cookie_ex_ipb_pass_hash" placeholder="登录 exhentai 后的密码哈希">
                                 <div class="form-text">从 exhentai.org 的 Cookie 中获取，与 ipb_member_id 配对</div>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">cf_clearance</label>
-                                <input type="text" class="form-control font-monospace" id="cookie_ex_cf_clearance" placeholder="Cloudflare 放行 Cookie">
-                                <div class="form-text">访问 exhentai.org 后浏览器自动生成</div>
+                                <label class="form-label">cf_clearance <span class="text-muted">(可选)</span></label>
+                                <input type="text" class="form-control font-monospace" id="cookie_ex_cf_clearance" placeholder="Cloudflare 放行 Cookie（如有 Cloudflare 拦载时填写）">
+                                <div class="form-text">访问 exhentai.org 后浏览器自动生成，有效期有限。没有遇到 Cloudflare 拦载时可留空</div>
                             </div>
                         </div>
                     </div>
@@ -150,63 +159,6 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                         2. 按 F12 打开开发者工具 → Application（或存储）→ Cookies<br>
                         3. 找到对应的网站域名，复制所需的 Cookie 值粘贴到上方<br>
                         4. 点击「保存」按钮。Cookie 会持久化到 config.yaml 文件
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><i class="fas fa-robot text-primary me-1"></i>登录助手（自动获取 Cookie）</span>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted mb-3">自动打开一个浏览器窗口，你登录完成后 Cookie 自动写入配置文件。支持自动轮询检测和手动同步两种方式。</p>
-
-                    <div class="row g-3 mb-3">
-                        <div class="col-md-6">
-                            <div class="card border h-100">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h6 class="mb-0"><span class="badge bg-danger me-1">nhentai</span> 登录助手</h6>
-                                        <span id="lh_nh_status" class="badge bg-secondary">就绪</span>
-                                    </div>
-                                    <p class="small text-muted mb-2" id="lh_nh_msg">点击启动浏览器，在打开的窗口中完成登录</p>
-                                    <div class="d-flex gap-2">
-                                        <button class="btn btn-sm btn-outline-danger" id="lh_nh_start" onclick="startLoginHelper('nhentai')"><i class="fas fa-play me-1"></i>启动</button>
-                                        <button class="btn btn-sm btn-outline-warning" id="lh_nh_sync" onclick="doSyncCookies('nhentai')" disabled><i class="fas fa-sync me-1"></i>立即同步</button>
-                                        <button class="btn btn-sm btn-outline-secondary" id="lh_nh_refresh" onclick="checkLoginStatus('nhentai')"><i class="fas fa-redo me-1"></i>刷新</button>
-                                    </div>
-                                    <div id="lh_nh_poll_indicator" class="mt-2 small d-none text-info"><i class="fas fa-spinner fa-spin me-1"></i>轮询中...</div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="card border h-100">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h6 class="mb-0"><span class="badge bg-info me-1">exhentai</span> 登录助手</h6>
-                                        <span id="lh_ex_status" class="badge bg-secondary">就绪</span>
-                                    </div>
-                                    <p class="small text-muted mb-2" id="lh_ex_msg">点击启动浏览器，在打开的窗口中完成登录</p>
-                                    <div class="d-flex gap-2">
-                                        <button class="btn btn-sm btn-outline-info" id="lh_ex_start" onclick="startLoginHelper('exhentai')"><i class="fas fa-play me-1"></i>启动</button>
-                                        <button class="btn btn-sm btn-outline-warning" id="lh_ex_sync" onclick="doSyncCookies('exhentai')" disabled><i class="fas fa-sync me-1"></i>立即同步</button>
-                                        <button class="btn btn-sm btn-outline-secondary" id="lh_ex_refresh" onclick="checkLoginStatus('exhentai')"><i class="fas fa-redo me-1"></i>刷新</button>
-                                    </div>
-                                    <div id="lh_ex_poll_indicator" class="mt-2 small d-none text-info"><i class="fas fa-spinner fa-spin me-1"></i>轮询中...</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="alert alert-primary mb-0">
-                        <i class="fas fa-lightbulb me-1"></i>
-                        <strong>使用说明</strong><br>
-                        1. 点击「启动」按钮，会自动打开一个浏览器窗口<br>
-                        2. 在打开的浏览器中访问对应网站并登录（如果还没登录）<br>
-                        3. 等待 Cloudflare 验证通过（如需要）<br>
-                        4. 系统会自动检测到 Cookie 并写入配置文件（轮询模式，无需手动操作）<br>
-                        5. 也可以点击「立即同步」手动触发同步<br>
-                        6. 完成后浏览器窗口会自动关闭
                     </div>
                 </div>
             </div>
@@ -341,20 +293,47 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
         <!-- ═══ 本地图库 ═══ -->
         <div id="page_gallery" class="page-section section-hidden">
             <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span>本地画廊列表</span>
                     <div class="btn-group btn-group-sm">
-                        <button class="btn btn-outline-secondary" onclick="loadGalleries('')">全部</button>
-                        <button class="btn btn-outline-danger" onclick="loadGalleries('nhentai')">nhentai</button>
-                        <button class="btn btn-outline-info" onclick="loadGalleries('exhentai')">exhentai</button>
+                        <button class="btn btn-outline-secondary" onclick="loadGalleries()">全部</button>
+                        <button class="btn btn-outline-danger" onclick="loadGalleries({source:'nhentai'})">nhentai</button>
+                        <button class="btn btn-outline-info" onclick="loadGalleries({source:'exhentai'})">exhentai</button>
                         <button class="btn btn-outline-primary" onclick="loadGalleries()"><i class="fas fa-sync"></i></button>
+                    </div>
+                </div>
+                <div class="card-body border-bottom bg-light py-2">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-3">
+                            <label class="form-label small mb-1">标签 (逗号分隔)</label>
+                            <input type="text" class="form-control form-control-sm" id="gallery_tag_filter" placeholder="english, shindol" onkeydown="if(event.key==='Enter')applyGalleryFilter()">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small mb-1">匹配模式</label>
+                            <select class="form-select form-select-sm" id="gallery_tag_mode">
+                                <option value="any">任意 (OR)</option>
+                                <option value="all">全部 (AND)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small mb-1">作者</label>
+                            <input type="text" class="form-control form-control-sm" id="gallery_artist_filter" placeholder="artist name" onkeydown="if(event.key==='Enter')applyGalleryFilter()">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small mb-1">语言</label>
+                            <input type="text" class="form-control form-control-sm" id="gallery_lang_filter" placeholder="english" onkeydown="if(event.key==='Enter')applyGalleryFilter()">
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-primary w-100" onclick="applyGalleryFilter()"><i class="fas fa-filter"></i></button>
+                        </div>
                     </div>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
-                        <table class="table table-hover mb-0">
+                        <table class="table table-hover mb-0" id="gallery_table">
                             <thead class="table-light">
                                 <tr>
+                                    <th></th>
                                     <th>站点</th>
                                     <th>ID</th>
                                     <th>标题</th>
@@ -363,7 +342,7 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                                 </tr>
                             </thead>
                             <tbody id="gallery_table_body">
-                                <tr><td colspan="5" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>
+                                <tr><td colspan="6" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -540,11 +519,25 @@ async function saveCookies() {
     cfg.cookies.exhentai = {
         ipb_member_id: document.getElementById('cookie_ex_ipb_member_id').value,
         ipb_pass_hash: document.getElementById('cookie_ex_ipb_pass_hash').value,
-        cf_clearance: document.getElementById('cookie_ex_cf_clearance').value,
     };
+    const cf = document.getElementById('cookie_ex_cf_clearance').value;
+    if (cf) cfg.cookies.exhentai.cf_clearance = cf;
     const res = await api('save_config', { body: cfg });
     if (res.ok) showToast('Cookie 已保存', 'success');
     else showToast('保存失败: ' + (res.error || ''), 'danger');
+}
+
+async function parseExCookieString() {
+    const raw = document.getElementById('cookie_ex_raw').value.trim();
+    if (!raw) { showToast('请先粘贴 Cookie 字符串', 'warning'); return; }
+    const res = await api('parse_cookie_string', { form: { action: 'parse_cookie_string', cookie_string: raw } });
+    if (!res.ok) { showToast('解析失败: ' + (res.error || ''), 'danger'); return; }
+    const p = res.parsed || {};
+    let filled = 0;
+    if (p.ipb_member_id) { document.getElementById('cookie_ex_ipb_member_id').value = p.ipb_member_id; filled++; }
+    if (p.ipb_pass_hash) { document.getElementById('cookie_ex_ipb_pass_hash').value = p.ipb_pass_hash; filled++; }
+    if (p.cf_clearance) { document.getElementById('cookie_ex_cf_clearance').value = p.cf_clearance; filled++; }
+    showToast(`解析成功，已填入 ${filled} 个字段`, 'success');
 }
 
 // ─── Settings ───
@@ -646,28 +639,116 @@ async function doRetry() {
 }
 
 // ─── Gallery ───
-async function loadGalleries(source) {
-    const tbody = document.getElementById('gallery_table_body');
-    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>';
+let _galleryDetailCache = {};
 
-    const params = source ? '?action=get_galleries&source=' + source : '?action=get_galleries';
+async function loadGalleries(filters) {
+    filters = filters || {};
+    const tbody = document.getElementById('gallery_table_body');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>';
+
+    let params = '?action=get_galleries';
+    if (filters.source) params += '&source=' + encodeURIComponent(filters.source);
+    if (filters.tags) params += '&tags=' + encodeURIComponent(filters.tags);
+    if (filters.tag_mode) params += '&tag_mode=' + encodeURIComponent(filters.tag_mode);
+    if (filters.artist) params += '&artist=' + encodeURIComponent(filters.artist);
+    if (filters.language) params += '&language=' + encodeURIComponent(filters.language);
+    if (filters.tag) params += '&tag=' + encodeURIComponent(filters.tag);
+
     const resp = await fetch(API + params);
     const data = await resp.json();
 
     if (!data.ok || !data.galleries || data.galleries.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">暂无数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">暂无数据</td></tr>';
         return;
     }
 
-    tbody.innerHTML = data.galleries.map(g =>
-        `<tr>
+    tbody.innerHTML = data.galleries.map((g, idx) => {
+        const key = g.source + '/' + g.source_id;
+        return `<tr class="gallery-row" data-source="${g.source}" data-source-id="${g.source_id}" data-idx="${idx}" onclick="toggleGalleryDetail(this)" style="cursor:pointer">
+            <td><i class="fas fa-chevron-right text-muted" style="font-size:.75rem"></i></td>
             <td><span class="badge ${g.source === 'nhentai' ? 'bg-danger' : 'bg-info'}">${g.source}</span></td>
             <td class="font-monospace">${g.source_id}</td>
             <td>${g.title}</td>
             <td>${g.pages}p</td>
             <td class="small">${g.downloaded_at || '-'}</td>
-        </tr>`
-    ).join('');
+        </tr>
+        <tr class="gallery-detail-row" id="detail_${idx}" style="display:none">
+            <td colspan="6" style="padding:.5rem 1rem 1rem 2.5rem">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div><strong>作者:</strong> <span id="detail_artist_${idx}">-</span> &nbsp; <strong>社团:</strong> <span id="detail_group_${idx}">-</span> &nbsp; <strong>语言:</strong> <span id="detail_lang_${idx}">-</span></div>
+                    <span class="small text-muted" id="detail_size_${idx}"></span>
+                </div>
+                <div class="mt-2" id="detail_tags_${idx}"><i class="fas fa-spinner fa-spin me-1"></i>加载标签...</div>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+function applyGalleryFilter() {
+    const tags = document.getElementById('gallery_tag_filter').value.trim();
+    const tagMode = document.getElementById('gallery_tag_mode').value;
+    const artist = document.getElementById('gallery_artist_filter').value.trim();
+    const lang = document.getElementById('gallery_lang_filter').value.trim();
+    const filters = {};
+    if (tags) filters.tags = tags;
+    if (tagMode !== 'any') filters.tag_mode = tagMode;
+    if (artist) filters.artist = artist;
+    if (lang) filters.language = lang;
+    loadGalleries(filters);
+}
+
+async function toggleGalleryDetail(row) {
+    const source = row.dataset.source;
+    const sourceId = row.dataset.sourceId;
+    const idx = row.dataset.idx;
+    const detailRow = document.getElementById('detail_' + idx);
+    const chevron = row.querySelector('i.fa-chevron-right, i.fa-chevron-down');
+
+    if (detailRow.style.display === 'none' || !detailRow.style.display) {
+        detailRow.style.display = 'table-row';
+        if (chevron) chevron.className = 'fas fa-chevron-down text-muted';
+        const key = source + '/' + sourceId;
+        if (!_galleryDetailCache[key]) {
+            try {
+                const resp = await fetch(API + '?action=get_gallery_detail&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId));
+                const data = await resp.json();
+                if (data.ok && data.gallery) {
+                    _galleryDetailCache[key] = data.gallery;
+                }
+            } catch(e) {}
+        }
+        const g = _galleryDetailCache[key];
+        if (g) {
+            document.getElementById('detail_artist_' + idx).textContent = g.artist || '-';
+            document.getElementById('detail_group_' + idx).textContent = g.group_name || '-';
+            document.getElementById('detail_lang_' + idx).textContent = g.language || '-';
+            document.getElementById('detail_size_' + idx).textContent = g.file_size ? formatFileSize(g.file_size) : '';
+            const tagsDiv = document.getElementById('detail_tags_' + idx);
+            if (g.tags && g.tags.length > 0) {
+                let tagsHtml = '';
+                const typeLabels = { artist: 'bg-danger', parody: 'bg-warning text-dark', character: 'bg-primary', group: 'bg-success', language: 'bg-secondary', category: 'bg-info text-dark', tag: 'bg-light text-dark' };
+                g.tags.forEach(t => {
+                    const cls = typeLabels[t.type] || 'bg-light text-dark';
+                    tagsHtml += `<span class="tag-badge ${cls}">${t.type}: ${t.name}</span> `;
+                });
+                tagsDiv.innerHTML = tagsHtml;
+            } else {
+                tagsDiv.innerHTML = '<span class="text-muted">无标签</span>';
+            }
+        }
+    } else {
+        detailRow.style.display = 'none';
+        if (chevron) chevron.className = 'fas fa-chevron-right text-muted';
+    }
+}
+
+function formatFileSize(bytes) {
+    if (!bytes) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    let size = bytes;
+    while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+    return size.toFixed(1) + ' ' + units[i];
 }
 
 // ─── Search ───
@@ -728,131 +809,6 @@ async function doExport() {
         </tr>`
     ).join('');
     document.getElementById('export_table_wrapper').style.display = 'block';
-}
-
-// ─── Login Helper ───
-let loginPollTimers = { nhentai: null, exhentai: null };
-
-function loginHelperEl(source) {
-    const prefix = 'lh_' + source.substring(0, 2);
-    return {
-        status: document.getElementById(prefix + '_status'),
-        msg: document.getElementById(prefix + '_msg'),
-        start: document.getElementById(prefix + '_start'),
-        sync: document.getElementById(prefix + '_sync'),
-        refresh: document.getElementById(prefix + '_refresh'),
-        poll: document.getElementById(prefix + '_poll_indicator'),
-    };
-}
-
-function loginHelperSetState(source, state, msg) {
-    const el = loginHelperEl(source);
-    const labels = {
-        idle: ['bg-secondary', '就绪'],
-        starting: ['bg-info', '启动中'],
-        navigating: ['bg-info', '导航中'],
-        waiting: ['bg-warning text-dark', '等待登录'],
-        saving: ['bg-primary', '保存中'],
-        completed: ['bg-success', '已完成'],
-        error: ['bg-danger', '出错'],
-        timeout: ['bg-danger', '超时'],
-    };
-    const [cls, label] = labels[state] || ['bg-secondary', state];
-    el.status.textContent = label;
-    el.status.className = 'badge ' + cls;
-    el.msg.textContent = msg || '';
-
-    el.start.disabled = (state !== 'idle' && state !== 'completed' && state !== 'error' && state !== 'timeout');
-    el.sync.disabled = (state !== 'waiting' && state !== 'navigating');
-    el.poll.classList.toggle('d-none', state !== 'waiting' && state !== 'navigating' && state !== 'saving' && state !== 'starting');
-}
-
-async function startLoginHelper(source) {
-    loginHelperSetState(source, 'starting', '启动浏览器...');
-    try {
-        const res = await api('launch_login_helper', { form: { action: 'launch_login_helper', source: source } });
-        if (!res.ok) {
-            loginHelperSetState(source, 'error', res.error || 'Failed to launch');
-            showToast('启动失败: ' + (res.error || ''), 'danger');
-            return;
-        }
-        loginHelperSetState(source, 'navigating', '浏览器已打开，请在窗口中完成登录...');
-        showToast(`登录助手已启动，浏览器窗口已打开，请在 ${source === 'nhentai' ? 'nhentai.net' : 'exhentai.org'} 页面登录`, 'info');
-
-        // Start auto-polling
-        if (loginPollTimers[source]) clearInterval(loginPollTimers[source]);
-        loginPollTimers[source] = setInterval(() => checkLoginStatus(source), 3000);
-    } catch (e) {
-        loginHelperSetState(source, 'error', 'Request failed: ' + e.message);
-        showToast('请求失败', 'danger');
-    }
-}
-
-async function checkLoginStatus(source) {
-    try {
-        const res = await api('check_login_status', { form: { action: 'check_login_status', source: source } });
-        if (!res.ok) return;
-
-        if (res.status === 'starting' || res.status === 'navigating' || res.status === 'waiting' || res.status === 'saving') {
-            loginHelperSetState(source, res.status, res.message || '等待中...');
-            return;
-        }
-
-        if (res.status === 'completed') {
-            loginHelperSetState(source, 'completed', 'Cookie 已获取并保存');
-            if (loginPollTimers[source]) {
-                clearInterval(loginPollTimers[source]);
-                loginPollTimers[source] = null;
-            }
-            showToast(`${source} Cookie 获取成功！`, 'success');
-            // Reload cookie fields
-            loadCookies();
-            return;
-        }
-
-        if (res.status === 'error' || res.status === 'timeout') {
-            loginHelperSetState(source, res.status, res.message || '');
-            if (loginPollTimers[source]) {
-                clearInterval(loginPollTimers[source]);
-                loginPollTimers[source] = null;
-            }
-            showToast(`${source}: ${res.message || 'Login failed'}`, 'warning');
-            return;
-        }
-
-        // idle state - check if cookies already configured
-        if (res.status === 'idle') {
-            if (res.is_empty) {
-                loginHelperSetState(source, 'idle', '就绪');
-            } else {
-                loginHelperSetState(source, 'completed', 'Cookie 已配置');
-            }
-        }
-    } catch (e) {
-        // silently retry on network errors
-    }
-}
-
-async function doSyncCookies(source) {
-    loginHelperSetState(source, 'saving', '正在同步 Cookie...');
-    try {
-        const res = await api('sync_cookies', { form: { action: 'sync_cookies', source: source } });
-        if (res.ok && res.status === 'completed') {
-            loginHelperSetState(source, 'completed', 'Cookie 同步成功');
-            showToast(`${source} Cookie 同步成功！`, 'success');
-            loadCookies();
-        } else if (res.status === 'waiting') {
-            const missing = (res.missing || []).join(', ');
-            loginHelperSetState(source, 'waiting', `缺少 Cookie: ${missing}，请在浏览器中继续登录`);
-            showToast(`Cookie 不全，缺少: ${missing}`, 'warning');
-        } else {
-            loginHelperSetState(source, 'error', res.message || '同步失败');
-            showToast('同步失败', 'danger');
-        }
-    } catch (e) {
-        loginHelperSetState(source, 'error', 'Sync request failed');
-        showToast('同步请求失败', 'danger');
-    }
 }
 
 // ─── Auto-load on page enter ───

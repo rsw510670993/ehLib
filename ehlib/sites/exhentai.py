@@ -1,6 +1,3 @@
-import re
-from datetime import datetime
-
 from bs4 import BeautifulSoup
 
 from ehlib.config import Config

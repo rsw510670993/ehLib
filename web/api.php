@@ -83,26 +83,6 @@ function run_python($args, $timeout = 120) {
     ];
 }
 
-function run_python_background($args) {
-    global $root, $python;
-    $cmd = escapeshellcmd($python) . ' -m ehlib';
-    foreach ($args as $a) {
-        $cmd .= ' ' . escapeshellarg($a);
-    }
-
-    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        $fullCmd = 'start "" /B ' . $cmd;
-        $proc = popen($fullCmd, 'r');
-        if (is_resource($proc)) {
-            pclose($proc);
-        }
-    } else {
-        $fullCmd = 'nohup ' . $cmd . ' > /dev/null 2>&1 &';
-        exec($fullCmd);
-    }
-    return true;
-}
-
 function read_config() {
     global $root;
     $path = $root . '/config.yaml';
@@ -190,8 +170,20 @@ try {
 
         case 'get_galleries':
             $source = $_GET['source'] ?? '';
+            $tag_name = $_GET['tag'] ?? '';
+            $tags_raw = $_GET['tags'] ?? '';
+            $tag_mode = $_GET['tag_mode'] ?? 'any';
+            $artist = $_GET['artist'] ?? '';
+            $language = $_GET['language'] ?? '';
+            $limit = (int)($_GET['limit'] ?? 50);
             $args = ['list'];
             if ($source) { $args[] = '--source'; $args[] = $source; }
+            if ($tag_name) { $args[] = '--tag'; $args[] = $tag_name; }
+            if ($tags_raw) { $args[] = '--tags'; $args[] = $tags_raw; }
+            if ($tag_mode !== 'any') { $args[] = '--tag-mode'; $args[] = $tag_mode; }
+            if ($artist) { $args[] = '--artist'; $args[] = $artist; }
+            if ($language) { $args[] = '--language'; $args[] = $language; }
+            if ($limit !== 50) { $args[] = '--limit'; $args[] = (string)$limit; }
             $result = run_python($args);
             if (!$result['ok']) error_exit($result['stderr'] ?: 'Command failed');
             $lines = array_filter(explode("\n", $result['stdout']));
@@ -208,6 +200,35 @@ try {
                 }
             }
             json_exit(['galleries' => $galleries]);
+            break;
+
+        case 'get_gallery_detail':
+            $source = $_GET['source'] ?? '';
+            $source_id = $_GET['source_id'] ?? '';
+            if (!$source || !$source_id) error_exit('source and source_id required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->prepare('SELECT id, title, artist, group_name, language, category, total_pages, file_size, downloaded_at FROM galleries WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $gallery = $stmt->fetch();
+                if (!$gallery) error_exit('Gallery not found');
+                $stmt2 = $pdo->prepare(
+                    'SELECT t.type, t.name FROM tags t
+                     JOIN gallery_tags gt ON t.id = gt.tag_id
+                     JOIN galleries g ON gt.gallery_id = g.id
+                     WHERE g.source=? AND g.source_id=?
+                     ORDER BY t.type, t.name'
+                );
+                $stmt2->execute([$source, $source_id]);
+                $tags = $stmt2->fetchAll();
+                $gallery['tags'] = $tags;
+                json_exit(['gallery' => $gallery]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
             break;
 
         case 'download':
@@ -314,50 +335,25 @@ try {
             ]);
             break;
 
-        case 'launch_login_helper':
-            $source = $_POST['source'] ?? $_GET['source'] ?? '';
-            if (!$source) error_exit('Source required (nhentai or exhentai)');
-            $args = ['login-helper', 'start', $source];
-            run_python_background($args);
-            json_exit(['message' => "Login helper started for {$source}"]);
-            break;
-
-        case 'check_login_status':
-            $source = $_GET['source'] ?? '';
-            if (!$source) error_exit('Source required');
-            $status_file = $root . '/data/login_' . $source . '.json';
-            if (!is_file($status_file)) {
-                $config = read_config();
-                $saved = $config['cookies'][$source] ?? [];
-                $filled = [];
-                foreach ($saved as $k => $v) {
-                    $filled[$k] = !empty($v);
+        case 'parse_cookie_string':
+            $cookie_string = $_POST['cookie_string'] ?? $_GET['cookie_string'] ?? '';
+            if (!$cookie_string) error_exit('cookie_string required');
+            $pairs = explode(';', $cookie_string);
+            $result = [];
+            foreach ($pairs as $pair) {
+                $pair = trim($pair);
+                if (strpos($pair, '=') === false) continue;
+                [$key, $value] = explode('=', $pair, 2);
+                $result[trim($key)] = trim($value);
+            }
+            $known = ['ipb_member_id', 'ipb_pass_hash', 'cf_clearance', 'sk', 'star', 'hath_perks', 'igneous'];
+            $extracted = [];
+            foreach ($known as $k) {
+                if (isset($result[$k]) && $result[$k] !== '') {
+                    $extracted[$k] = $result[$k];
                 }
-                $all_filled = !in_array(false, $filled, true);
-                json_exit([
-                    'status' => $all_filled ? 'completed' : 'idle',
-                    'message' => $all_filled ? 'Cookies already configured' : 'Login helper not started',
-                    'cookies' => $saved,
-                    'is_empty' => true,
-                ]);
             }
-            $data = json_decode(file_get_contents($status_file), true);
-            if ($data['status'] === 'completed') {
-                @unlink($status_file);
-            }
-            json_exit($data);
-            break;
-
-        case 'sync_cookies':
-            $source = $_POST['source'] ?? $_GET['source'] ?? '';
-            if (!$source) error_exit('Source required');
-            $args = ['login-helper', 'sync', $source];
-            $result = run_python($args, 30);
-            $sync_result = json_decode($result['stdout'], true);
-            if (!$sync_result) {
-                json_exit(['error' => $result['stderr'] ?: 'Sync failed', 'output' => $result['stdout']], false);
-            }
-            json_exit($sync_result, $sync_result['status'] === 'completed');
+            json_exit(['parsed' => $extracted, 'all' => $result]);
             break;
 
         default:

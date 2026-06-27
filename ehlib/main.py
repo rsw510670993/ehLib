@@ -5,7 +5,6 @@ from pathlib import Path
 
 from ehlib.config import get_config, Config
 from ehlib.core.downloader import Downloader
-from ehlib.core.login_helper import cmd_login_helper, cmd_sync_now, read_login_status, clear_login_status
 from ehlib.core.session_manager import SessionManager
 from ehlib.models.database import Database
 from ehlib.sites.nhentai import NhentaiSite
@@ -74,10 +73,15 @@ async def cmd_search(args: argparse.Namespace, config: Config, db: Database) -> 
 
 
 async def cmd_list(args: argparse.Namespace, _config: Config, db: Database) -> None:
+    tag_names = None
+    if args.tags:
+        tag_names = [t.strip() for t in args.tags.split(",") if t.strip()]
     galleries = await db.search_galleries(
         source=args.source,
         artist=args.artist,
         tag_name=args.tag,
+        tag_names=tag_names,
+        tag_mode=args.tag_mode or "any",
         language=args.language,
         limit=args.limit or 50,
     )
@@ -157,7 +161,9 @@ def main() -> None:
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
     lst.add_argument("--artist", help="Filter by artist")
-    lst.add_argument("--tag", help="Filter by tag name")
+    lst.add_argument("--tag", help="Filter by single tag name")
+    lst.add_argument("--tags", help="Filter by multiple tags (comma-separated, e.g. english,shindol)")
+    lst.add_argument("--tag-mode", choices=["any", "all"], default="any", help="Tag matching mode: any (OR) or all (AND)")
     lst.add_argument("--language", help="Filter by language")
     lst.add_argument("--limit", type=int, default=50, help="Max results")
 
@@ -170,21 +176,6 @@ def main() -> None:
     exp = subparsers.add_parser("export", help="Export metadata to JSON")
     exp.add_argument("--output", default="metadata.json", help="Output file path")
     exp.add_argument("--format", choices=["json"], default="json", help="Export format")
-
-    lh = subparsers.add_parser("login-helper", help="Launch browser to login and acquire cookies")
-    lh_sub = lh.add_subparsers(dest="lh_command", help="Login helper commands")
-
-    lh_start = lh_sub.add_parser("start", help="Start login helper (opens browser)")
-    lh_start.add_argument("source", choices=["nhentai", "exhentai"], help="Target site")
-
-    lh_sync = lh_sub.add_parser("sync", help="Force sync cookies from running browser")
-    lh_sync.add_argument("source", choices=["nhentai", "exhentai"], help="Target site")
-
-    lh_status = lh_sub.add_parser("status", help="Check login status")
-    lh_status.add_argument("source", choices=["nhentai", "exhentai"], help="Target site")
-
-    lh_clear = lh_sub.add_parser("clear", help="Clear login status file")
-    lh_clear.add_argument("source", choices=["nhentai", "exhentai"], help="Target site")
 
     args = parser.parse_args()
 
@@ -211,21 +202,6 @@ def main() -> None:
         if handler:
             await handler(args, config, db)
             return
-
-        if args.command == "login-helper":
-            if args.lh_command == "start":
-                await cmd_login_helper(args.source)
-            elif args.lh_command == "sync":
-                await cmd_sync_now(args.source)
-            elif args.lh_command == "status":
-                import json
-                status = read_login_status(args.source)
-                print(json.dumps(status, ensure_ascii=False))
-            elif args.lh_command == "clear":
-                clear_login_status(args.source)
-                print(f"Login status cleared for {args.source}")
-            else:
-                lh.print_help()
 
     asyncio.run(run())
 

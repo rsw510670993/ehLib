@@ -98,7 +98,7 @@ class Database:
             row = await cursor.fetchone()
             if row is None:
                 return None
-            return self._row_to_gallery(row)
+            return self._row_to_gallery(dict(row))
 
     async def save_gallery(self, gallery: Gallery) -> int:
         async with aiosqlite.connect(self._db_path) as db:
@@ -119,13 +119,13 @@ class Database:
                     gallery.created_at, gallery.updated_at,
                 ),
             )
-            await db.commit()
             gallery_id = cursor.lastrowid or 0
 
             if gallery.tags:
                 tag_ids = await self._save_tags(db, gallery.tags)
                 await self._link_tags(db, gallery_id, tag_ids)
 
+            await db.commit()
             return gallery_id
 
     async def _save_tags(self, db: aiosqlite.Connection, tags: list[Tag]) -> list[int]:
@@ -168,32 +168,32 @@ class Database:
         source: str | None = None,
         artist: str | None = None,
         tag_name: str | None = None,
+        tag_names: list[str] | None = None,
+        tag_mode: str = "any",
         language: str | None = None,
         limit: int = 50,
     ) -> list[Gallery]:
-        query = "SELECT DISTINCT g.* FROM galleries g"
+        if tag_name and not tag_names:
+            tag_names = [tag_name]
+
+        if tag_names and len(tag_names) > 0 and tag_mode == "any":
+            return await self._search_galleries_any(source, artist, tag_names, language, limit)
+
+        if tag_names and len(tag_names) > 0 and tag_mode == "all":
+            return await self._search_galleries_all(source, artist, tag_names, language, limit)
+
+        query = "SELECT * FROM galleries WHERE 1=1"
         params: list = []
-        conditions: list[str] = []
-
-        if tag_name:
-            query += " JOIN gallery_tags gt ON g.id = gt.gallery_id"
-            query += " JOIN tags t ON gt.tag_id = t.id"
-            conditions.append("t.name LIKE ?")
-            params.append(f"%{tag_name}%")
-
         if source:
-            conditions.append("g.source = ?")
+            query += " AND source=?"
             params.append(source)
         if artist:
-            conditions.append("g.artist LIKE ?")
+            query += " AND artist LIKE ?"
             params.append(f"%{artist}%")
         if language:
-            conditions.append("g.language = ?")
+            query += " AND language=?"
             params.append(language)
-
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY g.downloaded_at DESC LIMIT ?"
+        query += " ORDER BY downloaded_at DESC LIMIT ?"
         params.append(limit)
 
         async with aiosqlite.connect(self._db_path) as db:
@@ -201,6 +201,86 @@ class Database:
             cursor = await db.execute(query, params)
             rows = await cursor.fetchall()
             return [self._row_to_gallery(dict(row)) for row in rows]
+
+    async def _search_galleries_any(self, source, artist, tag_names, language, limit):
+        query = """SELECT DISTINCT g.* FROM galleries g
+                   JOIN gallery_tags gt ON g.id = gt.gallery_id
+                   JOIN tags t ON gt.tag_id = t.id
+                   WHERE ("""
+        query += " OR ".join(["t.name LIKE ?"] * len(tag_names))
+        query += ")"
+        params = [f"%{t}%" for t in tag_names]
+        if source:
+            query += " AND g.source=?"
+            params.append(source)
+        if artist:
+            query += " AND g.artist LIKE ?"
+            params.append(f"%{artist}%")
+        if language:
+            query += " AND g.language=?"
+            params.append(language)
+        query += " ORDER BY g.downloaded_at DESC LIMIT ?"
+        params.append(limit)
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+            return [self._row_to_gallery(dict(row)) for row in rows]
+
+    async def _search_galleries_all(self, source, artist, tag_names, language, limit):
+        like_conditions = " OR ".join(["t.name LIKE ?"] * len(tag_names))
+        query = f"""SELECT g.* FROM galleries g
+                    JOIN gallery_tags gt ON g.id = gt.gallery_id
+                    JOIN tags t ON gt.tag_id = t.id
+                    WHERE ({like_conditions})"""
+        params = [f"%{t}%" for t in tag_names]
+        if source:
+            query += " AND g.source=?"
+            params.append(source)
+        if artist:
+            query += " AND g.artist LIKE ?"
+            params.append(f"%{artist}%")
+        if language:
+            query += " AND g.language=?"
+            params.append(language)
+        query += " GROUP BY g.id"
+        query += f" HAVING COUNT(DISTINCT t.id) = {len(tag_names)}"
+        query += " ORDER BY g.downloaded_at DESC LIMIT ?"
+        params.append(limit)
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+            return [self._row_to_gallery(dict(row)) for row in rows]
+
+    async def get_gallery_detail(self, gallery_id: int) -> Gallery | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM galleries WHERE id=?", (gallery_id,)
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            gallery = self._row_to_gallery(dict(row))
+            gallery.tags = await self._get_tags_for_gallery(db, gallery_id)
+            return gallery
+
+    async def _get_tags_for_gallery(self, db: aiosqlite.Connection, gallery_id: int) -> list[Tag]:
+        cursor = await db.execute(
+            """SELECT t.id, t.type, t.name
+               FROM tags t
+               JOIN gallery_tags gt ON t.id = gt.tag_id
+               WHERE gt.gallery_id = ?
+               ORDER BY t.type, t.name""",
+            (gallery_id,),
+        )
+        rows = await cursor.fetchall()
+        return [Tag(id=row[0], type=row[1], name=row[2]) for row in rows]
+
+    async def get_gallery_tags(self, gallery_id: int) -> list[Tag]:
+        async with aiosqlite.connect(self._db_path) as db:
+            return await self._get_tags_for_gallery(db, gallery_id)
 
     async def get_all_tags(self, source: str | None = None) -> list[dict]:
         query = """
