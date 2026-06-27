@@ -11,7 +11,7 @@ from ehlib.utils.logger import get_logger
 logger = get_logger(__name__)
 
 REQUIRED_COOKIES = {
-    "nhentai": ["cf_clearance"],
+    "nhentai": [],
     "exhentai": ["ipb_member_id", "ipb_pass_hash", "cf_clearance"],
 }
 
@@ -74,6 +74,14 @@ class LoginHelper:
         try:
             page = await browser.get(self._url)
             write_status(self._source, "navigating", f"Navigated to {self._url}")
+
+            if not self._required:
+                write_status(
+                    self._source, "completed",
+                    f"{self._source} API is public, no cookies needed. Browser is informational.",
+                    {},
+                )
+                return {"status": "completed", "cookies": {}}
 
             found_cookies = {}
             poll_start = time.time()

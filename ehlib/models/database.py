@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,
     name TEXT NOT NULL,
+    priority INTEGER DEFAULT 99,
     UNIQUE(type, name)
 )
 """
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS gallery_tags (
 CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_galleries_source ON galleries(source, source_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_type_name ON tags(type, name)",
+    "CREATE INDEX IF NOT EXISTS idx_tags_priority ON tags(priority)",
     "CREATE INDEX IF NOT EXISTS idx_gallery_tags_gid ON gallery_tags(gallery_id)",
     "CREATE INDEX IF NOT EXISTS idx_gallery_tags_tid ON gallery_tags(tag_id)",
 ]
@@ -132,8 +134,8 @@ class Database:
         tag_ids = []
         for tag in tags:
             cursor = await db.execute(
-                "INSERT OR IGNORE INTO tags (type, name) VALUES (?, ?)",
-                (tag.type, tag.name),
+                "INSERT OR IGNORE INTO tags (type, name, priority) VALUES (?, ?, ?)",
+                (tag.type, tag.name, tag.priority),
             )
             if cursor.lastrowid:
                 tag_ids.append(cursor.lastrowid)
@@ -145,6 +147,10 @@ class Database:
                 row = await cursor.fetchone()
                 if row:
                     tag_ids.append(row[0])
+                    await db.execute(
+                        "UPDATE tags SET priority=? WHERE id=?",
+                        (tag.priority, row[0]),
+                    )
         return tag_ids
 
     async def _link_tags(self, db: aiosqlite.Connection, gallery_id: int, tag_ids: list[int]) -> None:
@@ -201,6 +207,23 @@ class Database:
             cursor = await db.execute(query, params)
             rows = await cursor.fetchall()
             return [self._row_to_gallery(dict(row)) for row in rows]
+
+    async def get_gallery_tags(self, gallery_id: int) -> list[Tag]:
+        query = """
+            SELECT t.id, t.type, t.name
+            FROM tags t
+            JOIN gallery_tags gt ON t.id = gt.tag_id
+            WHERE gt.gallery_id = ?
+            ORDER BY t.priority ASC, t.name ASC
+        """
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, (gallery_id,))
+            rows = await cursor.fetchall()
+            return [
+                Tag(id=row["id"], type=row["type"], name=row["name"])
+                for row in rows
+            ]
 
     async def get_all_tags(self, source: str | None = None) -> list[dict]:
         query = """

@@ -2,7 +2,7 @@ from datetime import datetime
 
 from ehlib.config import Config
 from ehlib.core.session_manager import SessionManager
-from ehlib.models.schemas import Gallery, Tag
+from ehlib.models.schemas import Gallery, Tag, sort_tags
 from ehlib.sites.base import SiteBase
 from ehlib.utils.helpers import parse_nhentai_url
 from ehlib.utils.logger import get_logger
@@ -139,7 +139,7 @@ class NhentaiSite(SiteBase):
             cover_url=self._full_thumb_url(cover.get("path", "")) if cover.get("path") else "",
             thumbnail_url=self._full_thumb_url(thumbnail.get("path", "")) if thumbnail.get("path") else "",
             uploaded_at=uploaded_str,
-            tags=tags,
+            tags=sort_tags(tags),
             page_urls=page_urls,
         )
 

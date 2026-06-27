@@ -120,9 +120,9 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                     <div class="tab-content">
                         <div class="tab-pane fade show active" id="tab_nh_cookies">
                             <div class="mb-3">
-                                <label class="form-label">cf_clearance <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control font-monospace" id="cookie_nh_cf_clearance" placeholder="访问 nhentai.net 后从浏览器 DevTools → Application → Cookies → nhentai.net 复制">
-                                <div class="form-text">Cloudflare 验证 Cookie，访问 nhentai.net 后浏览器自动生成。这是 nhentai 唯一需要的 Cookie。</div>
+                                <label class="form-label">cf_clearance</label>
+                                <input type="text" class="form-control font-monospace" id="cookie_nh_cf_clearance" placeholder="可选：访问 nhentai.net 后从浏览器 DevTools → Application → Cookies 复制">
+                                <div class="form-text">nhentai v2 API 为公开接口，无需 Cookie 即可访问。<br>如遇到 Cloudflare 拦截（403），可通过登录助手自动获取或在此填写 cf_clearance。</div>
                             </div>
                         </div>
                         <div class="tab-pane fade" id="tab_ex_cookies">
