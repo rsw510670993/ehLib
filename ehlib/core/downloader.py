@@ -3,7 +3,6 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
-from tqdm import tqdm
 
 from ehlib.config import Config
 from ehlib.core.anti_bot import AntiBotBrowser
@@ -116,31 +115,39 @@ class Downloader:
 
     async def _fetch_metadata(self, site: SiteBase, identifier: str) -> Gallery:
         try:
-            return await site.fetch_gallery(identifier)
-        except Exception as e:
-            if isinstance(e, RuntimeError):
-                logger.warning("Cookie mode failed, trying browser mode...")
-                return await self._fetch_metadata_browser(site, identifier)
-            raise
+            gallery = await site.fetch_gallery(identifier)
+            return gallery
+        except (httpx.HTTPStatusError, RuntimeError) as e:
+            logger.warning("Cookie/fetch mode failed: %s. Trying browser fallback...", e)
+            return await self._fetch_metadata_browser(site, identifier)
 
     async def _fetch_metadata_browser(self, site: SiteBase, identifier: str) -> Gallery:
-        browser = AntiBotBrowser(self._config)
-        try:
-            if site.name == "nhentai":
-                url = f"https://nhentai.net/api/gallery/{identifier}"
-            else:
-                gid, token = identifier.split("/", 1)
-                url = f"https://exhentai.org/g/{gid}/{token}/"
-
-            html = await browser.fetch_via_browser(url)
-            if site.name == "nhentai":
-                import json
-                data = json.loads(html)
+        if site.name == "nhentai":
+            url = f"https://nhentai.net/api/gallery/{identifier}"
+            browser = AntiBotBrowser(self._config)
+            try:
+                data = await browser.fetch_api_via_browser(url)
                 return site._parse_gallery_data(data)
-            else:
-                return site._parse_html(html, identifier)
-        finally:
-            await browser.close()
+            finally:
+                await browser.close()
+        else:
+            gid, token = identifier.split("/", 1)
+            url = f"https://exhentai.org/g/{gid}/{token}/"
+            import nodriver as uc
+            ex_browser = await uc.start(
+                headless=not self._config.browser.get("headless", False),
+                browser_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+            )
+            try:
+                page = await ex_browser.get(url)
+                await asyncio.sleep(3)
+                content = await page.get_content()
+                return site._parse_html(content, identifier)
+            finally:
+                try:
+                    ex_browser.stop()
+                except Exception:
+                    pass
 
     async def _download_cover(self, gallery: Gallery, gallery_dir: Path) -> None:
         if not gallery.cover_url:
@@ -152,14 +159,18 @@ class Downloader:
         await self._download_file(gallery.cover_url, cover_path, "cover")
 
     async def _download_pages(self, gallery: Gallery, gallery_dir: Path) -> None:
-        if gallery.source == "exhentai" and gallery.page_urls:
-            urls = gallery.page_urls
-        elif gallery.page_urls:
-            urls = gallery.page_urls
-        else:
+        urls = gallery.page_urls
+        if not urls:
             logger.error("No page URLs for gallery %s", gallery.source_id)
             return
 
+        try:
+            await self._download_pages_httpx(gallery, gallery_dir, urls)
+        except Exception as e:
+            logger.warning("httpx page download failed: %s. Trying browser fallback...", e)
+            await self._download_pages_browser(gallery, gallery_dir, urls)
+
+    async def _download_pages_httpx(self, gallery: Gallery, gallery_dir: Path, urls: list[str]) -> None:
         tasks = []
         for i, page_url in enumerate(urls):
             page_num = i + 1
@@ -168,9 +179,31 @@ class Downloader:
             tasks.append(self._download_with_semaphore(page_url, page_path, str(page_num)))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        all_403 = all(
+            isinstance(r, httpx.HTTPStatusError) and r.response.status_code == 403
+            for r in results
+        )
+        if all_403:
+            raise RuntimeError("All pages returned 403, likely Cloudflare block")
         failed = sum(1 for r in results if isinstance(r, Exception))
         if failed:
             logger.warning("%d pages failed to download for gallery %s", failed, gallery.source_id)
+
+    async def _download_pages_browser(self, gallery: Gallery, gallery_dir: Path, urls: list[str]) -> None:
+        logger.info("Starting browser-based download for %d pages", len(urls))
+        browser = AntiBotBrowser(self._config)
+        try:
+            results = await browser.fetch_images_via_browser(urls)
+            for idx, data in results.items():
+                page_num = idx + 1
+                ext = self._extract_ext(urls[idx])
+                page_path = self._file_manager.page_path(gallery_dir, page_num, ext)
+                page_path.parent.mkdir(parents=True, exist_ok=True)
+                page_path.write_bytes(data)
+
+            logger.info("Browser downloaded %d/%d pages", len(results), len(urls))
+        finally:
+            await browser.close()
 
     async def _download_with_semaphore(self, url: str, path: Path, label: str) -> None:
         async with self._semaphore:
@@ -187,6 +220,14 @@ class Downloader:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(response.content)
                 return
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 403:
+                    raise
+                if attempt < self._retry_times - 1:
+                    logger.debug("Retry %d/%d for %s: %s", attempt + 1, self._retry_times, label, e)
+                    await asyncio.sleep(self._retry_delay)
+                else:
+                    raise
             except Exception as e:
                 if attempt < self._retry_times - 1:
                     logger.debug("Retry %d/%d for %s: %s", attempt + 1, self._retry_times, label, e)
