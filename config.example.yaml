@@ -1,6 +1,5 @@
 cookies:
   nhentai:
-    csrftoken: ""
     cf_clearance: ""
   exhentai:
     ipb_member_id: ""

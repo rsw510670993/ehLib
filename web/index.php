@@ -120,14 +120,9 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                     <div class="tab-content">
                         <div class="tab-pane fade show active" id="tab_nh_cookies">
                             <div class="mb-3">
-                                <label class="form-label">csrftoken</label>
-                                <input type="text" class="form-control font-monospace" id="cookie_nh_csrftoken" placeholder="从浏览器 DevTools → Application → Cookies → nhentai.net 复制">
-                                <div class="form-text">浏览器中 nhentai.net 的 csrftoken 值</div>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">cf_clearance</label>
-                                <input type="text" class="form-control font-monospace" id="cookie_nh_cf_clearance" placeholder="Cloudflare 放行 Cookie">
-                                <div class="form-text">访问 nhentai.net 后浏览器自动生成的 Cloudflare 验证 Cookie，有效期约 30 分钟~数小时</div>
+                                <label class="form-label">cf_clearance <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control font-monospace" id="cookie_nh_cf_clearance" placeholder="访问 nhentai.net 后从浏览器 DevTools → Application → Cookies → nhentai.net 复制">
+                                <div class="form-text">Cloudflare 验证 Cookie，访问 nhentai.net 后浏览器自动生成。这是 nhentai 唯一需要的 Cookie。</div>
                             </div>
                         </div>
                         <div class="tab-pane fade" id="tab_ex_cookies">
@@ -526,7 +521,6 @@ async function loadCookies() {
     if (!data.config || !data.config.cookies) return;
     const c = data.config.cookies;
     if (c.nhentai) {
-        document.getElementById('cookie_nh_csrftoken').value = c.nhentai.csrftoken || '';
         document.getElementById('cookie_nh_cf_clearance').value = c.nhentai.cf_clearance || '';
     }
     if (c.exhentai) {
@@ -541,7 +535,6 @@ async function saveCookies() {
     const cfg = data.config || {};
     if (!cfg.cookies) cfg.cookies = { nhentai: {}, exhentai: {} };
     cfg.cookies.nhentai = {
-        csrftoken: document.getElementById('cookie_nh_csrftoken').value,
         cf_clearance: document.getElementById('cookie_nh_cf_clearance').value,
     };
     cfg.cookies.exhentai = {

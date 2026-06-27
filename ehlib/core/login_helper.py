@@ -11,7 +11,7 @@ from ehlib.utils.logger import get_logger
 logger = get_logger(__name__)
 
 REQUIRED_COOKIES = {
-    "nhentai": ["csrftoken", "cf_clearance"],
+    "nhentai": ["cf_clearance"],
     "exhentai": ["ipb_member_id", "ipb_pass_hash", "cf_clearance"],
 }
 
