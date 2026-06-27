@@ -63,6 +63,13 @@ class FileManager:
                 total += f.stat().st_size
         return total
 
+    def delete_gallery_dir(self, gallery_dir: Path) -> bool:
+        if not gallery_dir.exists():
+            return False
+        import shutil
+        shutil.rmtree(gallery_dir, ignore_errors=True)
+        return True
+
     @staticmethod
     def _extract_ext(url: str) -> str:
         url_path = url.split("?")[0]

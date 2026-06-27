@@ -325,6 +325,19 @@ class Database:
             updated_at=row.get("updated_at", ""),
         )
 
+    async def delete_gallery(self, source: str, source_id: str) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT id FROM galleries WHERE source=? AND source_id=?",
+                (source, source_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return False
+            await db.execute("DELETE FROM galleries WHERE id=?", (row[0],))
+            await db.commit()
+            return True
+
     async def export_json(self, output_path: str) -> None:
         galleries = await self.search_galleries(limit=999999)
         result = []

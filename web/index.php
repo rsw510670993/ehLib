@@ -234,6 +234,12 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                                 <input type="text" class="form-control" id="dl_url" placeholder="https://nhentai.net/g/177013/ 或 https://exhentai.org/g/1234567/abc123/">
                                 <button class="btn btn-primary" onclick="doDownload()"><i class="fas fa-download me-1"></i>下载</button>
                             </div>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="dl_force_url">
+                                <label class="form-check-label small text-danger" for="dl_force_url">
+                                    <i class="fas fa-exclamation-triangle me-1"></i>强制重新下载（清空本地文件 + 覆盖数据库记录）
+                                </label>
+                            </div>
                         </div>
                         <div class="tab-pane fade" id="tab_dl_id">
                             <div class="row g-2 align-items-end">
@@ -259,6 +265,14 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                                 <div class="col-12 mt-2">
                                     <button class="btn btn-primary" onclick="doDownloadById()"><i class="fas fa-download me-1"></i>下载</button>
                                 </div>
+                                <div class="col-12 mt-1">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="dl_force_id">
+                                        <label class="form-check-label small text-danger" for="dl_force_id">
+                                            <i class="fas fa-exclamation-triangle me-1"></i>强制重新下载（清空本地文件 + 覆盖数据库记录）
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -275,6 +289,12 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                     <div class="mb-2">
                         <label class="form-label">每行一个 URL</label>
                         <textarea class="form-control" id="batch_urls" rows="5" placeholder="https://nhentai.net/g/177013/&#10;https://exhentai.org/g/1234567/abc123/&#10;https://nhentai.net/g/238480/"></textarea>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="batch_force">
+                        <label class="form-check-label small text-danger" for="batch_force">
+                            <i class="fas fa-exclamation-triangle me-1"></i>强制重新下载全部（清空本地文件 + 覆盖数据库记录）
+                        </label>
                     </div>
                     <div id="batch_output" class="output-box"></div>
                 </div>
@@ -581,11 +601,15 @@ async function saveSettings() {
 async function doDownload() {
     const url = document.getElementById('dl_url').value.trim();
     if (!url) { showToast('请输入 URL', 'warning'); return; }
+    const force = document.getElementById('dl_force_url').checked;
+    if (force && !confirm('⚠ 强制重新下载将清空本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
     clearOutput('dl_output');
     document.getElementById('dl_output').classList.add('show');
     document.getElementById('dl_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>下载中，请稍候...';
 
-    const res = await api('download', { form: { action: 'download', url: url } });
+    const form = { action: 'download', url: url };
+    if (force) form.force = '1';
+    const res = await api('download', { form: form });
     showOutput('dl_output', res.output || '下载完成', !res.ok);
     if (res.ok) showToast('下载成功!', 'success');
 }
@@ -595,6 +619,8 @@ async function doDownloadById() {
     const id = document.getElementById('dl_id').value.trim();
     const gid = document.getElementById('dl_gid').value.trim();
     const token = document.getElementById('dl_token').value.trim();
+    const force = document.getElementById('dl_force_id').checked;
+    if (force && !confirm('⚠ 强制重新下载将清空本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
 
     clearOutput('dl_output');
     document.getElementById('dl_output').classList.add('show');
@@ -609,6 +635,7 @@ async function doDownloadById() {
         showToast('请输入 ID 或 GID+Token', 'warning');
         return;
     }
+    if (force) form.force = '1';
     const res = await api('download', { form: form });
     showOutput('dl_output', res.output || '下载完成', !res.ok);
     if (res.ok) showToast('下载成功!', 'success');
@@ -617,11 +644,13 @@ async function doDownloadById() {
 async function doBatchDownload() {
     const urls = document.getElementById('batch_urls').value.trim();
     if (!urls) { showToast('请输入 URL', 'warning'); return; }
+    const force = document.getElementById('batch_force').checked;
+    if (force && !confirm('⚠ 强制重新下载将清空所有本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
     clearOutput('batch_output');
     document.getElementById('batch_output').classList.add('show');
     document.getElementById('batch_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中，请稍候...';
 
-    const res = await fetch(API + '?action=batch_download', {
+    const res = await fetch(API + '?action=batch_download' + (force ? '&force=1' : ''), {
         method: 'POST',
         body: urls,
     });

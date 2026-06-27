@@ -26,14 +26,22 @@ class NhentaiSite(SiteBase):
         raise ValueError(f"Cannot parse nhentai gallery ID from URL: {url}")
 
     async def fetch_gallery(self, gallery_id: str) -> Gallery:
-        await self._ensure_cdn_config()
+        metadata_requests = 1 + await self._ensure_cdn_config()
         api_url = f"{NHENTAI_API_BASE}/galleries/{gallery_id}"
         response = await self._session.fetch(self.name, api_url)
         if response.status_code == 404:
             raise ValueError(f"Gallery {gallery_id} not found on nhentai")
         response.raise_for_status()
         data = response.json()
-        return self._parse_gallery_detail(data)
+        gallery = self._parse_gallery_detail(data)
+        gallery.request_stats = {
+            "metadata_requests": metadata_requests,
+            "cover_requests": 0,
+            "image_file_requests": 0,
+            "browser_metadata_requests": 0,
+            "browser_image_requests": 0,
+        }
+        return gallery
 
     async def search(self, query: str, page: int = 1) -> list[Gallery]:
         await self._ensure_cdn_config()
@@ -47,9 +55,9 @@ class NhentaiSite(SiteBase):
             results.append(self._parse_gallery_list_item(item))
         return results
 
-    async def _ensure_cdn_config(self) -> None:
+    async def _ensure_cdn_config(self) -> int:
         if self._cdn_config is not None:
-            return
+            return 0
         try:
             response = await self._session.fetch(self.name, f"{NHENTAI_API_BASE}/cdn")
             response.raise_for_status()
@@ -60,6 +68,7 @@ class NhentaiSite(SiteBase):
                 "image_servers": ["https://i1.nhentai.net"],
                 "thumb_servers": ["https://t1.nhentai.net"],
             }
+        return 1
 
     def _image_base(self) -> str:
         if self._cdn_config and self._cdn_config.get("image_servers"):

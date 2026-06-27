@@ -237,6 +237,7 @@ try {
             $url = $_POST['url'] ?? '';
             $gid = $_POST['gid'] ?? '';
             $token = $_POST['token'] ?? '';
+            $force = !empty($_POST['force']);
 
             if ($url) {
                 $args = ['download', '--url', $url];
@@ -247,6 +248,7 @@ try {
             } else {
                 error_exit('Provide --url, --id+source, or --gid+--token');
             }
+            if ($force) $args[] = '--force';
             $result = run_python($args, 300);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
@@ -261,6 +263,8 @@ try {
             if (!is_dir($root . '/data')) mkdir($root . '/data', 0755, true);
             file_put_contents($tmpfile, implode("\n", $lines));
             $args = ['batch', '--file', $tmpfile];
+            $force = !empty($_POST['force']);
+            if ($force) $args[] = '--force';
             $result = run_python($args, 600);
             @unlink($tmpfile);
             json_exit([

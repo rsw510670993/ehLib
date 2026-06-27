@@ -31,7 +31,7 @@ async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -
             print("Error: Provide --id, --url, or --gid/--token")
             return
 
-        gallery = await downloader.download(source, identifier)
+        gallery = await downloader.download(source, identifier, force=args.force)
         print(f"Downloaded: [{gallery.source}] {gallery.title} ({gallery.total_pages} pages)")
     finally:
         await downloader.close()
@@ -150,9 +150,11 @@ def main() -> None:
     dl.add_argument("--url", help="Gallery URL")
     dl.add_argument("--gid", help="exhentai gallery ID (gid)")
     dl.add_argument("--token", help="exhentai gallery token")
+    dl.add_argument("--force", action="store_true", help="Force re-download even if already complete (clears local data)")
 
     batch = subparsers.add_parser("batch", help="Batch download from file")
     batch.add_argument("--file", required=True, help="File containing URLs (one per line)")
+    batch.add_argument("--force", action="store_true", help="Force re-download even if already complete (clears local data)")
 
     search = subparsers.add_parser("search", help="Search galleries online")
     search.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
