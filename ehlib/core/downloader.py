@@ -45,8 +45,14 @@ class Downloader:
 
         existing = await self._db.get_gallery(source, gallery.source_id)
         if existing and existing.is_complete:
-            logger.info("Gallery %s/%s already downloaded completely, skipping.", source, gallery.source_id)
-            return existing
+            logger.info("Gallery %s/%s already downloaded completely, updating metadata.", source, gallery.source_id)
+            gallery.id = existing.id
+            gallery.local_path = existing.local_path
+            gallery.file_size = existing.file_size
+            gallery.is_complete = True
+            gallery.downloaded_at = existing.downloaded_at
+            await self._db.save_gallery(gallery)
+            return gallery
 
         gallery_dir = self._file_manager.create_gallery_dir(source, gallery.source_id, gallery.title)
         gallery.local_path = str(gallery_dir)

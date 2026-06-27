@@ -190,8 +190,20 @@ try {
 
         case 'get_galleries':
             $source = $_GET['source'] ?? '';
+            $tag_name = $_GET['tag'] ?? '';
+            $tags_raw = $_GET['tags'] ?? '';
+            $tag_mode = $_GET['tag_mode'] ?? 'any';
+            $artist = $_GET['artist'] ?? '';
+            $language = $_GET['language'] ?? '';
+            $limit = (int)($_GET['limit'] ?? 50);
             $args = ['list'];
             if ($source) { $args[] = '--source'; $args[] = $source; }
+            if ($tag_name) { $args[] = '--tag'; $args[] = $tag_name; }
+            if ($tags_raw) { $args[] = '--tags'; $args[] = $tags_raw; }
+            if ($tag_mode !== 'any') { $args[] = '--tag-mode'; $args[] = $tag_mode; }
+            if ($artist) { $args[] = '--artist'; $args[] = $artist; }
+            if ($language) { $args[] = '--language'; $args[] = $language; }
+            if ($limit !== 50) { $args[] = '--limit'; $args[] = (string)$limit; }
             $result = run_python($args);
             if (!$result['ok']) error_exit($result['stderr'] ?: 'Command failed');
             $lines = array_filter(explode("\n", $result['stdout']));
@@ -208,6 +220,35 @@ try {
                 }
             }
             json_exit(['galleries' => $galleries]);
+            break;
+
+        case 'get_gallery_detail':
+            $source = $_GET['source'] ?? '';
+            $source_id = $_GET['source_id'] ?? '';
+            if (!$source || !$source_id) error_exit('source and source_id required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->prepare('SELECT id, title, artist, group_name, language, category, total_pages, file_size, downloaded_at FROM galleries WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $gallery = $stmt->fetch();
+                if (!$gallery) error_exit('Gallery not found');
+                $stmt2 = $pdo->prepare(
+                    'SELECT t.type, t.name FROM tags t
+                     JOIN gallery_tags gt ON t.id = gt.tag_id
+                     JOIN galleries g ON gt.gallery_id = g.id
+                     WHERE g.source=? AND g.source_id=?
+                     ORDER BY t.type, t.name'
+                );
+                $stmt2->execute([$source, $source_id]);
+                $tags = $stmt2->fetchAll();
+                $gallery['tags'] = $tags;
+                json_exit(['gallery' => $gallery]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
             break;
 
         case 'download':

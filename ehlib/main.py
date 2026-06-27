@@ -74,10 +74,15 @@ async def cmd_search(args: argparse.Namespace, config: Config, db: Database) -> 
 
 
 async def cmd_list(args: argparse.Namespace, _config: Config, db: Database) -> None:
+    tag_names = None
+    if args.tags:
+        tag_names = [t.strip() for t in args.tags.split(",") if t.strip()]
     galleries = await db.search_galleries(
         source=args.source,
         artist=args.artist,
         tag_name=args.tag,
+        tag_names=tag_names,
+        tag_mode=args.tag_mode or "any",
         language=args.language,
         limit=args.limit or 50,
     )
@@ -157,7 +162,9 @@ def main() -> None:
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
     lst.add_argument("--artist", help="Filter by artist")
-    lst.add_argument("--tag", help="Filter by tag name")
+    lst.add_argument("--tag", help="Filter by single tag name")
+    lst.add_argument("--tags", help="Filter by multiple tags (comma-separated, e.g. english,shindol)")
+    lst.add_argument("--tag-mode", choices=["any", "all"], default="any", help="Tag matching mode: any (OR) or all (AND)")
     lst.add_argument("--language", help="Filter by language")
     lst.add_argument("--limit", type=int, default=50, help="Max results")
 

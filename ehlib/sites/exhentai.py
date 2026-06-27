@@ -1,11 +1,8 @@
-import re
-from datetime import datetime
-
 from bs4 import BeautifulSoup
 
 from ehlib.config import Config
 from ehlib.core.session_manager import SessionManager
-from ehlib.models.schemas import Gallery, Tag, sort_tags
+from ehlib.models.schemas import Gallery, Tag
 from ehlib.sites.base import SiteBase
 from ehlib.utils.helpers import parse_exhentai_url
 from ehlib.utils.logger import get_logger
@@ -140,7 +137,7 @@ class ExhentaiSite(SiteBase):
             cover_url=cover_url,
             thumbnail_url=cover_url,
             uploaded_at=uploaded_at,
-            tags=sort_tags(tags),
+            tags=tags,
             page_urls=page_urls,
         )
         return gallery

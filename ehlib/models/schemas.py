@@ -1,35 +1,12 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-TAG_TYPE_PRIORITY = {
-    "artist": 10,
-    "parody": 20,
-    "character": 30,
-    "group": 40,
-    "cosplayer": 50,
-    "category": 60,
-    "language": 70,
-    "tag": 99,
-}
-
-
-def tag_priority(tag_type: str) -> int:
-    return TAG_TYPE_PRIORITY.get(tag_type, 99)
-
-
-def sort_tags(tags: list["Tag"]) -> list["Tag"]:
-    return sorted(tags, key=lambda t: (tag_priority(t.type), t.name))
-
 
 @dataclass
 class Tag:
     id: int | None = None
     type: str = ""
     name: str = ""
-
-    @property
-    def priority(self) -> int:
-        return tag_priority(self.type)
 
 
 @dataclass

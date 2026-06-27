@@ -341,20 +341,47 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
         <!-- ═══ 本地图库 ═══ -->
         <div id="page_gallery" class="page-section section-hidden">
             <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span>本地画廊列表</span>
                     <div class="btn-group btn-group-sm">
-                        <button class="btn btn-outline-secondary" onclick="loadGalleries('')">全部</button>
-                        <button class="btn btn-outline-danger" onclick="loadGalleries('nhentai')">nhentai</button>
-                        <button class="btn btn-outline-info" onclick="loadGalleries('exhentai')">exhentai</button>
+                        <button class="btn btn-outline-secondary" onclick="loadGalleries()">全部</button>
+                        <button class="btn btn-outline-danger" onclick="loadGalleries({source:'nhentai'})">nhentai</button>
+                        <button class="btn btn-outline-info" onclick="loadGalleries({source:'exhentai'})">exhentai</button>
                         <button class="btn btn-outline-primary" onclick="loadGalleries()"><i class="fas fa-sync"></i></button>
+                    </div>
+                </div>
+                <div class="card-body border-bottom bg-light py-2">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-3">
+                            <label class="form-label small mb-1">标签 (逗号分隔)</label>
+                            <input type="text" class="form-control form-control-sm" id="gallery_tag_filter" placeholder="english, shindol" onkeydown="if(event.key==='Enter')applyGalleryFilter()">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small mb-1">匹配模式</label>
+                            <select class="form-select form-select-sm" id="gallery_tag_mode">
+                                <option value="any">任意 (OR)</option>
+                                <option value="all">全部 (AND)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small mb-1">作者</label>
+                            <input type="text" class="form-control form-control-sm" id="gallery_artist_filter" placeholder="artist name" onkeydown="if(event.key==='Enter')applyGalleryFilter()">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small mb-1">语言</label>
+                            <input type="text" class="form-control form-control-sm" id="gallery_lang_filter" placeholder="english" onkeydown="if(event.key==='Enter')applyGalleryFilter()">
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-primary w-100" onclick="applyGalleryFilter()"><i class="fas fa-filter"></i></button>
+                        </div>
                     </div>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
-                        <table class="table table-hover mb-0">
+                        <table class="table table-hover mb-0" id="gallery_table">
                             <thead class="table-light">
                                 <tr>
+                                    <th></th>
                                     <th>站点</th>
                                     <th>ID</th>
                                     <th>标题</th>
@@ -363,7 +390,7 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                                 </tr>
                             </thead>
                             <tbody id="gallery_table_body">
-                                <tr><td colspan="5" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>
+                                <tr><td colspan="6" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -646,28 +673,116 @@ async function doRetry() {
 }
 
 // ─── Gallery ───
-async function loadGalleries(source) {
-    const tbody = document.getElementById('gallery_table_body');
-    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>';
+let _galleryDetailCache = {};
 
-    const params = source ? '?action=get_galleries&source=' + source : '?action=get_galleries';
+async function loadGalleries(filters) {
+    filters = filters || {};
+    const tbody = document.getElementById('gallery_table_body');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>';
+
+    let params = '?action=get_galleries';
+    if (filters.source) params += '&source=' + encodeURIComponent(filters.source);
+    if (filters.tags) params += '&tags=' + encodeURIComponent(filters.tags);
+    if (filters.tag_mode) params += '&tag_mode=' + encodeURIComponent(filters.tag_mode);
+    if (filters.artist) params += '&artist=' + encodeURIComponent(filters.artist);
+    if (filters.language) params += '&language=' + encodeURIComponent(filters.language);
+    if (filters.tag) params += '&tag=' + encodeURIComponent(filters.tag);
+
     const resp = await fetch(API + params);
     const data = await resp.json();
 
     if (!data.ok || !data.galleries || data.galleries.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">暂无数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">暂无数据</td></tr>';
         return;
     }
 
-    tbody.innerHTML = data.galleries.map(g =>
-        `<tr>
+    tbody.innerHTML = data.galleries.map((g, idx) => {
+        const key = g.source + '/' + g.source_id;
+        return `<tr class="gallery-row" data-source="${g.source}" data-source-id="${g.source_id}" data-idx="${idx}" onclick="toggleGalleryDetail(this)" style="cursor:pointer">
+            <td><i class="fas fa-chevron-right text-muted" style="font-size:.75rem"></i></td>
             <td><span class="badge ${g.source === 'nhentai' ? 'bg-danger' : 'bg-info'}">${g.source}</span></td>
             <td class="font-monospace">${g.source_id}</td>
             <td>${g.title}</td>
             <td>${g.pages}p</td>
             <td class="small">${g.downloaded_at || '-'}</td>
-        </tr>`
-    ).join('');
+        </tr>
+        <tr class="gallery-detail-row" id="detail_${idx}" style="display:none">
+            <td colspan="6" style="padding:.5rem 1rem 1rem 2.5rem">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div><strong>作者:</strong> <span id="detail_artist_${idx}">-</span> &nbsp; <strong>社团:</strong> <span id="detail_group_${idx}">-</span> &nbsp; <strong>语言:</strong> <span id="detail_lang_${idx}">-</span></div>
+                    <span class="small text-muted" id="detail_size_${idx}"></span>
+                </div>
+                <div class="mt-2" id="detail_tags_${idx}"><i class="fas fa-spinner fa-spin me-1"></i>加载标签...</div>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+function applyGalleryFilter() {
+    const tags = document.getElementById('gallery_tag_filter').value.trim();
+    const tagMode = document.getElementById('gallery_tag_mode').value;
+    const artist = document.getElementById('gallery_artist_filter').value.trim();
+    const lang = document.getElementById('gallery_lang_filter').value.trim();
+    const filters = {};
+    if (tags) filters.tags = tags;
+    if (tagMode !== 'any') filters.tag_mode = tagMode;
+    if (artist) filters.artist = artist;
+    if (lang) filters.language = lang;
+    loadGalleries(filters);
+}
+
+async function toggleGalleryDetail(row) {
+    const source = row.dataset.source;
+    const sourceId = row.dataset.sourceId;
+    const idx = row.dataset.idx;
+    const detailRow = document.getElementById('detail_' + idx);
+    const chevron = row.querySelector('i.fa-chevron-right, i.fa-chevron-down');
+
+    if (detailRow.style.display === 'none' || !detailRow.style.display) {
+        detailRow.style.display = 'table-row';
+        if (chevron) chevron.className = 'fas fa-chevron-down text-muted';
+        const key = source + '/' + sourceId;
+        if (!_galleryDetailCache[key]) {
+            try {
+                const resp = await fetch(API + '?action=get_gallery_detail&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId));
+                const data = await resp.json();
+                if (data.ok && data.gallery) {
+                    _galleryDetailCache[key] = data.gallery;
+                }
+            } catch(e) {}
+        }
+        const g = _galleryDetailCache[key];
+        if (g) {
+            document.getElementById('detail_artist_' + idx).textContent = g.artist || '-';
+            document.getElementById('detail_group_' + idx).textContent = g.group_name || '-';
+            document.getElementById('detail_lang_' + idx).textContent = g.language || '-';
+            document.getElementById('detail_size_' + idx).textContent = g.file_size ? formatFileSize(g.file_size) : '';
+            const tagsDiv = document.getElementById('detail_tags_' + idx);
+            if (g.tags && g.tags.length > 0) {
+                let tagsHtml = '';
+                const typeLabels = { artist: 'bg-danger', parody: 'bg-warning text-dark', character: 'bg-primary', group: 'bg-success', language: 'bg-secondary', category: 'bg-info text-dark', tag: 'bg-light text-dark' };
+                g.tags.forEach(t => {
+                    const cls = typeLabels[t.type] || 'bg-light text-dark';
+                    tagsHtml += `<span class="tag-badge ${cls}">${t.type}: ${t.name}</span> `;
+                });
+                tagsDiv.innerHTML = tagsHtml;
+            } else {
+                tagsDiv.innerHTML = '<span class="text-muted">无标签</span>';
+            }
+        }
+    } else {
+        detailRow.style.display = 'none';
+        if (chevron) chevron.className = 'fas fa-chevron-right text-muted';
+    }
+}
+
+function formatFileSize(bytes) {
+    if (!bytes) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    let size = bytes;
+    while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+    return size.toFixed(1) + ' ' + units[i];
 }
 
 // ─── Search ───
