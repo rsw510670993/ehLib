@@ -37,6 +37,42 @@
         .badge-ex { background: #3498db; }
         .tag-badge { display: inline-block; padding: .15rem .5rem; font-size: .75rem; border-radius: .25rem; background: #e9ecef; color: #495057; margin: .15rem; }
         .checkbox-group { max-height: 250px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: .375rem; padding: .5rem .75rem; }
+        .gallery-actions { white-space: nowrap; }
+        .gallery-card { cursor: pointer; transition: transform .15s, box-shadow .15s; }
+        .gallery-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+        .gallery-card .card-img-wrapper { background: #f0f0f0; position: relative; }
+        .gallery-card .card-img-wrapper img { width: 100%; height: 100%; object-fit: cover; }
+        .gallery-card .card-img-wrapper .delete-overlay { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .15s; z-index: 2; }
+        .gallery-card .card-img-wrapper:hover .delete-overlay { opacity: 1; }
+        .gallery-card .card-body { display: flex; flex-direction: column; justify-content: space-between; }
+        .gallery-card .card-body .title-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; height: calc(1.35em * 3); flex-shrink: 0; }
+        #reader_page { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1050; background: #111; display: flex; flex-direction: column; }
+        #reader_page.section-hidden { display: none !important; }
+        .reader-header { background: rgba(0,0,0,.85); color: #e2e8f0; flex-shrink: 0; }
+        .reader-header .reader-header-top { padding: .5rem 1rem; display: flex; align-items: center; gap: .75rem; }
+        .reader-header .btn-close-reader { color: #fff; background: none; border: none; font-size: 1.25rem; cursor: pointer; padding: .25rem .5rem; }
+        .reader-header .reader-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9rem; }
+        .reader-header .reader-meta { font-size: .8rem; color: #94a3b8; flex-shrink: 0; }
+        .reader-header .btn-toggle-details { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: .8rem; padding: .2rem .4rem; }
+        .reader-header .btn-toggle-details:hover { color: #fff; }
+        .reader-header-details { padding: .25rem 1rem .5rem; border-top: 1px solid rgba(255,255,255,.1); display: none; }
+        .reader-header-details.show { display: block; }
+        .reader-header-details .detail-row { font-size: .8rem; color: #94a3b8; margin-bottom: .15rem; }
+        .reader-header-details .detail-tags { display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .2rem; }
+        .reader-header-details .detail-tags .tag-badge { cursor: pointer; }
+        .reader-body { flex: 1; display: flex; overflow: hidden; }
+        .reader-thumbstrip { width: 150px; background: rgba(0,0,0,.6); overflow-y: auto; flex-shrink: 0; padding: .5rem; }
+        .reader-thumbstrip .thumb-item { display: block; width: 100%; margin-bottom: .4rem; cursor: pointer; border: 2px solid transparent; border-radius: 4px; overflow: hidden; opacity: .6; transition: opacity .15s, border-color .15s; }
+        .reader-thumbstrip .thumb-item:hover { opacity: .9; }
+        .reader-thumbstrip .thumb-item.active { border-color: #0d6efd; opacity: 1; }
+        .reader-thumbstrip .thumb-item img { width: 100%; height: auto; display: block; }
+        .reader-main { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 1rem; position: relative; }
+        .reader-main img { max-width: 100%; max-height: 100%; object-fit: contain; }
+        .reader-pagenav { display: flex; align-items: center; gap: .5rem; }
+        .reader-pagenav button { background: rgba(255,255,255,.1); color: #e2e8f0; border: none; border-radius: 4px; padding: .3rem .7rem; cursor: pointer; font-size: .85rem; }
+        .reader-pagenav button:hover { background: rgba(255,255,255,.2); }
+        .reader-pagenav .page-input { width: 50px; text-align: center; background: rgba(255,255,255,.1); color: #e2e8f0; border: 1px solid rgba(255,255,255,.2); border-radius: 4px; padding: .2rem; }
+        @media (max-width: 768px) { .reader-thumbstrip { width: 80px; } }
     </style>
 </head>
 <body>
@@ -79,6 +115,15 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_db">-</div><div class="stat-label">数据库状态</div></div></div>
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_venv">-</div><div class="stat-label">虚拟环境</div></div></div>
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_config">-</div><div class="stat-label">配置文件</div></div></div>
+            </div>
+            <div id="active_downloads_card" class="mb-3" style="display:none">
+                <div class="card border-primary">
+                    <div class="card-header bg-primary text-white py-2">
+                        <i class="fas fa-download me-1"></i>活跃下载
+                    </div>
+                    <div class="card-body py-2" id="active_downloads_body">
+                    </div>
+                </div>
             </div>
             <div class="card">
                 <div class="card-header">快捷操作</div>
@@ -234,6 +279,12 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                                 <input type="text" class="form-control" id="dl_url" placeholder="https://nhentai.net/g/177013/ 或 https://exhentai.org/g/1234567/abc123/">
                                 <button class="btn btn-primary" onclick="doDownload()"><i class="fas fa-download me-1"></i>下载</button>
                             </div>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="dl_force_url">
+                                <label class="form-check-label small text-danger" for="dl_force_url">
+                                    <i class="fas fa-exclamation-triangle me-1"></i>强制重新下载（清空本地文件 + 覆盖数据库记录）
+                                </label>
+                            </div>
                         </div>
                         <div class="tab-pane fade" id="tab_dl_id">
                             <div class="row g-2 align-items-end">
@@ -259,8 +310,19 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                                 <div class="col-12 mt-2">
                                     <button class="btn btn-primary" onclick="doDownloadById()"><i class="fas fa-download me-1"></i>下载</button>
                                 </div>
+                                <div class="col-12 mt-1">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="dl_force_id">
+                                        <label class="form-check-label small text-danger" for="dl_force_id">
+                                            <i class="fas fa-exclamation-triangle me-1"></i>强制重新下载（清空本地文件 + 覆盖数据库记录）
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
                         </div>
+                    </div>
+                    <div id="dl_progress" class="progress mb-2" style="height:8px;display:none">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" id="dl_progress_bar" style="width:0%"></div>
                     </div>
                     <div id="dl_output" class="output-box"></div>
                 </div>
@@ -275,6 +337,15 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                     <div class="mb-2">
                         <label class="form-label">每行一个 URL</label>
                         <textarea class="form-control" id="batch_urls" rows="5" placeholder="https://nhentai.net/g/177013/&#10;https://exhentai.org/g/1234567/abc123/&#10;https://nhentai.net/g/238480/"></textarea>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="batch_force">
+                        <label class="form-check-label small text-danger" for="batch_force">
+                            <i class="fas fa-exclamation-triangle me-1"></i>强制重新下载全部（清空本地文件 + 覆盖数据库记录）
+                        </label>
+                    </div>
+                    <div id="batch_progress" class="progress mb-2" style="height:8px;display:none">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" id="batch_progress_bar" style="width:0%"></div>
                     </div>
                     <div id="batch_output" class="output-box"></div>
                 </div>
@@ -324,28 +395,47 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                             <input type="text" class="form-control form-control-sm" id="gallery_lang_filter" placeholder="english" onkeydown="if(event.key==='Enter')applyGalleryFilter()">
                         </div>
                         <div class="col-md-1">
-                            <button class="btn btn-sm btn-outline-primary w-100" onclick="applyGalleryFilter()"><i class="fas fa-filter"></i></button>
+                            <button class="btn btn-sm btn-outline-primary w-100" onclick="applyGalleryFilter()" title="筛选"><i class="fas fa-filter"></i></button>
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearGalleryFilter()" title="清空筛选"><i class="fas fa-times"></i></button>
                         </div>
                     </div>
                 </div>
-                <div class="card-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-hover mb-0" id="gallery_table">
-                            <thead class="table-light">
-                                <tr>
-                                    <th></th>
-                                    <th>站点</th>
-                                    <th>ID</th>
-                                    <th>标题</th>
-                                    <th>页数</th>
-                                    <th>下载时间</th>
-                                </tr>
-                            </thead>
-                            <tbody id="gallery_table_body">
-                                <tr><td colspan="6" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>
-                            </tbody>
-                        </table>
+                <div class="card-body" id="gallery_grid_body">
+                    <div class="text-center text-muted py-5"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══ 阅读器 ═══ -->
+        <div id="reader_page" class="section-hidden">
+            <div class="reader-header">
+                <div class="reader-header-top">
+                    <button class="btn-close-reader" onclick="closeReader()" title="关闭 (Esc)"><i class="fas fa-arrow-left"></i></button>
+                    <span class="reader-title" id="reader_title"></span>
+                    <span class="reader-meta" id="reader_meta"></span>
+                    <div class="reader-pagenav">
+                        <button onclick="readerPrevPage()" title="上一页 (←)"><i class="fas fa-chevron-left"></i></button>
+                        <input type="number" class="page-input" id="reader_page_input" min="1" onchange="readerGoToPage(parseInt(this.value))">
+                        <span id="reader_page_total"></span>
+                        <button onclick="readerNextPage()" title="下一页 (→)"><i class="fas fa-chevron-right"></i></button>
                     </div>
+                    <button class="btn-toggle-details" id="reader_toggle_details" onclick="readerToggleDetails()" title="详细信息"><i class="fas fa-chevron-down"></i></button>
+                </div>
+                <div class="reader-header-details" id="reader_header_details">
+                    <div class="detail-row" id="reader_detail_artist"></div>
+                    <div class="detail-row" id="reader_detail_lang"></div>
+                    <div class="detail-row" id="reader_detail_category"></div>
+                    <div class="detail-tags" id="reader_detail_tags"></div>
+                </div>
+            </div>
+            <div class="reader-body">
+                <div class="reader-thumbstrip" id="reader_thumbstrip">
+                    <div id="reader_thumb_list"></div>
+                </div>
+                <div class="reader-main" id="reader_main">
+                    <img id="reader_main_img" src="" alt="loading...">
                 </div>
             </div>
         </div>
@@ -578,14 +668,30 @@ async function saveSettings() {
 }
 
 // ─── Download ───
+function parseDownloadUrl(url) {
+    var m = url.match(/exhentai\.org\/g\/(\d+\/[a-f0-9]+)/i);
+    if (m) return { source: 'exhentai', source_id: m[1] };
+    m = url.match(/nhentai\.net\/g\/(\d+)/i);
+    if (m) return { source: 'nhentai', source_id: m[1] };
+    return null;
+}
+
 async function doDownload() {
     const url = document.getElementById('dl_url').value.trim();
     if (!url) { showToast('请输入 URL', 'warning'); return; }
+    const force = document.getElementById('dl_force_url').checked;
+    if (force && !confirm('⚠ 强制重新下载将清空本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
     clearOutput('dl_output');
     document.getElementById('dl_output').classList.add('show');
     document.getElementById('dl_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>下载中，请稍候...';
 
-    const res = await api('download', { form: { action: 'download', url: url } });
+    var parsed = parseDownloadUrl(url);
+    if (parsed) trackDownloadProgress(parsed.source, parsed.source_id);
+
+    const form = { action: 'download', url: url };
+    if (force) form.force = '1';
+    const res = await api('download', { form: form });
+    clearDownloadProgress();
     showOutput('dl_output', res.output || '下载完成', !res.ok);
     if (res.ok) showToast('下载成功!', 'success');
 }
@@ -595,21 +701,29 @@ async function doDownloadById() {
     const id = document.getElementById('dl_id').value.trim();
     const gid = document.getElementById('dl_gid').value.trim();
     const token = document.getElementById('dl_token').value.trim();
+    const force = document.getElementById('dl_force_id').checked;
+    if (force && !confirm('⚠ 强制重新下载将清空本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
 
     clearOutput('dl_output');
     document.getElementById('dl_output').classList.add('show');
     document.getElementById('dl_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>下载中，请稍候...';
 
     let form;
+    let parsedId;
     if (gid && token) {
         form = { action: 'download', gid: gid, token: token };
+        parsedId = gid + '/' + token;
     } else if (id && source) {
         form = { action: 'download', source: source, id: id };
+        parsedId = id;
     } else {
         showToast('请输入 ID 或 GID+Token', 'warning');
         return;
     }
+    if (force) form.force = '1';
+    if (parsedId && source) trackDownloadProgress(source, parsedId);
     const res = await api('download', { form: form });
+    clearDownloadProgress();
     showOutput('dl_output', res.output || '下载完成', !res.ok);
     if (res.ok) showToast('下载成功!', 'success');
 }
@@ -617,11 +731,13 @@ async function doDownloadById() {
 async function doBatchDownload() {
     const urls = document.getElementById('batch_urls').value.trim();
     if (!urls) { showToast('请输入 URL', 'warning'); return; }
+    const force = document.getElementById('batch_force').checked;
+    if (force && !confirm('⚠ 强制重新下载将清空所有本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
     clearOutput('batch_output');
     document.getElementById('batch_output').classList.add('show');
     document.getElementById('batch_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中，请稍候...';
 
-    const res = await fetch(API + '?action=batch_download', {
+    const res = await fetch(API + '?action=batch_download' + (force ? '&force=1' : ''), {
         method: 'POST',
         body: urls,
     });
@@ -638,13 +754,99 @@ async function doRetry() {
     showOutput('retry_output', res.output || '重试完成', !res.ok);
 }
 
-// ─── Gallery ───
-let _galleryDetailCache = {};
+// ─── Download Progress ───
+let _progressPoller = null;
+let _activeProgressKey = null;
+
+function startProgressPoller() {
+    if (_progressPoller) return;
+    _progressPoller = setInterval(checkDownloadProgress, 2000);
+    checkDownloadProgress();
+}
+
+function stopProgressPoller() {
+    if (_progressPoller) {
+        clearInterval(_progressPoller);
+        _progressPoller = null;
+    }
+}
+
+async function checkDownloadProgress() {
+    const data = await api('get_download_progress');
+    const tasks = data.tasks || [];
+
+    // Update dashboard card
+    const card = document.getElementById('active_downloads_card');
+    const body = document.getElementById('active_downloads_body');
+    if (tasks.length === 0) {
+        card.style.display = 'none';
+        body.innerHTML = '';
+        return;
+    }
+    card.style.display = '';
+    body.innerHTML = tasks.map(function(t) {
+        var pct = t.total_pages > 0 ? Math.round(t.current / t.total_pages * 100) : 0;
+        var badgeClass = t.source === 'nhentai' ? 'bg-danger' : 'bg-info';
+        var msg = t.message || (t.current + '/' + t.total_pages);
+        return '<div class="d-flex align-items-center mb-1 small">' +
+            '<span class="badge ' + badgeClass + ' me-2 flex-shrink-0">' + t.source + '</span>' +
+            '<span class="text-truncate me-2 flex-grow-1" style="max-width:320px">' + t.title + '</span>' +
+            '<span class="text-muted flex-shrink-0">' + msg + '</span>' +
+            '</div>' +
+            '<div class="progress mb-2" style="height:5px">' +
+            '<div class="progress-bar progress-bar-striped progress-bar-animated" style="width:' + pct + '%"></div>' +
+            '</div>';
+    }).join('');
+
+    // Update download page progress bar
+    if (_activeProgressKey && tasks.length > 0) {
+        var active = tasks.find(function(t) { return t.source + '__' + t.source_id.replace(/\\//g,'_') === _activeProgressKey; });
+        if (active) {
+            var el = document.getElementById('dl_progress');
+            var bar = document.getElementById('dl_progress_bar');
+            if (el && bar) {
+                el.style.display = '';
+                var pct = active.total_pages > 0 ? Math.round(active.current / active.total_pages * 100) : 0;
+                bar.style.width = pct + '%';
+                bar.textContent = active.current + '/' + active.total_pages;
+            }
+        }
+    }
+}
+
+function trackDownloadProgress(source, sourceId) {
+    _activeProgressKey = source + '__' + sourceId.replace(/\//g, '_');
+    var el = document.getElementById('dl_progress');
+    var bar = document.getElementById('dl_progress_bar');
+    if (el && bar) {
+        el.style.display = '';
+        bar.style.width = '0%';
+        bar.textContent = '';
+    }
+    startProgressPoller();
+}
+
+function clearDownloadProgress() {
+    _activeProgressKey = null;
+    var el = document.getElementById('dl_progress');
+    var bar = document.getElementById('dl_progress_bar');
+    if (el && bar) {
+        el.style.display = 'none';
+        bar.style.width = '0%';
+        bar.textContent = '';
+    }
+}
+
+// ─── Gallery (Card Grid) ───
+let _galleryFilters = {};
+let _readerState = null;
+let _readerKeyHandler = null;
 
 async function loadGalleries(filters) {
-    filters = filters || {};
-    const tbody = document.getElementById('gallery_table_body');
-    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</td></tr>';
+    filters = filters || _galleryFilters || {};
+    _galleryFilters = { ...filters };
+    const body = document.getElementById('gallery_grid_body');
+    body.innerHTML = '<div class="text-center text-muted py-5"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>';
 
     let params = '?action=get_galleries';
     if (filters.source) params += '&source=' + encodeURIComponent(filters.source);
@@ -658,30 +860,32 @@ async function loadGalleries(filters) {
     const data = await resp.json();
 
     if (!data.ok || !data.galleries || data.galleries.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">暂无数据</td></tr>';
+        body.innerHTML = '<div class="text-center text-muted py-5">暂无数据</div>';
         return;
     }
 
-    tbody.innerHTML = data.galleries.map((g, idx) => {
-        const key = g.source + '/' + g.source_id;
-        return `<tr class="gallery-row" data-source="${g.source}" data-source-id="${g.source_id}" data-idx="${idx}" onclick="toggleGalleryDetail(this)" style="cursor:pointer">
-            <td><i class="fas fa-chevron-right text-muted" style="font-size:.75rem"></i></td>
-            <td><span class="badge ${g.source === 'nhentai' ? 'bg-danger' : 'bg-info'}">${g.source}</span></td>
-            <td class="font-monospace">${g.source_id}</td>
-            <td>${g.title}</td>
-            <td>${g.pages}p</td>
-            <td class="small">${g.downloaded_at || '-'}</td>
-        </tr>
-        <tr class="gallery-detail-row" id="detail_${idx}" style="display:none">
-            <td colspan="6" style="padding:.5rem 1rem 1rem 2.5rem">
-                <div class="d-flex justify-content-between align-items-start">
-                    <div><strong>作者:</strong> <span id="detail_artist_${idx}">-</span> &nbsp; <strong>社团:</strong> <span id="detail_group_${idx}">-</span> &nbsp; <strong>语言:</strong> <span id="detail_lang_${idx}">-</span></div>
-                    <span class="small text-muted" id="detail_size_${idx}"></span>
-                </div>
-                <div class="mt-2" id="detail_tags_${idx}"><i class="fas fa-spinner fa-spin me-1"></i>加载标签...</div>
-            </td>
-        </tr>`;
-    }).join('');
+    body.innerHTML = '<div class="row row-cols-2 row-cols-md-3 row-cols-lg-4 row-cols-xl-5 g-3" id="gallery_grid">' +
+        data.galleries.map(function(g) {
+            var displayTitle = g.title_jp || g.title;
+            var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
+            var imgUrl = API + '?action=serve_image&source=' + encodeURIComponent(g.source) + '&source_id=' + encodeURIComponent(g.source_id) + '&page=cover';
+            return '<div class="col" data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
+                '<div class="card h-100 gallery-card" onclick="openReader(\'' + g.source + '\',\'' + g.source_id + '\')">' +
+                '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
+                '<img src="' + imgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="this.style.display=\'none\'">' +
+                '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitle) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
+                '</div>' +
+                '<div class="card-body p-2">' +
+                '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
+                '<div class="d-flex justify-content-between align-items-center">' +
+                '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + g.source + '</span>' +
+                '<span class="small text-muted">' + g.pages + 'p</span>' +
+                '</div>' +
+                '</div>' +
+                '</div>' +
+                '</div>';
+        }).join('') +
+        '</div>';
 }
 
 function applyGalleryFilter() {
@@ -697,58 +901,220 @@ function applyGalleryFilter() {
     loadGalleries(filters);
 }
 
-async function toggleGalleryDetail(row) {
-    const source = row.dataset.source;
-    const sourceId = row.dataset.sourceId;
-    const idx = row.dataset.idx;
-    const detailRow = document.getElementById('detail_' + idx);
-    const chevron = row.querySelector('i.fa-chevron-right, i.fa-chevron-down');
+function clearGalleryFilter() {
+    document.getElementById('gallery_tag_filter').value = '';
+    document.getElementById('gallery_tag_mode').value = 'any';
+    document.getElementById('gallery_artist_filter').value = '';
+    document.getElementById('gallery_lang_filter').value = '';
+    loadGalleries({});
+}
 
-    if (detailRow.style.display === 'none' || !detailRow.style.display) {
-        detailRow.style.display = 'table-row';
-        if (chevron) chevron.className = 'fas fa-chevron-down text-muted';
-        const key = source + '/' + sourceId;
-        if (!_galleryDetailCache[key]) {
-            try {
-                const resp = await fetch(API + '?action=get_gallery_detail&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId));
-                const data = await resp.json();
-                if (data.ok && data.gallery) {
-                    _galleryDetailCache[key] = data.gallery;
-                }
-            } catch(e) {}
-        }
-        const g = _galleryDetailCache[key];
-        if (g) {
-            document.getElementById('detail_artist_' + idx).textContent = g.artist || '-';
-            document.getElementById('detail_group_' + idx).textContent = g.group_name || '-';
-            document.getElementById('detail_lang_' + idx).textContent = g.language || '-';
-            document.getElementById('detail_size_' + idx).textContent = g.file_size ? formatFileSize(g.file_size) : '';
-            const tagsDiv = document.getElementById('detail_tags_' + idx);
-            if (g.tags && g.tags.length > 0) {
-                let tagsHtml = '';
-                const typeLabels = { artist: 'bg-danger', parody: 'bg-warning text-dark', character: 'bg-primary', group: 'bg-success', language: 'bg-secondary', category: 'bg-info text-dark', tag: 'bg-light text-dark' };
-                g.tags.forEach(t => {
-                    const cls = typeLabels[t.type] || 'bg-light text-dark';
-                    tagsHtml += `<span class="tag-badge ${cls}">${t.type}: ${t.name}</span> `;
-                });
-                tagsDiv.innerHTML = tagsHtml;
-            } else {
-                tagsDiv.innerHTML = '<span class="text-muted">无标签</span>';
-            }
-        }
-    } else {
-        detailRow.style.display = 'none';
-        if (chevron) chevron.className = 'fas fa-chevron-right text-muted';
+async function deleteGalleryFromCard(btn, source, sourceId, title) {
+    if (!confirm('⚠ 确定删除这本本地画廊吗？\n\n' + title + '\n\n这会同时删除本地图片文件和数据库记录。')) return;
+    btn.disabled = true;
+    var oldHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    try {
+        var res = await api('delete_gallery', { form: { action: 'delete_gallery', source: source, source_id: sourceId } });
+        if (!res.ok) throw new Error(res.error || '删除失败');
+        showToast('已删除：' + title, 'success');
+        await loadGalleries();
+    } catch (err) {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+        showToast(err.message, 'danger');
     }
 }
 
 function formatFileSize(bytes) {
     if (!bytes) return '';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    let i = 0;
-    let size = bytes;
+    var units = ['B', 'KB', 'MB', 'GB'];
+    var i = 0, size = bytes;
     while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
     return size.toFixed(1) + ' ' + units[i];
+}
+
+// ─── Reader ───
+function escapeHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escapeAttr(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function readerToggleDetails() {
+    var el = document.getElementById('reader_header_details');
+    var btn = document.getElementById('reader_toggle_details');
+    el.classList.toggle('show');
+    btn.innerHTML = el.classList.contains('show') ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
+}
+
+function readerSearchTag(type, name) {
+    closeReader();
+    document.getElementById('gallery_tag_filter').value = name;
+    document.getElementById('gallery_tag_mode').value = 'any';
+    loadGalleries({ tags: name, tag_mode: 'any' });
+    switchPage('gallery');
+}
+
+async function readerRefreshMetadata(source, sourceId) {
+    var warningDiv = document.getElementById('reader_tag_warning');
+    var btn = warningDiv ? warningDiv.querySelector('button') : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+    try {
+        var res = await api('refresh_metadata', { form: { action: 'refresh_metadata', source: source, source_id: sourceId } });
+        if (!res.ok) throw new Error(res.error || res.output || '刷新失败');
+        showToast('元数据已刷新', 'success');
+        openReader(source, sourceId);
+    } catch (err) {
+        showToast('刷新元数据失败: ' + (err.message || ''), 'danger');
+        if (btn) { btn.disabled = false; btn.innerHTML = '重下载元数据'; }
+    }
+}
+
+var _readerSource, _readerSourceId;
+var _readerCurrentPage = 1;
+var _readerTotalPages = 0;
+var _readerImageList = [];
+
+function openReader(source, sourceId) {
+    _readerSource = source;
+    _readerSourceId = sourceId;
+    _readerCurrentPage = 1;
+    _readerTotalPages = 0;
+    _readerImageList = [];
+    document.getElementById('reader_page').classList.remove('section-hidden');
+    document.getElementById('reader_main_img').src = '';
+    document.getElementById('reader_main_img').alt = '加载中...';
+    document.getElementById('reader_thumb_list').innerHTML = '<div class="text-center text-muted small py-3"><i class="fas fa-spinner fa-spin"></i></div>';
+
+    // Load metadata
+    fetch(API + '?action=get_gallery_detail&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.ok || !data.gallery) return;
+            var g = data.gallery;
+            var displayTitle = g.title_jp || g.title;
+            document.getElementById('reader_title').textContent = displayTitle;
+            document.getElementById('reader_meta').textContent = g.total_pages + 'p · ' + (g.language || '-');
+            document.getElementById('reader_detail_artist').textContent = '作者: ' + (g.artist || '-');
+            document.getElementById('reader_detail_lang').textContent = '语言: ' + (g.language || '-');
+            document.getElementById('reader_detail_category').textContent = '分类: ' + (g.category || '-');
+            document.getElementById('reader_header_details').classList.remove('show');
+            var tagsHtml = '';
+            var tagCount = (g.tags && g.tags.length > 0) ? g.tags.length : 0;
+            if (tagCount > 0) {
+                var typeLabels = { artist: 'bg-danger', parody: 'bg-warning text-dark', character: 'bg-primary', group: 'bg-success', language: 'bg-secondary', category: 'bg-info text-dark', tag: 'bg-light text-dark' };
+                g.tags.forEach(function(t) {
+                    var cls = typeLabels[t.type] || 'bg-light text-dark';
+                    tagsHtml += '<span class="tag-badge ' + cls + '" onclick="event.stopPropagation();readerSearchTag(\'' + t.type + '\',\'' + escapeAttr(t.name) + '\')">' + t.type + ': ' + t.name + '</span> ';
+                });
+            } else {
+                tagsHtml = '<span style="color:#666">无标签</span>';
+            }
+            var tagWarning = '';
+            if (tagCount <= 1) {
+                tagWarning = '<div class="mt-1 p-1 rounded" style="background:rgba(255,193,7,.15);font-size:.75rem;color:#ffc107">' +
+                    '标签数 (<strong>' + tagCount + '</strong>) 过少，可能元数据不完整' +
+                    '<button class="btn btn-sm btn-warning py-0 px-1 ms-2" onclick="readerRefreshMetadata(\'' + source + '\',\'' + sourceId + '\')" style="font-size:.7rem">重下载元数据</button></div>';
+            } else {
+                tagWarning = '<div class="mt-1" style="font-size:.75rem;color:#6b7280">标签: ' + tagCount + '个</div>';
+            }
+            document.getElementById('reader_detail_tags').innerHTML = tagsHtml;
+            var existingWarning = document.getElementById('reader_tag_warning');
+            if (existingWarning) existingWarning.remove();
+            document.getElementById('reader_detail_tags').insertAdjacentHTML('afterend', '<div id="reader_tag_warning">' + tagWarning + '</div>');
+        });
+
+    // Load image list
+    fetch(API + '?action=get_image_list&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.ok || !data.images) return;
+            _readerTotalPages = data.total_pages || data.images.length;
+            _readerImageList = data.images;
+            document.getElementById('reader_page_total').textContent = '/ ' + _readerTotalPages;
+            document.getElementById('reader_page_input').max = _readerTotalPages;
+
+            var thumbHtml = '';
+            data.images.forEach(function(img, idx) {
+                var pageNum = img.page || (idx + 1);
+                if (img.file) {
+                    var thumbUrl = API + '?action=serve_image&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId) + '&page=' + pageNum;
+                    thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')">' +
+                        '<img src="' + thumbUrl + '" alt="p' + pageNum + '" loading="lazy">' +
+                        '</div>';
+                } else {
+                    thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')" style="text-align:center;padding:.5rem;color:#666;font-size:.75rem">' +
+                        'p' + pageNum + '</div>';
+                }
+            });
+            document.getElementById('reader_thumb_list').innerHTML = thumbHtml;
+            readerGoToPage(1);
+        });
+
+    // Keyboard
+    if (_readerKeyHandler) document.removeEventListener('keydown', _readerKeyHandler);
+    _readerKeyHandler = function(e) {
+        if (e.key === 'Escape') { closeReader(); }
+        else if (e.key === 'ArrowLeft') { e.preventDefault(); readerPrevPage(); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); readerNextPage(); }
+    };
+    document.addEventListener('keydown', _readerKeyHandler);
+}
+
+function closeReader() {
+    document.getElementById('reader_page').classList.add('section-hidden');
+    document.getElementById('reader_main_img').src = '';
+    if (_readerKeyHandler) {
+        document.removeEventListener('keydown', _readerKeyHandler);
+        _readerKeyHandler = null;
+    }
+}
+
+function readerGoToPage(page) {
+    if (page < 1) page = 1;
+    if (page > _readerTotalPages) page = _readerTotalPages;
+    _readerCurrentPage = page;
+    document.getElementById('reader_page_input').value = page;
+
+    // Update thumb active
+    var thumbs = document.querySelectorAll('#reader_thumb_list .thumb-item');
+    thumbs.forEach(function(t) { t.classList.remove('active'); });
+    var activeThumb = document.querySelector('#reader_thumb_list .thumb-item[data-page="' + page + '"]');
+    if (activeThumb) {
+        activeThumb.classList.add('active');
+        activeThumb.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+
+    // Load main image
+    var imgUrl = API + '?action=serve_image&source=' + encodeURIComponent(_readerSource) + '&source_id=' + encodeURIComponent(_readerSourceId) + '&page=' + page;
+    document.getElementById('reader_main_img').src = imgUrl;
+
+    // Preload next 2 pages
+    for (var i = 1; i <= 2; i++) {
+        var nextPage = page + i;
+        if (nextPage <= _readerTotalPages) {
+            var preloadUrl = API + '?action=serve_image&source=' + encodeURIComponent(_readerSource) + '&source_id=' + encodeURIComponent(_readerSourceId) + '&page=' + nextPage;
+            var link = document.createElement('link');
+            link.rel = 'preload';
+            link.as = 'image';
+            link.href = preloadUrl;
+            document.head.appendChild(link);
+            setTimeout(function(el) { document.head.removeChild(el); }, 3000, link);
+        }
+    }
+}
+
+function readerPrevPage() {
+    if (_readerCurrentPage > 1) readerGoToPage(_readerCurrentPage - 1);
+}
+
+function readerNextPage() {
+    if (_readerCurrentPage < _readerTotalPages) readerGoToPage(_readerCurrentPage + 1);
 }
 
 // ─── Search ───
@@ -816,6 +1182,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
     loadCookies();
     loadSettings();
+    startProgressPoller();
 });
 </script>
 </body>

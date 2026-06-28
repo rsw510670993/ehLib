@@ -9,6 +9,7 @@ from ehlib.core.session_manager import SessionManager
 from ehlib.models.database import Database
 from ehlib.sites.nhentai import NhentaiSite
 from ehlib.sites.exhentai import ExhentaiSite
+from ehlib.storage.file_manager import FileManager
 from ehlib.utils.helpers import parse_nhentai_url, parse_exhentai_url
 from ehlib.utils.logger import setup_logger, get_logger
 
@@ -31,7 +32,7 @@ async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -
             print("Error: Provide --id, --url, or --gid/--token")
             return
 
-        gallery = await downloader.download(source, identifier)
+        gallery = await downloader.download(source, identifier, force=args.force)
         print(f"Downloaded: [{gallery.source}] {gallery.title} ({gallery.total_pages} pages)")
     finally:
         await downloader.close()
@@ -89,7 +90,8 @@ async def cmd_list(args: argparse.Namespace, _config: Config, db: Database) -> N
         print("No galleries found.")
         return
     for g in galleries:
-        print(f"[{g.source}/{g.source_id}] {g.title} ({g.total_pages}p) - {g.downloaded_at}")
+        title_jp_part = g.title_jp if g.title_jp else ""
+        print(f"[{g.source}/{g.source_id}] {g.title} | {title_jp_part} ({g.total_pages}p) - {g.downloaded_at}")
 
 
 async def cmd_config(args: argparse.Namespace, config: Config, _db: Database) -> None:
@@ -127,6 +129,66 @@ async def cmd_export(args: argparse.Namespace, _config: Config, db: Database) ->
     print(f"Exported to {args.output}")
 
 
+async def cmd_migrate_dirs(_args: argparse.Namespace, config: Config, db: Database) -> None:
+    file_manager = FileManager(config.download.get("path", "./downloads"))
+    galleries = await db.get_all_galleries()
+    if not galleries:
+        print("No galleries found.")
+        return
+
+    migrated = 0
+    skipped = 0
+    conflicts = 0
+    missing = 0
+
+    for gallery in galleries:
+        if not gallery.local_path:
+            print(f"SKIP [{gallery.source}/{gallery.source_id}] local_path is empty")
+            skipped += 1
+            continue
+
+        current_path = Path(gallery.local_path).resolve()
+        target_path = file_manager.gallery_dir(gallery.source, gallery.source_id, gallery.title)
+
+        ok, status = file_manager.migrate_gallery_dir(current_path, target_path)
+        if status == "already-current":
+            skipped += 1
+            continue
+        if not ok and status == "source-missing":
+            print(f"MISSING [{gallery.source}/{gallery.source_id}] {current_path}")
+            missing += 1
+            continue
+        if not ok and status == "target-exists":
+            print(f"CONFLICT [{gallery.source}/{gallery.source_id}] {target_path}")
+            conflicts += 1
+            continue
+        if not ok:
+            print(f"SKIP [{gallery.source}/{gallery.source_id}] {status}")
+            skipped += 1
+            continue
+
+        await db.update_gallery_local_path(gallery.source, gallery.source_id, str(target_path))
+        print(f"MIGRATED [{gallery.source}/{gallery.source_id}] -> {target_path.name}")
+        migrated += 1
+
+    print(
+        f"Migration complete: migrated={migrated}, skipped={skipped}, "
+        f"missing={missing}, conflicts={conflicts}"
+    )
+
+
+async def cmd_refresh_metadata(args: argparse.Namespace, config: Config, db: Database) -> None:
+    downloader = Downloader(config, db)
+    try:
+        gallery = await downloader.download(args.source, args.source_id)
+        print(f"Metadata refreshed: [{args.source}/{args.source_id}] {gallery.title}")
+        print(f"Tags: {len(gallery.tags)}, Pages: {gallery.total_pages}")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+    finally:
+        await downloader.close()
+
+
 def _resolve_url(url: str) -> tuple[str | None, str | None]:
     nh_id = parse_nhentai_url(url)
     if nh_id:
@@ -150,9 +212,11 @@ def main() -> None:
     dl.add_argument("--url", help="Gallery URL")
     dl.add_argument("--gid", help="exhentai gallery ID (gid)")
     dl.add_argument("--token", help="exhentai gallery token")
+    dl.add_argument("--force", action="store_true", help="Force re-download even if already complete (clears local data)")
 
     batch = subparsers.add_parser("batch", help="Batch download from file")
     batch.add_argument("--file", required=True, help="File containing URLs (one per line)")
+    batch.add_argument("--force", action="store_true", help="Force re-download even if already complete (clears local data)")
 
     search = subparsers.add_parser("search", help="Search galleries online")
     search.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
@@ -177,6 +241,12 @@ def main() -> None:
     exp.add_argument("--output", default="metadata.json", help="Output file path")
     exp.add_argument("--format", choices=["json"], default="json", help="Export format")
 
+    subparsers.add_parser("migrate-dirs", help="Migrate gallery directories to ID-only names")
+
+    refresh = subparsers.add_parser("refresh-metadata", help="Re-fetch metadata for an existing gallery (preserves local images)")
+    refresh.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
+    refresh.add_argument("source_id", help="Gallery source ID or gid/token for exhentai")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -197,6 +267,8 @@ def main() -> None:
             "config": cmd_config,
             "retry": cmd_retry,
             "export": cmd_export,
+            "migrate-dirs": cmd_migrate_dirs,
+            "refresh-metadata": cmd_refresh_metadata,
         }
         handler = commands.get(args.command)
         if handler:

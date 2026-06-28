@@ -85,6 +85,7 @@ class AntiBotBrowser:
         browser = await self._start_browser()
         page = await browser.get("about:blank")
         results: dict[int, bytes] = {}
+        delay = float(self._config.request.get("delay_between_requests", 1.5))
 
         for i, img_url in enumerate(urls):
             label = f"image {i + 1}/{len(urls)}"
@@ -138,6 +139,8 @@ class AntiBotBrowser:
 
             if not success:
                 logger.error("Failed to download %s after %d attempts", label, retries)
+            if i < len(urls) - 1 and delay > 0:
+                await asyncio.sleep(delay)
 
         await self._stop_browser()
         return results

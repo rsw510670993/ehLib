@@ -20,6 +20,21 @@ class FileManager:
         ensure_dir(gallery_path)
         return gallery_path
 
+    def migrate_gallery_dir(self, current_path: Path, target_path: Path) -> tuple[bool, str]:
+        current_path = current_path.resolve()
+        target_path = target_path.resolve()
+
+        if current_path == target_path:
+            return True, "already-current"
+        if not current_path.exists():
+            return False, "source-missing"
+        if target_path.exists():
+            return False, "target-exists"
+
+        ensure_dir(target_path.parent)
+        current_path.rename(target_path)
+        return True, "migrated"
+
     def page_path(self, gallery_dir: Path, page_num: int, ext: str = ".jpg") -> Path:
         page_str = str(page_num).zfill(3)
         return gallery_dir / f"{page_str}{ext}"
@@ -62,6 +77,13 @@ class FileManager:
             if f.is_file():
                 total += f.stat().st_size
         return total
+
+    def delete_gallery_dir(self, gallery_dir: Path) -> bool:
+        if not gallery_dir.exists():
+            return False
+        import shutil
+        shutil.rmtree(gallery_dir, ignore_errors=True)
+        return True
 
     @staticmethod
     def _extract_ext(url: str) -> str:
