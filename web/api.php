@@ -289,7 +289,7 @@ try {
             $lines = array_filter(explode("\n", $result['stdout']));
             $galleries = [];
             foreach ($lines as $line) {
-                if (preg_match('/^\[(.+?)\/(.+?)\]\s+(.+?)\s+\|\s*(.*?)\s*\((\d+)p\)\s+-\s+(.+)$/', $line, $m)) {
+                if (preg_match('/^\[(.+?)\/(.+?)\]\s+(.+?)\s+\|\s*(.*?)\s*\((\d+)p\)\s+-\s+(.*)$/', $line, $m)) {
                     $galleries[] = [
                         'source' => $m[1],
                         'source_id' => $m[2],
@@ -330,6 +330,19 @@ try {
             } catch (Exception $e) {
                 error_exit($e->getMessage());
             }
+            break;
+
+        case 'refresh_metadata':
+            $source = $_POST['source'] ?? '';
+            $source_id = $_POST['source_id'] ?? '';
+            if (!$source || !$source_id) error_exit('source and source_id required');
+            $args = ['refresh-metadata', $source, $source_id];
+            $result = run_python($args, 120);
+            $ok = $result['ok'] || (strpos($result['stdout'] . $result['stderr'], 'Metadata refreshed:') !== false);
+            json_exit([
+                'output' => $result['stdout'] ?: $result['stderr'],
+                'exit_code' => $result['exit_code'],
+            ], $ok);
             break;
 
         case 'delete_gallery':

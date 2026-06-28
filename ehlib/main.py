@@ -177,6 +177,18 @@ async def cmd_migrate_dirs(_args: argparse.Namespace, config: Config, db: Databa
     )
 
 
+async def cmd_refresh_metadata(args: argparse.Namespace, config: Config, db: Database) -> None:
+    downloader = Downloader(config, db)
+    try:
+        gallery = await downloader.download(args.source, args.source_id)
+        print(f"Metadata refreshed: [{args.source}/{args.source_id}] {gallery.title}")
+        print(f"Tags: {len(gallery.tags)}, Pages: {gallery.total_pages}")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+    finally:
+        await downloader.close()
+
+
 def _resolve_url(url: str) -> tuple[str | None, str | None]:
     nh_id = parse_nhentai_url(url)
     if nh_id:
@@ -231,6 +243,10 @@ def main() -> None:
 
     subparsers.add_parser("migrate-dirs", help="Migrate gallery directories to ID-only names")
 
+    refresh = subparsers.add_parser("refresh-metadata", help="Re-fetch metadata for an existing gallery (preserves local images)")
+    refresh.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
+    refresh.add_argument("source_id", help="Gallery source ID or gid/token for exhentai")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -252,6 +268,7 @@ def main() -> None:
             "retry": cmd_retry,
             "export": cmd_export,
             "migrate-dirs": cmd_migrate_dirs,
+            "refresh-metadata": cmd_refresh_metadata,
         }
         handler = commands.get(args.command)
         if handler:

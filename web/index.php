@@ -40,14 +40,26 @@
         .gallery-actions { white-space: nowrap; }
         .gallery-card { cursor: pointer; transition: transform .15s, box-shadow .15s; }
         .gallery-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
-        .gallery-card .card-img-wrapper { background: #f0f0f0; }
+        .gallery-card .card-img-wrapper { background: #f0f0f0; position: relative; }
         .gallery-card .card-img-wrapper img { width: 100%; height: 100%; object-fit: cover; }
+        .gallery-card .card-img-wrapper .delete-overlay { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .15s; z-index: 2; }
+        .gallery-card .card-img-wrapper:hover .delete-overlay { opacity: 1; }
+        .gallery-card .card-body { display: flex; flex-direction: column; justify-content: space-between; }
+        .gallery-card .card-body .title-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; height: calc(1.35em * 3); flex-shrink: 0; }
         #reader_page { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1050; background: #111; display: flex; flex-direction: column; }
         #reader_page.section-hidden { display: none !important; }
-        .reader-header { background: rgba(0,0,0,.85); color: #e2e8f0; padding: .5rem 1rem; display: flex; align-items: center; gap: .75rem; flex-shrink: 0; }
+        .reader-header { background: rgba(0,0,0,.85); color: #e2e8f0; flex-shrink: 0; }
+        .reader-header .reader-header-top { padding: .5rem 1rem; display: flex; align-items: center; gap: .75rem; }
         .reader-header .btn-close-reader { color: #fff; background: none; border: none; font-size: 1.25rem; cursor: pointer; padding: .25rem .5rem; }
         .reader-header .reader-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9rem; }
         .reader-header .reader-meta { font-size: .8rem; color: #94a3b8; flex-shrink: 0; }
+        .reader-header .btn-toggle-details { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: .8rem; padding: .2rem .4rem; }
+        .reader-header .btn-toggle-details:hover { color: #fff; }
+        .reader-header-details { padding: .25rem 1rem .5rem; border-top: 1px solid rgba(255,255,255,.1); display: none; }
+        .reader-header-details.show { display: block; }
+        .reader-header-details .detail-row { font-size: .8rem; color: #94a3b8; margin-bottom: .15rem; }
+        .reader-header-details .detail-tags { display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .2rem; }
+        .reader-header-details .detail-tags .tag-badge { cursor: pointer; }
         .reader-body { flex: 1; display: flex; overflow: hidden; }
         .reader-thumbstrip { width: 150px; background: rgba(0,0,0,.6); overflow-y: auto; flex-shrink: 0; padding: .5rem; }
         .reader-thumbstrip .thumb-item { display: block; width: 100%; margin-bottom: .4rem; cursor: pointer; border: 2px solid transparent; border-radius: 4px; overflow: hidden; opacity: .6; transition: opacity .15s, border-color .15s; }
@@ -61,9 +73,6 @@
         .reader-pagenav button:hover { background: rgba(255,255,255,.2); }
         .reader-pagenav .page-input { width: 50px; text-align: center; background: rgba(255,255,255,.1); color: #e2e8f0; border: 1px solid rgba(255,255,255,.2); border-radius: 4px; padding: .2rem; }
         @media (max-width: 768px) { .reader-thumbstrip { width: 80px; } }
-        .reader-metapanel { padding: .5rem; border-bottom: 1px solid rgba(255,255,255,.1); flex-shrink: 0; }
-        .reader-metapanel .meta-tags { display: flex; flex-wrap: wrap; gap: .2rem; }
-        .reader-metapanel .meta-tags .tag-badge { font-size: .7rem; }
     </style>
 </head>
 <body>
@@ -386,7 +395,10 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                             <input type="text" class="form-control form-control-sm" id="gallery_lang_filter" placeholder="english" onkeydown="if(event.key==='Enter')applyGalleryFilter()">
                         </div>
                         <div class="col-md-1">
-                            <button class="btn btn-sm btn-outline-primary w-100" onclick="applyGalleryFilter()"><i class="fas fa-filter"></i></button>
+                            <button class="btn btn-sm btn-outline-primary w-100" onclick="applyGalleryFilter()" title="筛选"><i class="fas fa-filter"></i></button>
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearGalleryFilter()" title="清空筛选"><i class="fas fa-times"></i></button>
                         </div>
                     </div>
                 </div>
@@ -399,29 +411,27 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
         <!-- ═══ 阅读器 ═══ -->
         <div id="reader_page" class="section-hidden">
             <div class="reader-header">
-                <button class="btn-close-reader" onclick="closeReader()" title="关闭 (Esc)"><i class="fas fa-arrow-left"></i></button>
-                <span class="reader-title" id="reader_title"></span>
-                <span class="reader-meta" id="reader_meta"></span>
-                <div class="reader-pagenav">
-                    <button onclick="readerPrevPage()" title="上一页 (←)"><i class="fas fa-chevron-left"></i></button>
-                    <input type="number" class="page-input" id="reader_page_input" min="1" onchange="readerGoToPage(parseInt(this.value))">
-                    <span id="reader_page_total"></span>
-                    <button onclick="readerNextPage()" title="下一页 (→)"><i class="fas fa-chevron-right"></i></button>
+                <div class="reader-header-top">
+                    <button class="btn-close-reader" onclick="closeReader()" title="关闭 (Esc)"><i class="fas fa-arrow-left"></i></button>
+                    <span class="reader-title" id="reader_title"></span>
+                    <span class="reader-meta" id="reader_meta"></span>
+                    <div class="reader-pagenav">
+                        <button onclick="readerPrevPage()" title="上一页 (←)"><i class="fas fa-chevron-left"></i></button>
+                        <input type="number" class="page-input" id="reader_page_input" min="1" onchange="readerGoToPage(parseInt(this.value))">
+                        <span id="reader_page_total"></span>
+                        <button onclick="readerNextPage()" title="下一页 (→)"><i class="fas fa-chevron-right"></i></button>
+                    </div>
+                    <button class="btn-toggle-details" id="reader_toggle_details" onclick="readerToggleDetails()" title="详细信息"><i class="fas fa-chevron-down"></i></button>
+                </div>
+                <div class="reader-header-details" id="reader_header_details">
+                    <div class="detail-row" id="reader_detail_artist"></div>
+                    <div class="detail-row" id="reader_detail_lang"></div>
+                    <div class="detail-row" id="reader_detail_category"></div>
+                    <div class="detail-tags" id="reader_detail_tags"></div>
                 </div>
             </div>
             <div class="reader-body">
                 <div class="reader-thumbstrip" id="reader_thumbstrip">
-                    <div class="reader-metapanel" id="reader_metapanel">
-                        <div class="d-flex gap-2 mb-1">
-                            <img id="reader_meta_cover" src="" alt="" style="width:40px;height:auto;border-radius:3px;flex-shrink:0">
-                            <div class="small" style="color:#94a3b8;line-height:1.3">
-                                <div id="reader_meta_artist"></div>
-                                <div id="reader_meta_lang"></div>
-                                <div id="reader_meta_category"></div>
-                            </div>
-                        </div>
-                        <div class="meta-tags" id="reader_meta_tags"></div>
-                    </div>
                     <div id="reader_thumb_list"></div>
                 </div>
                 <div class="reader-main" id="reader_main">
@@ -857,23 +867,19 @@ async function loadGalleries(filters) {
     body.innerHTML = '<div class="row row-cols-2 row-cols-md-3 row-cols-lg-4 row-cols-xl-5 g-3" id="gallery_grid">' +
         data.galleries.map(function(g) {
             var displayTitle = g.title_jp || g.title;
-            var altTitle = (g.title_jp && g.title_jp !== g.title) ? g.title : '';
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
             var imgUrl = API + '?action=serve_image&source=' + encodeURIComponent(g.source) + '&source_id=' + encodeURIComponent(g.source_id) + '&page=cover';
             return '<div class="col" data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
                 '<div class="card h-100 gallery-card" onclick="openReader(\'' + g.source + '\',\'' + g.source_id + '\')">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
                 '<img src="' + imgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="this.style.display=\'none\'">' +
+                '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitle) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
                 '<div class="card-body p-2">' +
-                '<div class="small text-truncate mb-1" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
-                (altTitle ? '<div class="small text-muted text-truncate" title="' + escapeAttr(altTitle) + '">' + escapeHtml(altTitle) + '</div>' : '') +
-                '<div class="d-flex justify-content-between align-items-center mt-1">' +
+                '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
+                '<div class="d-flex justify-content-between align-items-center">' +
                 '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + g.source + '</span>' +
                 '<span class="small text-muted">' + g.pages + 'p</span>' +
-                '</div>' +
-                '<div class="mt-1">' +
-                '<button class="btn btn-sm btn-outline-danger py-0 px-1" style="font-size:.7rem" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitle) + '\')"><i class="fas fa-trash-alt"></i></button>' +
                 '</div>' +
                 '</div>' +
                 '</div>' +
@@ -893,6 +899,14 @@ function applyGalleryFilter() {
     if (artist) filters.artist = artist;
     if (lang) filters.language = lang;
     loadGalleries(filters);
+}
+
+function clearGalleryFilter() {
+    document.getElementById('gallery_tag_filter').value = '';
+    document.getElementById('gallery_tag_mode').value = 'any';
+    document.getElementById('gallery_artist_filter').value = '';
+    document.getElementById('gallery_lang_filter').value = '';
+    loadGalleries({});
 }
 
 async function deleteGalleryFromCard(btn, source, sourceId, title) {
@@ -931,6 +945,36 @@ function escapeAttr(s) {
     return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+function readerToggleDetails() {
+    var el = document.getElementById('reader_header_details');
+    var btn = document.getElementById('reader_toggle_details');
+    el.classList.toggle('show');
+    btn.innerHTML = el.classList.contains('show') ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
+}
+
+function readerSearchTag(type, name) {
+    closeReader();
+    document.getElementById('gallery_tag_filter').value = name;
+    document.getElementById('gallery_tag_mode').value = 'any';
+    loadGalleries({ tags: name, tag_mode: 'any' });
+    switchPage('gallery');
+}
+
+async function readerRefreshMetadata(source, sourceId) {
+    var warningDiv = document.getElementById('reader_tag_warning');
+    var btn = warningDiv ? warningDiv.querySelector('button') : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+    try {
+        var res = await api('refresh_metadata', { form: { action: 'refresh_metadata', source: source, source_id: sourceId } });
+        if (!res.ok) throw new Error(res.error || res.output || '刷新失败');
+        showToast('元数据已刷新', 'success');
+        openReader(source, sourceId);
+    } catch (err) {
+        showToast('刷新元数据失败: ' + (err.message || ''), 'danger');
+        if (btn) { btn.disabled = false; btn.innerHTML = '重下载元数据'; }
+    }
+}
+
 var _readerSource, _readerSourceId;
 var _readerCurrentPage = 1;
 var _readerTotalPages = 0;
@@ -956,21 +1000,33 @@ function openReader(source, sourceId) {
             var displayTitle = g.title_jp || g.title;
             document.getElementById('reader_title').textContent = displayTitle;
             document.getElementById('reader_meta').textContent = g.total_pages + 'p · ' + (g.language || '-');
-            document.getElementById('reader_meta_cover').src = API + '?action=serve_image&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId) + '&page=cover';
-            document.getElementById('reader_meta_artist').textContent = '作者: ' + (g.artist || '-');
-            document.getElementById('reader_meta_lang').textContent = '语言: ' + (g.language || '-');
-            document.getElementById('reader_meta_category').textContent = '分类: ' + (g.category || '-');
+            document.getElementById('reader_detail_artist').textContent = '作者: ' + (g.artist || '-');
+            document.getElementById('reader_detail_lang').textContent = '语言: ' + (g.language || '-');
+            document.getElementById('reader_detail_category').textContent = '分类: ' + (g.category || '-');
+            document.getElementById('reader_header_details').classList.remove('show');
             var tagsHtml = '';
-            if (g.tags && g.tags.length > 0) {
+            var tagCount = (g.tags && g.tags.length > 0) ? g.tags.length : 0;
+            if (tagCount > 0) {
                 var typeLabels = { artist: 'bg-danger', parody: 'bg-warning text-dark', character: 'bg-primary', group: 'bg-success', language: 'bg-secondary', category: 'bg-info text-dark', tag: 'bg-light text-dark' };
                 g.tags.forEach(function(t) {
                     var cls = typeLabels[t.type] || 'bg-light text-dark';
-                    tagsHtml += '<span class="tag-badge ' + cls + '">' + t.type + ': ' + t.name + '</span> ';
+                    tagsHtml += '<span class="tag-badge ' + cls + '" onclick="event.stopPropagation();readerSearchTag(\'' + t.type + '\',\'' + escapeAttr(t.name) + '\')">' + t.type + ': ' + t.name + '</span> ';
                 });
             } else {
                 tagsHtml = '<span style="color:#666">无标签</span>';
             }
-            document.getElementById('reader_meta_tags').innerHTML = tagsHtml;
+            var tagWarning = '';
+            if (tagCount <= 1) {
+                tagWarning = '<div class="mt-1 p-1 rounded" style="background:rgba(255,193,7,.15);font-size:.75rem;color:#ffc107">' +
+                    '标签数 (<strong>' + tagCount + '</strong>) 过少，可能元数据不完整' +
+                    '<button class="btn btn-sm btn-warning py-0 px-1 ms-2" onclick="readerRefreshMetadata(\'' + source + '\',\'' + sourceId + '\')" style="font-size:.7rem">重下载元数据</button></div>';
+            } else {
+                tagWarning = '<div class="mt-1" style="font-size:.75rem;color:#6b7280">标签: ' + tagCount + '个</div>';
+            }
+            document.getElementById('reader_detail_tags').innerHTML = tagsHtml;
+            var existingWarning = document.getElementById('reader_tag_warning');
+            if (existingWarning) existingWarning.remove();
+            document.getElementById('reader_detail_tags').insertAdjacentHTML('afterend', '<div id="reader_tag_warning">' + tagWarning + '</div>');
         });
 
     // Load image list

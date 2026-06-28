@@ -113,25 +113,53 @@ class Database:
     async def save_gallery(self, gallery: Gallery) -> int:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
-                """INSERT OR REPLACE INTO galleries
-                   (source, source_id, title, title_jp, artist, group_name,
-                    language, category, total_pages, cover_url, cover_path,
-                    thumbnail_url, uploaded_at, local_path, downloaded_at,
-                    file_size, is_complete, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    gallery.source, gallery.source_id, gallery.title,
-                    gallery.title_jp, gallery.artist, gallery.group_name,
-                    gallery.language, gallery.category, gallery.total_pages,
-                    gallery.cover_url, gallery.cover_path, gallery.thumbnail_url,
-                    gallery.uploaded_at, gallery.local_path, gallery.downloaded_at,
-                    gallery.file_size, int(gallery.is_complete),
-                    gallery.created_at, gallery.updated_at,
-                ),
+                "SELECT id, local_path FROM galleries WHERE source=? AND source_id=?",
+                (gallery.source, gallery.source_id),
             )
-            gallery_id = cursor.lastrowid or 0
+            existing = await cursor.fetchone()
+
+            if existing:
+                gallery_id = existing[0]
+                await db.execute(
+                    """UPDATE galleries SET
+                       title=?, title_jp=?, artist=?, group_name=?,
+                       language=?, category=?, total_pages=?, cover_url=?, cover_path=?,
+                       thumbnail_url=?, uploaded_at=?, local_path=?, downloaded_at=?,
+                       file_size=?, is_complete=?, created_at=?, updated_at=?
+                       WHERE id=?""",
+                    (
+                        gallery.title, gallery.title_jp, gallery.artist,
+                        gallery.group_name, gallery.language, gallery.category,
+                        gallery.total_pages, gallery.cover_url, gallery.cover_path,
+                        gallery.thumbnail_url, gallery.uploaded_at,
+                        gallery.local_path or existing[1], gallery.downloaded_at,
+                        gallery.file_size, int(gallery.is_complete),
+                        gallery.created_at, gallery.updated_at,
+                        gallery_id,
+                    ),
+                )
+            else:
+                cursor = await db.execute(
+                    """INSERT INTO galleries
+                       (source, source_id, title, title_jp, artist, group_name,
+                        language, category, total_pages, cover_url, cover_path,
+                        thumbnail_url, uploaded_at, local_path, downloaded_at,
+                        file_size, is_complete, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        gallery.source, gallery.source_id, gallery.title,
+                        gallery.title_jp, gallery.artist, gallery.group_name,
+                        gallery.language, gallery.category, gallery.total_pages,
+                        gallery.cover_url, gallery.cover_path, gallery.thumbnail_url,
+                        gallery.uploaded_at, gallery.local_path, gallery.downloaded_at,
+                        gallery.file_size, int(gallery.is_complete),
+                        gallery.created_at, gallery.updated_at,
+                    ),
+                )
+                gallery_id = cursor.lastrowid or 0
 
             if gallery.tags:
+                await db.execute("DELETE FROM gallery_tags WHERE gallery_id=?", (gallery_id,))
                 tag_ids = await self._save_tags(db, gallery.tags)
                 await self._link_tags(db, gallery_id, tag_ids)
 
@@ -145,7 +173,7 @@ class Database:
                 "INSERT OR IGNORE INTO tags (type, name) VALUES (?, ?)",
                 (tag.type, tag.name),
             )
-            if cursor.lastrowid:
+            if cursor.rowcount > 0 and cursor.lastrowid:
                 tag_ids.append(cursor.lastrowid)
             else:
                 cursor = await db.execute(
