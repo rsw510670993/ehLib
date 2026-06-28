@@ -14,6 +14,7 @@ from ehlib.sites.exhentai import ExhentaiSite
 from ehlib.sites.base import SiteBase
 from ehlib.storage.file_manager import FileManager
 from ehlib.utils.logger import get_logger
+from ehlib.utils.progress import write_progress, remove_progress
 
 logger = get_logger(__name__)
 
@@ -64,9 +65,15 @@ class Downloader:
         gallery.local_path = str(gallery_dir)
 
         logger.info("Downloading [%s] %s (%d pages)", source, gallery.source_id, gallery.total_pages)
+        write_progress(source, gallery.source_id, gallery.title, gallery.total_pages, 0, "downloading")
 
-        await self._download_cover(gallery, gallery_dir)
-        await self._download_pages(gallery, gallery_dir)
+        try:
+            await self._download_cover(gallery, gallery_dir)
+            await self._download_pages(gallery, gallery_dir)
+        except Exception:
+            remove_progress(source, gallery.source_id)
+            raise
+
         self._log_request_summary(gallery)
 
         gallery.file_size = self._file_manager.get_dir_size(gallery_dir)
@@ -76,6 +83,7 @@ class Downloader:
 
         await self._db.save_gallery(gallery)
         self._save_metadata_file(gallery, gallery_dir)
+        remove_progress(source, gallery.source_id)
 
         logger.info(
             "Download complete: [%s] %s (%d pages)",
@@ -231,6 +239,15 @@ class Downloader:
                     str(page_num),
                     stats=stats,
                     stats_key="image_file_requests",
+                )
+                write_progress(
+                    gallery.source,
+                    gallery.source_id,
+                    gallery.title,
+                    gallery.total_pages,
+                    page_num,
+                    "downloading",
+                    f"{page_num}/{gallery.total_pages}",
                 )
             except Exception as e:
                 failed_pages.append(page_num)

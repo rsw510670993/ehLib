@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 import aiosqlite
 from pathlib import Path
 
@@ -99,6 +100,15 @@ class Database:
             if row is None:
                 return None
             return self._row_to_gallery(dict(row))
+
+    async def get_all_galleries(self) -> list[Gallery]:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM galleries ORDER BY downloaded_at DESC, id DESC"
+            )
+            rows = await cursor.fetchall()
+            return [self._row_to_gallery(dict(row)) for row in rows]
 
     async def save_gallery(self, gallery: Gallery) -> int:
         async with aiosqlite.connect(self._db_path) as db:
@@ -337,6 +347,15 @@ class Database:
             await db.execute("DELETE FROM galleries WHERE id=?", (row[0],))
             await db.commit()
             return True
+
+    async def update_gallery_local_path(self, source: str, source_id: str, local_path: str) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "UPDATE galleries SET local_path=?, updated_at=? WHERE source=? AND source_id=?",
+                (local_path, datetime.now().isoformat(), source, source_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
 
     async def export_json(self, output_path: str) -> None:
         galleries = await self.search_galleries(limit=999999)

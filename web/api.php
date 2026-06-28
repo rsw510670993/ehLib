@@ -17,6 +17,81 @@ function error_exit($msg) {
     json_exit(['error' => $msg], false);
 }
 
+function normalize_path($path) {
+    $path = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, (string)$path);
+    if (preg_match('/^[A-Za-z]:' . preg_quote(DIRECTORY_SEPARATOR, '/') . '/', $path)) {
+        $prefix = strtoupper(substr($path, 0, 2));
+        $rest = substr($path, 2);
+        $parts = preg_split('/[\\\\\/]+/', ltrim($rest, '\\/'));
+        $normalized = [];
+        foreach ($parts as $part) {
+            if ($part === '' || $part === '.') continue;
+            if ($part === '..') {
+                array_pop($normalized);
+                continue;
+            }
+            $normalized[] = $part;
+        }
+        return $prefix . DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $normalized);
+    }
+    if (str_starts_with($path, DIRECTORY_SEPARATOR)) {
+        $parts = preg_split('/[\\\\\/]+/', ltrim($path, '\\/'));
+        $normalized = [];
+        foreach ($parts as $part) {
+            if ($part === '' || $part === '.') continue;
+            if ($part === '..') {
+                array_pop($normalized);
+                continue;
+            }
+            $normalized[] = $part;
+        }
+        return DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $normalized);
+    }
+    $parts = preg_split('/[\\\\\/]+/', $path);
+    $normalized = [];
+    foreach ($parts as $part) {
+        if ($part === '' || $part === '.') continue;
+        if ($part === '..') {
+            array_pop($normalized);
+            continue;
+        }
+        $normalized[] = $part;
+    }
+    return implode(DIRECTORY_SEPARATOR, $normalized);
+}
+
+function resolve_download_path() {
+    global $root;
+    $config = read_config();
+    $download_path = $config['download']['path'] ?? './downloads';
+    if (preg_match('/^[A-Za-z]:[\\\\\/]/', $download_path) || str_starts_with($download_path, '/') || str_starts_with($download_path, '\\')) {
+        return normalize_path($download_path);
+    }
+    return normalize_path($root . DIRECTORY_SEPARATOR . $download_path);
+}
+
+function is_path_within($child, $parent) {
+    $child = rtrim(strtolower(normalize_path($child)), DIRECTORY_SEPARATOR);
+    $parent = rtrim(strtolower(normalize_path($parent)), DIRECTORY_SEPARATOR);
+    return $child === $parent || str_starts_with($child, $parent . DIRECTORY_SEPARATOR);
+}
+
+function delete_dir_recursive($dir) {
+    if (!is_dir($dir)) return true;
+    $items = scandir($dir);
+    if ($items === false) return false;
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') continue;
+        $path = $dir . DIRECTORY_SEPARATOR . $item;
+        if (is_dir($path)) {
+            if (!delete_dir_recursive($path)) return false;
+            continue;
+        }
+        if (!@unlink($path)) return false;
+    }
+    return @rmdir($dir);
+}
+
 function run_python($args, $timeout = 120) {
     global $root, $python;
     $cmd = escapeshellcmd($python) . ' -m ehlib';
@@ -41,39 +116,64 @@ function run_python($args, $timeout = 120) {
     $stderr = '';
     $start = time();
     $done = false;
+    $exit_code = -1;
+    $stall_count = 0;
 
     while (!$done) {
         if (time() - $start > $timeout) {
-            proc_terminate($proc, 9);
+            @proc_terminate($proc, 9);
+            @fclose($pipes[1]);
+            @fclose($pipes[2]);
+            @proc_close($proc);
             return ['ok' => false, 'error' => 'Command timed out (' . $timeout . 's)'];
         }
 
         $r = [$pipes[1], $pipes[2]];
         $w = null;
         $e = null;
-        if (stream_select($r, $w, $e, 1) > 0) {
+        $sel = @stream_select($r, $w, $e, 1);
+        if ($sel !== false && $sel > 0) {
+            $stall_count = 0;
             foreach ($r as $pipe) {
-                $data = fread($pipe, 4096);
-                if ($data === false) continue;
+                $data = @fread($pipe, 4096);
+                if ($data === false || $data === '') continue;
                 if ($pipe === $pipes[1]) $stdout .= $data;
                 else $stderr .= $data;
             }
+        } elseif ($sel === false) {
+            $stall_count++;
+        } else {
+            $stall_count++;
         }
 
-        $status = proc_get_status($proc);
-        if (!$status['running']) {
-            $remaining1 = stream_get_contents($pipes[1]);
-            $remaining2 = stream_get_contents($pipes[2]);
-            $stdout .= $remaining1 === false ? '' : $remaining1;
-            $stderr .= $remaining2 === false ? '' : $remaining2;
+        $status = @proc_get_status($proc);
+        $is_running = is_array($status) && !empty($status['running']);
+
+        if (!$is_running) {
+            $remaining1 = @stream_get_contents($pipes[1]);
+            $remaining2 = @stream_get_contents($pipes[2]);
+            $stdout .= ($remaining1 === false ? '' : $remaining1);
+            $stderr .= ($remaining2 === false ? '' : $remaining2);
+            $exit_code = is_array($status) ? ($status['exitcode'] ?? -1) : -1;
             $done = true;
-            $exit_code = $status['exitcode'];
+            break;
+        }
+
+        if ($stall_count > 10) {
+            $check1 = @feof($pipes[1]);
+            $check2 = @feof($pipes[2]);
+            if ($check1 && $check2) {
+                $exit_code = is_array($status) ? ($status['exitcode'] ?? -1) : -1;
+                $done = true;
+                break;
+            }
+            $stall_count = 5;
         }
     }
 
-    fclose($pipes[1]);
-    fclose($pipes[2]);
-    proc_close($proc);
+    @fclose($pipes[1]);
+    @fclose($pipes[2]);
+    @proc_close($proc);
 
     return [
         'ok' => $exit_code === 0,
@@ -189,13 +289,14 @@ try {
             $lines = array_filter(explode("\n", $result['stdout']));
             $galleries = [];
             foreach ($lines as $line) {
-                if (preg_match('/^\[(.+?)\/(.+?)\]\s+(.+?)\s+\((\d+)p\)\s+-\s+(.+)$/', $line, $m)) {
+                if (preg_match('/^\[(.+?)\/(.+?)\]\s+(.+?)\s+\|\s*(.*?)\s*\((\d+)p\)\s+-\s+(.+)$/', $line, $m)) {
                     $galleries[] = [
                         'source' => $m[1],
                         'source_id' => $m[2],
                         'title' => $m[3],
-                        'pages' => (int)$m[4],
-                        'downloaded_at' => $m[5],
+                        'title_jp' => $m[4],
+                        'pages' => (int)$m[5],
+                        'downloaded_at' => $m[6],
                     ];
                 }
             }
@@ -211,7 +312,7 @@ try {
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-                $stmt = $pdo->prepare('SELECT id, title, artist, group_name, language, category, total_pages, file_size, downloaded_at FROM galleries WHERE source=? AND source_id=?');
+                $stmt = $pdo->prepare('SELECT id, title, title_jp, artist, group_name, language, category, total_pages, file_size, local_path, downloaded_at FROM galleries WHERE source=? AND source_id=?');
                 $stmt->execute([$source, $source_id]);
                 $gallery = $stmt->fetch();
                 if (!$gallery) error_exit('Gallery not found');
@@ -226,6 +327,197 @@ try {
                 $tags = $stmt2->fetchAll();
                 $gallery['tags'] = $tags;
                 json_exit(['gallery' => $gallery]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'delete_gallery':
+            $source = $_POST['source'] ?? $_GET['source'] ?? '';
+            $source_id = $_POST['source_id'] ?? $_GET['source_id'] ?? '';
+            if (!$source || !$source_id) error_exit('source and source_id required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec('PRAGMA foreign_keys = ON');
+
+                $stmt = $pdo->prepare('SELECT id, title, local_path FROM galleries WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $gallery = $stmt->fetch();
+                if (!$gallery) error_exit('Gallery not found');
+
+                $download_base = resolve_download_path();
+                $local_path = trim((string)($gallery['local_path'] ?? ''));
+                if ($local_path !== '') {
+                    $normalized_local = normalize_path($local_path);
+                    if (!is_path_within($normalized_local, $download_base)) {
+                        error_exit('Refusing to delete path outside download directory');
+                    }
+                    if (file_exists($normalized_local) && !delete_dir_recursive($normalized_local)) {
+                        error_exit('Failed to delete local gallery directory');
+                    }
+                }
+
+                $stmt = $pdo->prepare('DELETE FROM galleries WHERE id=?');
+                $stmt->execute([$gallery['id']]);
+                if ($stmt->rowCount() < 1) {
+                    error_exit('Failed to delete gallery record');
+                }
+
+                json_exit([
+                    'message' => 'Gallery deleted',
+                    'deleted' => [
+                        'source' => $source,
+                        'source_id' => $source_id,
+                        'title' => $gallery['title'] ?? '',
+                    ],
+                ]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'get_download_progress':
+            $progress_dir = $root . '/data/progress';
+            if (!is_dir($progress_dir)) {
+                json_exit(['tasks' => []]);
+                break;
+            }
+            $files = glob($progress_dir . '/*.json');
+            $tasks = [];
+            $now = time();
+            foreach ($files as $f) {
+                $content = @file_get_contents($f);
+                if ($content === false) continue;
+                $data = @json_decode($content, true);
+                if (!is_array($data)) continue;
+                $mtime = $data['updated_at'] ?? 0;
+                $age = $now - $mtime;
+                if ($age > 300) {
+                    @unlink($f);
+                    continue;
+                }
+                $tasks[] = $data;
+            }
+            usort($tasks, function ($a, $b) {
+                return ($b['updated_at'] ?? 0) - ($a['updated_at'] ?? 0);
+            });
+            json_exit(['tasks' => $tasks]);
+            break;
+
+        case 'serve_image':
+            $source = $_GET['source'] ?? '';
+            $source_id = $_GET['source_id'] ?? '';
+            $page = $_GET['page'] ?? 'cover';
+            if (!$source || !$source_id) error_exit('source and source_id required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->prepare('SELECT local_path FROM galleries WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $row = $stmt->fetch();
+                if (!$row || empty($row['local_path'])) error_exit('Gallery path not found');
+                $local_path = normalize_path($row['local_path']);
+                $download_base = resolve_download_path();
+                if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
+                $img_path = '';
+                if ($page === 'cover') {
+                    foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                        $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
+                        if (is_file($candidate)) { $img_path = $candidate; break; }
+                    }
+                    if (!$img_path) {
+                        foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . '001.' . $ext;
+                            if (is_file($candidate)) { $img_path = $candidate; break; }
+                        }
+                    }
+                    if (!$img_path) {
+                        foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . '1.' . $ext;
+                            if (is_file($candidate)) { $img_path = $candidate; break; }
+                        }
+                    }
+                } else {
+                    $page_num = (int)$page;
+                    if ($page_num < 1) error_exit('Invalid page number');
+                    foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                        $candidate = $local_path . DIRECTORY_SEPARATOR . sprintf('%03d', $page_num) . '.' . $ext;
+                        if (is_file($candidate)) { $img_path = $candidate; break; }
+                    }
+                    if (!$img_path) {
+                        foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . $page_num . '.' . $ext;
+                            if (is_file($candidate)) { $img_path = $candidate; break; }
+                        }
+                    }
+                }
+                if (!$img_path || !is_file($img_path)) error_exit('Image not found');
+                $ext = strtolower(pathinfo($img_path, PATHINFO_EXTENSION));
+                $mime_map = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
+                $mime = $mime_map[$ext] ?? 'application/octet-stream';
+                header('Content-Type: ' . $mime);
+                header('Content-Length: ' . filesize($img_path));
+                header('Cache-Control: public, max-age=86400');
+                readfile($img_path);
+                exit;
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'get_image_list':
+            $source = $_GET['source'] ?? '';
+            $source_id = $_GET['source_id'] ?? '';
+            if (!$source || !$source_id) error_exit('source and source_id required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->prepare('SELECT total_pages, local_path FROM galleries WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $row = $stmt->fetch();
+                if (!$row || empty($row['local_path'])) error_exit('Gallery not found');
+                $local_path = normalize_path($row['local_path']);
+                $download_base = resolve_download_path();
+                if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
+                $total_pages = (int)$row['total_pages'];
+                $images = [];
+                for ($i = 1; $i <= $total_pages; $i++) {
+                    $found = false;
+                    foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                        $candidate = $local_path . DIRECTORY_SEPARATOR . sprintf('%03d', $i) . '.' . $ext;
+                        if (is_file($candidate)) {
+                            $images[] = ['page' => $i, 'file' => sprintf('%03d', $i) . '.' . $ext];
+                            $found = true;
+                            break;
+                        }
+                    }
+                    if (!$found) {
+                        foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . $i . '.' . $ext;
+                            if (is_file($candidate)) {
+                                $images[] = ['page' => $i, 'file' => $i . '.' . $ext];
+                                $found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!$found) {
+                        $images[] = ['page' => $i, 'file' => ''];
+                    }
+                }
+                json_exit([
+                    'source' => $source,
+                    'source_id' => $source_id,
+                    'total_pages' => $total_pages,
+                    'images' => $images,
+                ]);
             } catch (Exception $e) {
                 error_exit($e->getMessage());
             }
@@ -249,7 +541,7 @@ try {
                 error_exit('Provide --url, --id+source, or --gid+--token');
             }
             if ($force) $args[] = '--force';
-            $result = run_python($args, 300);
+            $result = run_python($args, 900);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
                 'exit_code' => $result['exit_code'],

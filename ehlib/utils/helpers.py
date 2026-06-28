@@ -49,8 +49,8 @@ def parse_exhentai_url(url: str) -> tuple[str, str] | None:
 
 
 def format_gallery_dir(source: str, gallery_id: str, title: str) -> str:
-    title_slug = slugify(title)
-    return f"{gallery_id} - {title_slug}"
+    del source, title
+    return sanitize_filename(gallery_id)
 
 
 def format_page_filename(page_num: int, total: int) -> str:
