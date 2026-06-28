@@ -800,7 +800,7 @@ async function checkDownloadProgress() {
 
     // Update download page progress bar
     if (_activeProgressKey && tasks.length > 0) {
-        var active = tasks.find(function(t) { return t.source + '__' + t.source_id.replace(/\\//g,'_') === _activeProgressKey; });
+        var active = tasks.find(function(t) { return t.source + '__' + t.source_id.replace(/\//g,'_') === _activeProgressKey; });
         if (active) {
             var el = document.getElementById('dl_progress');
             var bar = document.getElementById('dl_progress_bar');

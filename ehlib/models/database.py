@@ -105,7 +105,7 @@ class Database:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM galleries ORDER BY downloaded_at DESC, id DESC"
+                "SELECT * FROM galleries ORDER BY source, CAST(SUBSTR(source_id || '/', 1, INSTR(source_id || '/', '/') - 1) AS INTEGER) DESC"
             )
             rows = await cursor.fetchall()
             return [self._row_to_gallery(dict(row)) for row in rows]
@@ -231,7 +231,7 @@ class Database:
         if language:
             query += " AND language=?"
             params.append(language)
-        query += " ORDER BY downloaded_at DESC LIMIT ?"
+        query += " ORDER BY source, CAST(SUBSTR(source_id || '/', 1, INSTR(source_id || '/', '/') - 1) AS INTEGER) DESC LIMIT ?"
         params.append(limit)
 
         async with aiosqlite.connect(self._db_path) as db:
@@ -257,7 +257,7 @@ class Database:
         if language:
             query += " AND g.language=?"
             params.append(language)
-        query += " ORDER BY g.downloaded_at DESC LIMIT ?"
+        query += " ORDER BY g.source, CAST(SUBSTR(g.source_id || '/', 1, INSTR(g.source_id || '/', '/') - 1) AS INTEGER) DESC LIMIT ?"
         params.append(limit)
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -283,7 +283,7 @@ class Database:
             params.append(language)
         query += " GROUP BY g.id"
         query += f" HAVING COUNT(DISTINCT t.id) = {len(tag_names)}"
-        query += " ORDER BY g.downloaded_at DESC LIMIT ?"
+        query += " ORDER BY g.source, CAST(SUBSTR(g.source_id || '/', 1, INSTR(g.source_id || '/', '/') - 1) AS INTEGER) DESC LIMIT ?"
         params.append(limit)
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
