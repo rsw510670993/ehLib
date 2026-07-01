@@ -4,8 +4,12 @@ header('Access-Control-Allow-Origin: *');
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 $root = realpath(__DIR__ . '/..');
-$venv_python = $root . '/venv/Scripts/python.exe';
-$python = is_file($venv_python) ? $venv_python : 'python';
+if (DIRECTORY_SEPARATOR === '\\') {
+    $venv_python = $root . '/venv/Scripts/python.exe';
+} else {
+    $venv_python = $root . '/venv/bin/python';
+}
+$python = is_file($venv_python) ? $venv_python : (DIRECTORY_SEPARATOR === '\\' ? 'python' : 'python3');
 
 function json_exit($data, $ok = true) {
     $data['ok'] = $ok;
@@ -534,6 +538,18 @@ try {
             } catch (Exception $e) {
                 error_exit($e->getMessage());
             }
+            break;
+
+        case 'recover_orphans':
+            $source = $_POST['source'] ?? '';
+            $args = ['recover-orphans'];
+            if ($source) { $args[] = '--source'; $args[] = $source; }
+            $result = run_python($args, 300);
+            $ok = $result['ok'] || (strpos($result['stdout'] . $result['stderr'], 'Recovery complete') !== false);
+            json_exit([
+                'output' => $result['stdout'] ?: $result['stderr'],
+                'exit_code' => $result['exit_code'],
+            ], $ok);
             break;
 
         case 'download':

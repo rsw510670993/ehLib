@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:,">
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
@@ -46,6 +47,7 @@
         .gallery-card .card-img-wrapper:hover .delete-overlay { opacity: 1; }
         .gallery-card .card-body { display: flex; flex-direction: column; justify-content: space-between; }
         .gallery-card .card-body .title-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; height: calc(1.35em * 3); flex-shrink: 0; }
+        .gallery-flex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
         #reader_page { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1050; background: #111; display: flex; flex-direction: column; }
         #reader_page.section-hidden { display: none !important; }
         .reader-header { background: rgba(0,0,0,.85); color: #e2e8f0; flex-shrink: 0; }
@@ -78,7 +80,8 @@
 <body>
 
 <?php
-$base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
+$scriptName = $_SERVER['SCRIPT_NAME'] ?? $_SERVER['PHP_SELF'] ?? '/index.php';
+$base = rtrim(dirname($scriptName), '/');
 ?>
 
 <div class="sidebar">
@@ -355,7 +358,8 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
                 <div class="card-header">重新下载</div>
                 <div class="card-body">
                     <p class="mb-2 text-muted">重新尝试下载之前未完成的画廊（数据库标记为 is_complete=0 的记录）。</p>
-                    <button class="btn btn-warning" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
+                    <button class="btn btn-warning me-2" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
+                    <button class="btn btn-outline-warning" onclick="recoverOrphans()" title="扫描下载目录恢复到数据库"><i class="fas fa-ambulance me-1"></i>恢复孤儿目录</button>
                     <div id="retry_output" class="output-box"></div>
                 </div>
             </div>
@@ -495,7 +499,7 @@ $base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
 <script>
-const API = '<?= $base ?>/api.php';
+const API = '<?php echo $base; ?>/api.php';
 
 function showToast(msg, type = 'success') {
     const c = document.getElementById('toast_container');
@@ -532,7 +536,12 @@ async function api(method, params = {}) {
         opts.body = new URLSearchParams(params.form);
     }
     const resp = await fetch(url, opts);
-    return await resp.json();
+    const text = await resp.text();
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        return { ok: false, error: 'Invalid JSON response', raw: text.substring(0,200) };
+    }
 }
 
 // ─── Page switching ───
@@ -773,7 +782,7 @@ function stopProgressPoller() {
 
 async function checkDownloadProgress() {
     const data = await api('get_download_progress');
-    const tasks = data.tasks || [];
+    const tasks = (data && data.tasks) || [];
 
     // Update dashboard card
     const card = document.getElementById('active_downloads_card');
@@ -864,12 +873,12 @@ async function loadGalleries(filters) {
         return;
     }
 
-    body.innerHTML = '<div class="row row-cols-2 row-cols-md-3 row-cols-lg-4 row-cols-xl-5 g-3" id="gallery_grid">' +
+    body.innerHTML = '<div class="gallery-flex-grid" id="gallery_grid">' +
         data.galleries.map(function(g) {
             var displayTitle = g.title_jp || g.title;
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
             var imgUrl = API + '?action=serve_image&source=' + encodeURIComponent(g.source) + '&source_id=' + encodeURIComponent(g.source_id) + '&page=cover';
-            return '<div class="col" data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
+            return '<div data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
                 '<div class="card h-100 gallery-card" onclick="openReader(\'' + g.source + '\',\'' + g.source_id + '\')">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
                 '<img src="' + imgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="this.style.display=\'none\'">' +
@@ -907,6 +916,20 @@ function clearGalleryFilter() {
     document.getElementById('gallery_artist_filter').value = '';
     document.getElementById('gallery_lang_filter').value = '';
     loadGalleries({});
+}
+
+async function recoverOrphans() {
+    if (!confirm('扫描下载目录，将已下载但无数据库记录的画廊恢复到列表中？\n已有记录的画廊不受影响。')) return;
+    var btn = document.querySelector('[onclick*="recoverOrphans"]');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 恢复中...'; }
+    try {
+        var res = await api('recover_orphans', { form: { action: 'recover_orphans' } });
+        showToast('恢复完成，切换到本地图库查看新记录', 'success');
+    } catch (err) {
+        showToast('恢复失败: ' + (err.message || ''), 'danger');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-ambulance"></i> 恢复孤儿'; }
+    }
 }
 
 async function deleteGalleryFromCard(btn, source, sourceId, title) {

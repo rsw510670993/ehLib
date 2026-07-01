@@ -189,6 +189,77 @@ async def cmd_refresh_metadata(args: argparse.Namespace, config: Config, db: Dat
         await downloader.close()
 
 
+async def cmd_recover_orphans(args: argparse.Namespace, config: Config, db: Database) -> None:
+    file_manager = FileManager(config.download.get("path", "./downloads"))
+    sources = [args.source] if args.source else ["nhentai", "exhentai"]
+    count = 0
+
+    for source in sources:
+        source_dir = file_manager.base_path / source
+        if not source_dir.is_dir():
+            continue
+
+        existing_ids = set()
+        galleries = await db.get_all_galleries()
+        for g in galleries:
+            if g.source == source:
+                existing_ids.add(g.source_id)
+
+        for dir_entry in sorted(source_dir.iterdir()):
+            if not dir_entry.is_dir():
+                continue
+            dir_name = dir_entry.name
+            source_id = dir_name.replace("_", "/", 1) if source == "exhentai" else dir_name
+            if source_id in existing_ids:
+                continue
+
+            local_path = str(dir_entry.resolve())
+            image_count = len(file_manager.list_downloaded_pages(dir_entry))
+
+            if args.dry_run:
+                print(f"[{source}] Orphaned: {dir_name} (source_id: {source_id}, images: {image_count})")
+                count += 1
+                continue
+
+            try:
+                print(f"[{source}] Recovering: {dir_name} ({image_count} images)...", end=" ", flush=True)
+                session_mgr = SessionManager(config)
+                if source == "nhentai":
+                    site = NhentaiSite(config, session_mgr)
+                else:
+                    site = ExhentaiSite(config, session_mgr)
+                gallery = await site.fetch_gallery(source_id)
+                gallery.local_path = local_path
+                gallery.is_complete = True
+                gallery.file_size = file_manager.get_dir_size(dir_entry)
+                gallery.downloaded_at = _find_oldest_file_time(dir_entry)
+                await db.save_gallery(gallery)
+                from dataclasses import asdict
+                meta = asdict(gallery)
+                meta["tags"] = [asdict(t) for t in gallery.tags]
+                file_manager.save_metadata(dir_entry, meta)
+                await session_mgr.close()
+                print(f"Saved. Tags: {len(gallery.tags)}, Pages: {gallery.total_pages}")
+                count += 1
+            except Exception as e:
+                print(f"Failed: {e}")
+
+    print(f"\nRecovery complete: {count} galleries recovered.")
+
+
+def _find_oldest_file_time(directory: Path) -> str:
+    oldest = None
+    for f in directory.iterdir():
+        if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+            mtime = f.stat().st_mtime
+            if oldest is None or mtime < oldest:
+                oldest = mtime
+    if oldest:
+        from datetime import datetime
+        return datetime.fromtimestamp(oldest).isoformat()
+    return ""
+
+
 def _resolve_url(url: str) -> tuple[str | None, str | None]:
     nh_id = parse_nhentai_url(url)
     if nh_id:
@@ -247,6 +318,10 @@ def main() -> None:
     refresh.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
     refresh.add_argument("source_id", help="Gallery source ID or gid/token for exhentai")
 
+    recover = subparsers.add_parser("recover-orphans", help="Scan download dirs and recover galleries with no DB record")
+    recover.add_argument("--source", choices=["nhentai", "exhentai"], help="Limit scan to a specific source")
+    recover.add_argument("--dry-run", action="store_true", help="List orphaned dirs without recovering")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -269,6 +344,7 @@ def main() -> None:
             "export": cmd_export,
             "migrate-dirs": cmd_migrate_dirs,
             "refresh-metadata": cmd_refresh_metadata,
+            "recover-orphans": cmd_recover_orphans,
         }
         handler = commands.get(args.command)
         if handler:
