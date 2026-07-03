@@ -35,6 +35,7 @@ class Downloader:
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
 
     async def download(self, source: str, identifier: str, force: bool = False) -> Gallery:
+        identifier = str(identifier)
         site = self._sites.get(source)
         if not site:
             raise ValueError(f"Unknown source: {source}. Use 'nhentai' or 'exhentai'.")
@@ -92,21 +93,21 @@ class Downloader:
         return gallery
 
     async def download_batch(self, urls: list[str], force: bool = False) -> list[Gallery]:
-        tasks = []
-        for url in urls:
-            url = url.strip()
+        jobs = []
+        for raw_url in urls:
+            url = str(raw_url).strip()
             if not url:
                 continue
             source, identifier = self._resolve_url(url)
             if source and identifier:
-                tasks.append(self.download(source, identifier, force=force))
-        if not tasks:
+                jobs.append((url, self.download(source, identifier, force=force)))
+        if not jobs:
             return []
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*(task for _, task in jobs), return_exceptions=True)
         galleries = []
-        for i, result in enumerate(results):
+        for (url, _task), result in zip(jobs, results):
             if isinstance(result, Exception):
-                logger.error("Batch download error for %s: %s", urls[i], result)
+                logger.error("Batch download error for %s", url, exc_info=(type(result), result, result.__traceback__))
             else:
                 galleries.append(result)
         return galleries
@@ -164,7 +165,7 @@ class Downloader:
             url = f"https://exhentai.org/g/{gid}/{token}/"
             import nodriver as uc
             ex_browser = await uc.start(
-                headless=not self._config.browser.get("headless", False),
+                headless=self._config.browser.get("headless", False),
                 browser_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
             )
             try:

@@ -62,11 +62,12 @@ class SessionManager:
         return False
 
     def _load_cookies(self, source: str) -> dict[str, str]:
-        cookies = {}
+        cookies: dict[str, str] = {}
         source_cookies = self._config.cookies.get(source, {})
         for key, value in source_cookies.items():
-            if value:
-                cookies[key] = value
+            if value is None or value == "":
+                continue
+            cookies[str(key)] = str(value)
         return cookies
 
     async def _rate_limit(self, source: str, delay: float) -> None:

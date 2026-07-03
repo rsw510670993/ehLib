@@ -230,7 +230,7 @@ function write_config($data) {
     global $root;
     $path = $root . '/config.yaml';
     
-    function array_to_yaml($data, $indent = 0) {
+    function array_to_yaml($data, $indent = 0, $parents = []) {
         $out = '';
         $prefix = str_repeat('  ', $indent);
         foreach ($data as $key => $value) {
@@ -239,11 +239,11 @@ function write_config($data) {
                     $out .= $prefix . $key . ": {}\n";
                 } else {
                     $out .= $prefix . $key . ":\n";
-                    $out .= array_to_yaml($value, $indent + 1);
+                    $out .= array_to_yaml($value, $indent + 1, array_merge($parents, [(string)$key]));
                 }
             } elseif (is_bool($value)) {
                 $out .= $prefix . $key . ': ' . ($value ? 'true' : 'false') . "\n";
-            } elseif (is_numeric($value)) {
+            } elseif (is_numeric($value) && !in_array('cookies', $parents, true)) {
                 $out .= $prefix . $key . ': ' . $value . "\n";
             } else {
                 $out .= $prefix . $key . ': "' . str_replace('"', '\"', $value) . "\"\n";
@@ -253,7 +253,20 @@ function write_config($data) {
     }
     
     $yaml = array_to_yaml($data);
-    file_put_contents($path, $yaml, LOCK_EX);
+    $dir = dirname($path);
+    if (file_exists($path)) {
+        if (!is_writable($path)) {
+            throw new RuntimeException('Config file is not writable: ' . $path);
+        }
+    } elseif (!is_dir($dir) || !is_writable($dir)) {
+        throw new RuntimeException('Config directory is not writable: ' . $dir);
+    }
+    $written = @file_put_contents($path, $yaml, LOCK_EX);
+    if ($written === false) {
+        $error = error_get_last();
+        $message = $error['message'] ?? 'unknown error';
+        throw new RuntimeException('Failed to write config file: ' . $message);
+    }
     return true;
 }
 
