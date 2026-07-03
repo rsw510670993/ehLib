@@ -431,6 +431,7 @@ $base = rtrim(dirname($scriptName), '/');
                     <div class="detail-row" id="reader_detail_artist"></div>
                     <div class="detail-row" id="reader_detail_lang"></div>
                     <div class="detail-row" id="reader_detail_category"></div>
+                    <div class="detail-row" id="reader_detail_uploaded"></div>
                     <div class="detail-tags" id="reader_detail_tags"></div>
                 </div>
             </div>
@@ -1024,10 +1025,11 @@ function openReader(source, sourceId) {
             var g = data.gallery;
             var displayTitle = g.title_jp || g.title;
             document.getElementById('reader_title').textContent = displayTitle;
-            document.getElementById('reader_meta').textContent = g.total_pages + 'p · ' + (g.language || '-');
+            document.getElementById('reader_meta').textContent = g.total_pages + 'p · ' + (g.language || '-') + ' · ' + (g.uploaded_at || '-');
             document.getElementById('reader_detail_artist').textContent = '作者: ' + (g.artist || '-');
             document.getElementById('reader_detail_lang').textContent = '语言: ' + (g.language || '-');
             document.getElementById('reader_detail_category').textContent = '分类: ' + (g.category || '-');
+            document.getElementById('reader_detail_uploaded').textContent = '上传: ' + (g.uploaded_at || '-');
             document.getElementById('reader_header_details').classList.remove('show');
             var tagsHtml = '';
             var tagCount = (g.tags && g.tags.length > 0) ? g.tags.length : 0;
@@ -1040,13 +1042,12 @@ function openReader(source, sourceId) {
             } else {
                 tagsHtml = '<span style="color:#666">无标签</span>';
             }
-            var tagWarning = '';
+            var tagWarning = '<div class="mt-1" style="font-size:.75rem;color:#6b7280">标签: ' + tagCount + '个' +
+                ' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-2" onclick="readerRefreshMetadata(\'' + source + '\',\'' + sourceId + '\')" style="font-size:.7rem">刷新元数据</button></div>';
             if (tagCount <= 1) {
                 tagWarning = '<div class="mt-1 p-1 rounded" style="background:rgba(255,193,7,.15);font-size:.75rem;color:#ffc107">' +
                     '标签数 (<strong>' + tagCount + '</strong>) 过少，可能元数据不完整' +
-                    '<button class="btn btn-sm btn-warning py-0 px-1 ms-2" onclick="readerRefreshMetadata(\'' + source + '\',\'' + sourceId + '\')" style="font-size:.7rem">重下载元数据</button></div>';
-            } else {
-                tagWarning = '<div class="mt-1" style="font-size:.75rem;color:#6b7280">标签: ' + tagCount + '个</div>';
+                    '<button class="btn btn-sm btn-warning py-0 px-1 ms-2" onclick="readerRefreshMetadata(\'' + source + '\',\'' + sourceId + '\')" style="font-size:.7rem">刷新元数据</button></div>';
             }
             document.getElementById('reader_detail_tags').innerHTML = tagsHtml;
             var existingWarning = document.getElementById('reader_tag_warning');

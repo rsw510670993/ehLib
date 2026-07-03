@@ -329,7 +329,7 @@ try {
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-                $stmt = $pdo->prepare('SELECT id, title, title_jp, artist, group_name, language, category, total_pages, file_size, local_path, downloaded_at FROM galleries WHERE source=? AND source_id=?');
+                $stmt = $pdo->prepare('SELECT id, title, title_jp, artist, group_name, language, category, total_pages, uploaded_at, file_size, local_path, downloaded_at FROM galleries WHERE source=? AND source_id=?');
                 $stmt->execute([$source, $source_id]);
                 $gallery = $stmt->fetch();
                 if (!$gallery) error_exit('Gallery not found');

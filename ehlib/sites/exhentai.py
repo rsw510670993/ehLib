@@ -131,6 +131,13 @@ class ExhentaiSite(SiteBase):
                     uploaded_at = cells[1].get_text(" ", strip=True)
                     break
 
+        if not language:
+            for row in soup.select("#gdd tr"):
+                cells = row.select("td")
+                if len(cells) >= 2 and cells[0].get_text(strip=True) == "Language:":
+                    language = cells[1].get_text(" ", strip=True)
+                    break
+
         gallery = Gallery(
             source=self.name,
             source_id=combined_id,
