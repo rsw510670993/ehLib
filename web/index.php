@@ -790,6 +790,7 @@ async function checkDownloadProgress() {
     if (tasks.length === 0) {
         card.style.display = 'none';
         body.innerHTML = '';
+        if (!_activeProgressKey) stopProgressPoller();
         return;
     }
     card.style.display = '';
@@ -837,6 +838,7 @@ function trackDownloadProgress(source, sourceId) {
 
 function clearDownloadProgress() {
     _activeProgressKey = null;
+    stopProgressPoller();
     var el = document.getElementById('dl_progress');
     var bar = document.getElementById('dl_progress_bar');
     if (el && bar) {
@@ -1205,7 +1207,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
     loadCookies();
     loadSettings();
-    startProgressPoller();
 });
 </script>
 </body>

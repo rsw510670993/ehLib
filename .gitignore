@@ -10,3 +10,5 @@ config.yaml
 *.egg-info/
 dist/
 build/
+.trae/documents/
+docs/superpowers/specs/
