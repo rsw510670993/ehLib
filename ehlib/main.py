@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -120,6 +120,15 @@ async def cmd_retry(args: argparse.Namespace, config: Config, db: Database) -> N
     try:
         results = await downloader.retry_incomplete(skip_existing=args.skip_existing)
         print(f"Retry complete: {len(results)} galleries re-downloaded")
+    finally:
+        await downloader.close()
+
+
+async def cmd_count_retry_pages(args: argparse.Namespace, config: Config, db: Database) -> None:
+    downloader = Downloader(config, db)
+    try:
+        total = await downloader.count_retry_pages()
+        print(total)
     finally:
         await downloader.close()
 
@@ -309,6 +318,8 @@ def main() -> None:
     retry_parser = subparsers.add_parser("retry", help="Retry incomplete downloads")
     retry_parser.add_argument("--skip-existing", action="store_true", help="Skip already downloaded pages")
 
+    count_retry_parser = subparsers.add_parser("count-retry-pages", help="Count total pages across incomplete galleries")
+
     exp = subparsers.add_parser("export", help="Export metadata to JSON")
     exp.add_argument("--output", default="metadata.json", help="Output file path")
     exp.add_argument("--format", choices=["json"], default="json", help="Export format")
@@ -342,6 +353,7 @@ def main() -> None:
             "list": cmd_list,
             "config": cmd_config,
             "retry": cmd_retry,
+            "count-retry-pages": cmd_count_retry_pages,
             "export": cmd_export,
             "migrate-dirs": cmd_migrate_dirs,
             "refresh-metadata": cmd_refresh_metadata,

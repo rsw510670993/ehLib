@@ -125,6 +125,16 @@ class Downloader:
                 galleries.append(result)
         return galleries
 
+    async def count_retry_pages(self) -> int:
+        """Count total pages that need retry for timeout estimation."""
+        incomplete = await self._db.get_incomplete_downloads()
+        orphaned = await self._find_orphan_downloads(incomplete)
+        total = sum(g.total_pages or 0 for g in incomplete)
+        for gallery in orphaned:
+            files = self._file_manager.list_downloaded_pages(Path(gallery.local_path)) if gallery.local_path else []
+            total += max(len(files), 1)
+        return total
+
     async def retry_incomplete(self, skip_existing: bool = False) -> list[Gallery]:
         incomplete = await self._db.get_incomplete_downloads()
         orphaned = await self._find_orphan_downloads(incomplete)
@@ -332,10 +342,35 @@ class Downloader:
                     ) from e
                 logger.warning("Exhentai display page %d failed: %s", page_num, e)
 
+        # Retry pass: retry failed pages one by one (transient errors like SSL handshake)
         if failed_pages:
-            raise RuntimeError(
-                f"Exhentai download incomplete, failed pages: {', '.join(map(str, failed_pages[:10]))}"
-            )
+            logger.info("Retrying %d failed pages for %s...", len(failed_pages), gallery.source_id)
+            still_failed: list[int] = []
+            for page_num in failed_pages:
+                i = page_num - 1
+                image_page_url = urls[i]
+                try:
+                    display_url = await site.resolve_display_image_url(image_page_url)
+                    ext = self._extract_ext(display_url)
+                    page_path = self._file_manager.page_path(gallery_dir, page_num, ext)
+                    if page_path.exists() and page_path.stat().st_size > 0:
+                        continue
+                    await self._download_file(
+                        "exhentai",
+                        display_url,
+                        page_path,
+                        str(page_num),
+                        stats=stats,
+                        stats_key="image_file_requests",
+                    )
+                except Exception as e:
+                    still_failed.append(page_num)
+                    logger.warning("Exhentai display page %d retry failed: %s", page_num, e)
+
+            if still_failed:
+                raise RuntimeError(
+                    f"Exhentai download incomplete, failed pages: {', '.join(map(str, still_failed[:10]))}"
+                )
 
     async def _download_pages_httpx(
         self,

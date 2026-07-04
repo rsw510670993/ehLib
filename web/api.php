@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 
@@ -641,9 +641,18 @@ try {
 
         case 'retry':
             $skip = !empty($_POST['skip_existing']);
+            // First count total pages that need retry, then calculate dynamic timeout
+            $count_result = run_python(['count-retry-pages'], 30);
+            $total_pages = 0;
+            if ($count_result['ok'] && is_numeric(trim($count_result['stdout']))) {
+                $total_pages = intval(trim($count_result['stdout']));
+            }
+            // 6 seconds per page estimate: delay_between_requests(1.5s) + avg_request(2s) + retry_overhead
+            // Minimum 600s (10 min), max 7200s (2 hours)
+            $dl_timeout = max(600, min(7200, $total_pages * 6));
             $args = ['retry'];
             if ($skip) $args[] = '--skip-existing';
-            $result = run_python_locked($args, 600);
+            $result = run_python_locked($args, $dl_timeout);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
                 'exit_code' => $result['exit_code'],
