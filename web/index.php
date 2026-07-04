@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -799,10 +799,9 @@ async function doRetry() {
     if (!setButtonBusy('retry_btn', true, '<i class="fas fa-spinner fa-spin me-1"></i>重试中')) return;
     clearOutput('retry_output');
     document.getElementById('retry_output').classList.add('show');
-    document.getElementById('retry_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>重试中...';
 
     _retryActive = true;
-    renderRetryProgress([], '等待重试任务启动...');
+    renderRetryProgress([], '重试中...');
     startProgressPoller();
     try {
         const skip = document.getElementById('retry_skip_existing').checked;
@@ -816,7 +815,6 @@ async function doRetry() {
         showOutput('retry_output', '重试失败: ' + (err.message || err), true);
     } finally {
         _retryActive = false;
-        renderRetryProgress([]);
         setButtonBusy('retry_btn', false);
         if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
     }
@@ -888,7 +886,30 @@ function renderBatchProgress(tasks, emptyText) {
 }
 
 function renderRetryProgress(tasks, emptyText) {
-    renderProgressList('retry_progress_list', tasks, _retryActive, emptyText);
+    // Show progress inside the retry_output black box instead of a separate element
+    var el = document.getElementById('retry_output');
+    if (!el) return;
+    el.classList.add('show');
+    if (!tasks || tasks.length === 0) {
+        if (_retryActive && emptyText) {
+            el.innerHTML = '<span class="info"><i class="fas fa-spinner fa-spin me-1"></i>' + escapeHtml(emptyText) + '</span>';
+        } else {
+            el.innerHTML = '';
+            el.classList.remove('show');
+        }
+        return;
+    }
+    // Format each task as a log line inside the black box
+    var lines = tasks.map(function(t) {
+        var total = parseInt(t.total_pages, 10) || 0;
+        var current = parseInt(t.current, 10) || 0;
+        var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(current / total * 100))) : 0;
+        var source = escapeHtml(t.source || '');
+        var title = escapeHtml(t.title || t.source_id || '');
+        var msg = escapeHtml(t.message || (current + '/' + total));
+        return '[' + source + '] ' + title + ' - ' + msg + ' (' + pct + '%)';
+    }).join('\n');
+    el.innerHTML = '<span class="info">' + lines.replace(/\n/g, '<br>') + '</span>';
 }
 async function checkDownloadProgress() {
     const data = await api('get_download_progress');
@@ -900,7 +921,7 @@ async function checkDownloadProgress() {
         card.style.display = 'none';
         body.innerHTML = '';
         renderBatchProgress([], '等待下载任务启动...');
-        renderRetryProgress([], '等待重试任务启动...');
+        if (_retryActive) renderRetryProgress([], '重试中...');
         if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
         return;
     }
