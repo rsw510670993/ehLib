@@ -7,75 +7,7 @@
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <style>
-        :root { --bs-font-sans-serif: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans SC", sans-serif; }
-        body { background: #f5f7fa; }
-        .sidebar { position: fixed; top: 0; bottom: 0; left: 0; z-index: 100; width: 220px; background: #1e293b; }
-        .sidebar .brand { padding: 1rem 1.25rem; font-size: 1.25rem; color: #fff; border-bottom: 1px solid #334155; }
-        .sidebar .nav-link { color: #94a3b8; padding: 0.625rem 1.25rem; border-radius: 0; }
-        .sidebar .nav-link:hover, .sidebar .nav-link.active { color: #fff; background: #334155; }
-        .sidebar .nav-link i { width: 1.25rem; text-align: center; margin-right: 0.5rem; }
-        .main { margin-left: 220px; min-height: 100vh; }
-        .main-header { background: #fff; padding: 0.75rem 1.5rem; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; }
-        .main-content { padding: 1.5rem; }
-        .card { border: none; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 1.25rem; }
-        .card-header { background: #fff; border-bottom: 1px solid #e9ecef; font-weight: 600; padding: 0.75rem 1.25rem; }
-        .card-header .btn-group-sm .btn { font-size: .8rem; }
-        .stat-card { text-align: center; padding: 1.25rem; }
-        .stat-card .stat-value { font-size: 1.75rem; font-weight: 700; color: #0d6efd; }
-        .stat-card .stat-label { color: #64748b; font-size: .85rem; margin-top: .25rem; }
-        .cookie-masked { font-family: "SFMono-Regular", Consolas, monospace; font-size: .85rem; color: #94a3b8; }
-        .output-box { background: #1e293b; color: #e2e8f0; padding: 0.75rem 1rem; border-radius: .375rem; font-family: "SFMono-Regular", Consolas, monospace; font-size: .8rem; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: .5rem; display: none; }
-        .output-box.show { display: block; }
-        .output-box .info { color: #22c55e; }
-        .output-box .error { color: #ef4444; }
-        .output-box .warn { color: #eab308; }
-        .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 9999; }
-        .nav-tabs .nav-link { color: #64748b; }
-        .nav-tabs .nav-link.active { font-weight: 600; }
-        .section-hidden { display: none; }
-        .badge-nh { background: #e74c3c; }
-        .badge-ex { background: #3498db; }
-        .tag-badge { display: inline-block; padding: .15rem .5rem; font-size: .75rem; border-radius: .25rem; background: #e9ecef; color: #495057; margin: .15rem; }
-        .checkbox-group { max-height: 250px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: .375rem; padding: .5rem .75rem; }
-        .gallery-actions { white-space: nowrap; }
-        .gallery-card { cursor: pointer; transition: transform .15s, box-shadow .15s; }
-        .gallery-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.12); }
-        .gallery-card .card-img-wrapper { background: #f0f0f0; position: relative; }
-        .gallery-card .card-img-wrapper img { width: 100%; height: 100%; object-fit: cover; }
-        .gallery-card .card-img-wrapper .delete-overlay { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .15s; z-index: 2; }
-        .gallery-card .card-img-wrapper:hover .delete-overlay { opacity: 1; }
-        .gallery-card .card-body { display: flex; flex-direction: column; justify-content: space-between; }
-        .gallery-card .card-body .title-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; height: calc(1.35em * 3); flex-shrink: 0; }
-        .gallery-flex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
-        #reader_page { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1050; background: #111; display: flex; flex-direction: column; }
-        #reader_page.section-hidden { display: none !important; }
-        .reader-header { background: rgba(0,0,0,.85); color: #e2e8f0; flex-shrink: 0; }
-        .reader-header .reader-header-top { padding: .5rem 1rem; display: flex; align-items: center; gap: .75rem; }
-        .reader-header .btn-close-reader { color: #fff; background: none; border: none; font-size: 1.25rem; cursor: pointer; padding: .25rem .5rem; }
-        .reader-header .reader-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9rem; }
-        .reader-header .reader-meta { font-size: .8rem; color: #94a3b8; flex-shrink: 0; }
-        .reader-header .btn-toggle-details { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: .8rem; padding: .2rem .4rem; }
-        .reader-header .btn-toggle-details:hover { color: #fff; }
-        .reader-header-details { padding: .25rem 1rem .5rem; border-top: 1px solid rgba(255,255,255,.1); display: none; }
-        .reader-header-details.show { display: block; }
-        .reader-header-details .detail-row { font-size: .8rem; color: #94a3b8; margin-bottom: .15rem; }
-        .reader-header-details .detail-tags { display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .2rem; }
-        .reader-header-details .detail-tags .tag-badge { cursor: pointer; }
-        .reader-body { flex: 1; display: flex; overflow: hidden; }
-        .reader-thumbstrip { width: 150px; background: rgba(0,0,0,.6); overflow-y: auto; flex-shrink: 0; padding: .5rem; }
-        .reader-thumbstrip .thumb-item { display: block; width: 100%; margin-bottom: .4rem; cursor: pointer; border: 2px solid transparent; border-radius: 4px; overflow: hidden; opacity: .6; transition: opacity .15s, border-color .15s; }
-        .reader-thumbstrip .thumb-item:hover { opacity: .9; }
-        .reader-thumbstrip .thumb-item.active { border-color: #0d6efd; opacity: 1; }
-        .reader-thumbstrip .thumb-item img { width: 100%; height: auto; display: block; }
-        .reader-main { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 1rem; position: relative; }
-        .reader-main img { max-width: 100%; max-height: 100%; object-fit: contain; }
-        .reader-pagenav { display: flex; align-items: center; gap: .5rem; }
-        .reader-pagenav button { background: rgba(255,255,255,.1); color: #e2e8f0; border: none; border-radius: 4px; padding: .3rem .7rem; cursor: pointer; font-size: .85rem; }
-        .reader-pagenav button:hover { background: rgba(255,255,255,.2); }
-        .reader-pagenav .page-input { width: 50px; text-align: center; background: rgba(255,255,255,.1); color: #e2e8f0; border: 1px solid rgba(255,255,255,.2); border-radius: 4px; padding: .2rem; }
-        @media (max-width: 768px) { .reader-thumbstrip { width: 80px; } }
-    </style>
+    <link rel="stylesheet" href="assets/css/app.css">
 </head>
 <body>
 
