@@ -64,6 +64,9 @@ class Downloader:
 
         gallery_dir = self._file_manager.create_gallery_dir(source, gallery.source_id, gallery.title)
         gallery.local_path = str(gallery_dir)
+        gallery.is_complete = False
+        gallery.updated_at = datetime.now().isoformat()
+        await self._db.save_gallery(gallery)
 
         logger.info("Downloading [%s] %s (%d pages)", source, gallery.source_id, gallery.total_pages)
         write_progress(source, gallery.source_id, gallery.title, gallery.total_pages, 0, "downloading")
@@ -72,6 +75,10 @@ class Downloader:
             await self._download_cover(gallery, gallery_dir)
             await self._download_pages(gallery, gallery_dir)
         except Exception:
+            gallery.file_size = self._file_manager.get_dir_size(gallery_dir)
+            gallery.is_complete = False
+            gallery.updated_at = datetime.now().isoformat()
+            await self._db.save_gallery(gallery)
             remove_progress(source, gallery.source_id)
             raise
 
@@ -114,15 +121,57 @@ class Downloader:
 
     async def retry_incomplete(self) -> list[Gallery]:
         incomplete = await self._db.get_incomplete_downloads()
-        logger.info("Found %d incomplete downloads to retry", len(incomplete))
+        orphaned = await self._find_orphan_downloads(incomplete)
+        jobs = incomplete + orphaned
+        logger.info(
+            "Found %d incomplete downloads and %d orphan directories to retry",
+            len(incomplete), len(orphaned),
+        )
         results = []
-        for gallery in incomplete:
+        for gallery in jobs:
             try:
-                result = await self.download(gallery.source, gallery.source_id, force=True)
+                result = await self.download(gallery.source, gallery.source_id, force=False)
                 results.append(result)
             except Exception as e:
                 logger.error("Retry failed for %s/%s: %s", gallery.source, gallery.source_id, e)
         return results
+
+    async def _find_orphan_downloads(self, known: list[Gallery]) -> list[Gallery]:
+        known_keys = {(gallery.source, gallery.source_id) for gallery in known}
+        orphaned: list[Gallery] = []
+        for source in ("nhentai", "exhentai"):
+            source_dir = self._file_manager.base_path / source
+            if not source_dir.exists():
+                continue
+            for directory in sorted(source_dir.iterdir()):
+                if not directory.is_dir():
+                    continue
+                source_id = self._source_id_from_dir_name(source, directory.name)
+                if not source_id or (source, source_id) in known_keys:
+                    continue
+                if await self._db.get_gallery(source, source_id):
+                    continue
+                if not self._file_manager.list_downloaded_pages(directory):
+                    continue
+                orphaned.append(Gallery(
+                    source=source,
+                    source_id=source_id,
+                    title=directory.name,
+                    local_path=str(directory),
+                    is_complete=False,
+                ))
+                known_keys.add((source, source_id))
+        return orphaned
+
+    @staticmethod
+    def _source_id_from_dir_name(source: str, dir_name: str) -> str | None:
+        if source == "nhentai" and dir_name.isdigit():
+            return dir_name
+        if source == "exhentai" and "_" in dir_name:
+            gid, token = dir_name.split("_", 1)
+            if gid.isdigit() and token:
+                return f"{gid}/{token}"
+        return None
 
     def _resolve_url(self, url: str) -> tuple[str | None, str | None]:
         from ehlib.utils.helpers import parse_nhentai_url, parse_exhentai_url

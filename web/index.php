@@ -334,7 +334,7 @@ $base = rtrim(dirname($scriptName), '/');
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>批量下载</span>
-                    <button class="btn btn-sm btn-primary" onclick="doBatchDownload()"><i class="fas fa-play me-1"></i>开始批量下载</button>
+                    <button class="btn btn-sm btn-primary" id="batch_download_btn" onclick="doBatchDownload()"><i class="fas fa-play me-1"></i>开始批量下载</button>
                 </div>
                 <div class="card-body">
                     <div class="mb-2">
@@ -356,7 +356,7 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="card-header">重新下载</div>
                 <div class="card-body">
                     <p class="mb-2 text-muted">重新尝试下载之前未完成的画廊（数据库标记为 is_complete=0 的记录）。</p>
-                    <button class="btn btn-warning me-2" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
+                    <button class="btn btn-warning me-2" id="retry_btn" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
                     <button class="btn btn-outline-warning" onclick="recoverOrphans()" title="扫描下载目录恢复到数据库"><i class="fas fa-ambulance me-1"></i>恢复孤儿目录</button>
                     <div id="retry_progress_list" class="mt-2 mb-2" style="display:none"></div>
                     <div id="retry_output" class="output-box"></div>
@@ -524,6 +524,23 @@ function clearOutput(id) {
     el.innerHTML = '';
 }
 
+function setButtonBusy(id, busy, busyHtml) {
+    var btn = document.getElementById(id);
+    if (!btn) return true;
+    if (busy) {
+        if (btn.disabled) return false;
+        btn.dataset.idleHtml = btn.innerHTML;
+        btn.disabled = true;
+        if (busyHtml) btn.innerHTML = busyHtml;
+        return true;
+    }
+    btn.disabled = false;
+    if (btn.dataset.idleHtml) {
+        btn.innerHTML = btn.dataset.idleHtml;
+        delete btn.dataset.idleHtml;
+    }
+    return true;
+}
 async function api(method, params = {}) {
     let url = API + '?action=' + method;
     let opts = {};
@@ -742,6 +759,7 @@ async function doBatchDownload() {
     if (!urls) { showToast('请输入 URL', 'warning'); return; }
     const force = document.getElementById('batch_force').checked;
     if (force && !confirm('⚠ 强制重新下载将清空所有本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
+    if (!setButtonBusy('batch_download_btn', true, '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中')) return;
     clearOutput('batch_output');
     document.getElementById('batch_output').classList.add('show');
     document.getElementById('batch_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中，请稍候...';
@@ -768,10 +786,12 @@ async function doBatchDownload() {
     } finally {
         _batchActive = false;
         renderBatchProgress([]);
+        setButtonBusy('batch_download_btn', false);
         if (!_activeProgressKey && !_retryActive) stopProgressPoller();
     }
 }
 async function doRetry() {
+    if (!setButtonBusy('retry_btn', true, '<i class="fas fa-spinner fa-spin me-1"></i>重试中')) return;
     clearOutput('retry_output');
     document.getElementById('retry_output').classList.add('show');
     document.getElementById('retry_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>重试中...';

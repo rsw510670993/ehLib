@@ -187,6 +187,38 @@ function run_python($args, $timeout = 120) {
     ];
 }
 
+function run_python_locked($args, $timeout = 120) {
+    global $root;
+    $data_dir = $root . '/data';
+    if (!is_dir($data_dir)) mkdir($data_dir, 0755, true);
+    $lock_path = $data_dir . '/download.lock';
+    $lock = @fopen($lock_path, 'c');
+    if (!$lock) {
+        return [
+            'ok' => false,
+            'error' => 'Failed to open download lock',
+            'stdout' => '',
+            'stderr' => '',
+            'exit_code' => 75,
+        ];
+    }
+    if (!@flock($lock, LOCK_EX | LOCK_NB)) {
+        @fclose($lock);
+        return [
+            'ok' => false,
+            'error' => 'Another download task is already running',
+            'stdout' => '',
+            'stderr' => 'Another download task is already running',
+            'exit_code' => 75,
+        ];
+    }
+    try {
+        return run_python($args, $timeout);
+    } finally {
+        @flock($lock, LOCK_UN);
+        @fclose($lock);
+    }
+}
 function read_config() {
     global $root;
     $path = $root . '/config.yaml';
@@ -583,7 +615,7 @@ try {
                 error_exit('Provide --url, --id+source, or --gid+--token');
             }
             if ($force) $args[] = '--force';
-            $result = run_python($args, 900);
+            $result = run_python_locked($args, 900);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
                 'exit_code' => $result['exit_code'],
@@ -599,7 +631,7 @@ try {
             $args = ['batch', '--file', $tmpfile];
             $force = !empty($_POST['force']);
             if ($force) $args[] = '--force';
-            $result = run_python($args, 600);
+            $result = run_python_locked($args, 600);
             @unlink($tmpfile);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
@@ -609,7 +641,7 @@ try {
 
         case 'retry':
             $args = ['retry'];
-            $result = run_python($args, 600);
+            $result = run_python_locked($args, 600);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
                 'exit_code' => $result['exit_code'],
