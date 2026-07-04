@@ -347,9 +347,7 @@ $base = rtrim(dirname($scriptName), '/');
                             <i class="fas fa-exclamation-triangle me-1"></i>强制重新下载全部（清空本地文件 + 覆盖数据库记录）
                         </label>
                     </div>
-                    <div id="batch_progress" class="progress mb-2" style="height:8px;display:none">
-                        <div class="progress-bar progress-bar-striped progress-bar-animated" id="batch_progress_bar" style="width:0%"></div>
-                    </div>
+                    <div id="batch_progress_list" class="mb-2" style="display:none"></div>
                     <div id="batch_output" class="output-box"></div>
                 </div>
             </div>
@@ -360,6 +358,7 @@ $base = rtrim(dirname($scriptName), '/');
                     <p class="mb-2 text-muted">重新尝试下载之前未完成的画廊（数据库标记为 is_complete=0 的记录）。</p>
                     <button class="btn btn-warning me-2" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
                     <button class="btn btn-outline-warning" onclick="recoverOrphans()" title="扫描下载目录恢复到数据库"><i class="fas fa-ambulance me-1"></i>恢复孤儿目录</button>
+                    <div id="retry_progress_list" class="mt-2 mb-2" style="display:none"></div>
                     <div id="retry_output" class="output-box"></div>
                 </div>
             </div>
@@ -500,7 +499,7 @@ $base = rtrim(dirname($scriptName), '/');
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
 <script>
-const API = '<?php echo $base; ?>/api.php';
+const API = 'api.php';
 
 function showToast(msg, type = 'success') {
     const c = document.getElementById('toast_container');
@@ -747,26 +746,55 @@ async function doBatchDownload() {
     document.getElementById('batch_output').classList.add('show');
     document.getElementById('batch_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中，请稍候...';
 
-    const res = await fetch(API + '?action=batch_download' + (force ? '&force=1' : ''), {
-        method: 'POST',
-        body: urls,
-    });
-    const data = await res.json();
-    showOutput('batch_output', data.output || '批量下载完成', !data.ok);
-    if (data.ok) showToast('批量下载完成!', 'success');
+    _batchActive = true;
+    renderBatchProgress([], '等待下载任务启动...');
+    startProgressPoller();
+    try {
+        const res = await fetch(API + '?action=batch_download' + (force ? '&force=1' : ''), {
+            method: 'POST',
+            body: urls,
+        });
+        const text = await res.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            data = { ok: false, output: text || '批量下载返回了无效响应' };
+        }
+        showOutput('batch_output', data.output || '批量下载完成', !data.ok);
+        if (data.ok) showToast('批量下载完成!', 'success');
+    } catch (err) {
+        showOutput('batch_output', '批量下载失败: ' + (err.message || err), true);
+    } finally {
+        _batchActive = false;
+        renderBatchProgress([]);
+        if (!_activeProgressKey && !_retryActive) stopProgressPoller();
+    }
 }
-
 async function doRetry() {
     clearOutput('retry_output');
     document.getElementById('retry_output').classList.add('show');
     document.getElementById('retry_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>重试中...';
-    const res = await api('retry');
-    showOutput('retry_output', res.output || '重试完成', !res.ok);
-}
 
+    _retryActive = true;
+    renderRetryProgress([], '等待重试任务启动...');
+    startProgressPoller();
+    try {
+        const res = await api('retry');
+        showOutput('retry_output', res.output || '重试完成', !res.ok);
+    } catch (err) {
+        showOutput('retry_output', '重试失败: ' + (err.message || err), true);
+    } finally {
+        _retryActive = false;
+        renderRetryProgress([]);
+        if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
+    }
+}
 // ─── Download Progress ───
 let _progressPoller = null;
 let _activeProgressKey = null;
+let _batchActive = false;
+let _retryActive = false;
 
 function startProgressPoller() {
     if (_progressPoller) return;
@@ -781,50 +809,92 @@ function stopProgressPoller() {
     }
 }
 
+function progressTaskKey(t) {
+    return String(t.source || '') + '__' + String(t.source_id || '').replace(/\//g, '_');
+}
+
+function renderProgressTaskRows(tasks) {
+    return tasks.map(function(t) {
+        var total = parseInt(t.total_pages, 10) || 0;
+        var current = parseInt(t.current, 10) || 0;
+        var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(current / total * 100))) : 0;
+        var source = escapeHtml(t.source || '');
+        var title = escapeHtml(t.title || t.source_id || '下载任务');
+        var msg = escapeHtml(t.message || (current + '/' + total));
+        var badgeClass = t.source === 'nhentai' ? 'bg-danger' : 'bg-info';
+        return '<div class="mb-2" data-progress-key="' + escapeHtml(progressTaskKey(t)) + '">' +
+            '<div class="d-flex align-items-center mb-1 small">' +
+            '<span class="badge ' + badgeClass + ' me-2 flex-shrink-0">' + source + '</span>' +
+            '<span class="text-truncate me-2 flex-grow-1" style="max-width:420px" title="' + title + '">' + title + '</span>' +
+            '<span class="text-muted flex-shrink-0">' + msg + '</span>' +
+            '</div>' +
+            '<div class="progress" style="height:8px">' +
+            '<div class="progress-bar progress-bar-striped progress-bar-animated" style="width:' + pct + '%">' + pct + '%</div>' +
+            '</div>' +
+            '</div>';
+    }).join('');
+}
+
+function renderProgressList(targetId, tasks, isActive, emptyText) {
+    var el = document.getElementById(targetId);
+    if (!el) return;
+    if (!tasks || tasks.length === 0) {
+        if (isActive && emptyText) {
+            el.style.display = '';
+            el.innerHTML = '<div class="small text-muted"><i class="fas fa-spinner fa-spin me-1"></i>' + escapeHtml(emptyText) + '</div>';
+        } else {
+            el.style.display = 'none';
+            el.innerHTML = '';
+        }
+        return;
+    }
+    el.style.display = '';
+    el.innerHTML = renderProgressTaskRows(tasks);
+}
+
+function renderBatchProgress(tasks, emptyText) {
+    renderProgressList('batch_progress_list', tasks, _batchActive, emptyText);
+}
+
+function renderRetryProgress(tasks, emptyText) {
+    renderProgressList('retry_progress_list', tasks, _retryActive, emptyText);
+}
 async function checkDownloadProgress() {
     const data = await api('get_download_progress');
     const tasks = (data && data.tasks) || [];
 
-    // Update dashboard card
     const card = document.getElementById('active_downloads_card');
     const body = document.getElementById('active_downloads_body');
     if (tasks.length === 0) {
         card.style.display = 'none';
         body.innerHTML = '';
-        if (!_activeProgressKey) stopProgressPoller();
+        renderBatchProgress([], '等待下载任务启动...');
+        renderRetryProgress([], '等待重试任务启动...');
+        if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
         return;
     }
-    card.style.display = '';
-    body.innerHTML = tasks.map(function(t) {
-        var pct = t.total_pages > 0 ? Math.round(t.current / t.total_pages * 100) : 0;
-        var badgeClass = t.source === 'nhentai' ? 'bg-danger' : 'bg-info';
-        var msg = t.message || (t.current + '/' + t.total_pages);
-        return '<div class="d-flex align-items-center mb-1 small">' +
-            '<span class="badge ' + badgeClass + ' me-2 flex-shrink-0">' + t.source + '</span>' +
-            '<span class="text-truncate me-2 flex-grow-1" style="max-width:320px">' + t.title + '</span>' +
-            '<span class="text-muted flex-shrink-0">' + msg + '</span>' +
-            '</div>' +
-            '<div class="progress mb-2" style="height:5px">' +
-            '<div class="progress-bar progress-bar-striped progress-bar-animated" style="width:' + pct + '%"></div>' +
-            '</div>';
-    }).join('');
 
-    // Update download page progress bar
-    if (_activeProgressKey && tasks.length > 0) {
-        var active = tasks.find(function(t) { return t.source + '__' + t.source_id.replace(/\//g,'_') === _activeProgressKey; });
+    card.style.display = '';
+    body.innerHTML = renderProgressTaskRows(tasks);
+    if (_batchActive) renderBatchProgress(tasks);
+    if (_retryActive) renderRetryProgress(tasks);
+
+    if (_activeProgressKey) {
+        var active = tasks.find(function(t) { return progressTaskKey(t) === _activeProgressKey; });
         if (active) {
             var el = document.getElementById('dl_progress');
             var bar = document.getElementById('dl_progress_bar');
             if (el && bar) {
                 el.style.display = '';
-                var pct = active.total_pages > 0 ? Math.round(active.current / active.total_pages * 100) : 0;
+                var total = parseInt(active.total_pages, 10) || 0;
+                var current = parseInt(active.current, 10) || 0;
+                var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(current / total * 100))) : 0;
                 bar.style.width = pct + '%';
-                bar.textContent = active.current + '/' + active.total_pages;
+                bar.textContent = current + '/' + total;
             }
         }
     }
 }
-
 function trackDownloadProgress(source, sourceId) {
     _activeProgressKey = source + '__' + sourceId.replace(/\//g, '_');
     var el = document.getElementById('dl_progress');
@@ -839,7 +909,7 @@ function trackDownloadProgress(source, sourceId) {
 
 function clearDownloadProgress() {
     _activeProgressKey = null;
-    stopProgressPoller();
+    if (!_batchActive && !_retryActive) stopProgressPoller();
     var el = document.getElementById('dl_progress');
     var bar = document.getElementById('dl_progress_bar');
     if (el && bar) {

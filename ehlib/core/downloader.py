@@ -276,13 +276,8 @@ class Downloader:
             ext = self._extract_ext(page_url)
             page_path = self._file_manager.page_path(gallery_dir, page_num, ext)
             tasks.append(
-                self._download_with_semaphore(
-                    gallery.source,
-                    page_url,
-                    page_path,
-                    str(page_num),
-                    stats=stats,
-                    stats_key="image_file_requests",
+                self._download_page_with_progress(
+                    gallery, page_url, page_path, str(page_num),
                 )
             )
 
@@ -337,6 +332,28 @@ class Downloader:
                 )
         finally:
             await browser.close()
+
+    async def _download_page_with_progress(
+        self,
+        gallery: Gallery,
+        url: str,
+        path: Path,
+        label: str,
+    ) -> None:
+        stats = self._ensure_request_stats(gallery)
+        await self._download_with_semaphore(
+            gallery.source, url, path, label,
+            stats=stats, stats_key="image_file_requests",
+        )
+        write_progress(
+            gallery.source,
+            gallery.source_id,
+            gallery.title,
+            gallery.total_pages,
+            int(label),
+            "downloading",
+            f"{label}/{gallery.total_pages}",
+        )
 
     async def _download_with_semaphore(
         self,
