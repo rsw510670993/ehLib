@@ -92,7 +92,6 @@ $base = rtrim(dirname($scriptName), '/');
         <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="fas fa-cog"></i>系统设置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="download"><i class="fas fa-download"></i>下载控制</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="search"><i class="fas fa-search"></i>在线搜索</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="export"><i class="fas fa-file-export"></i>数据导出</a></li>
     </ul>
 </div>
@@ -449,33 +448,6 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
-        <!-- ═══ 在线搜索 ═══ -->
-        <div id="page_search" class="page-section section-hidden">
-            <div class="card">
-                <div class="card-header">在线搜索</div>
-                <div class="card-body">
-                    <div class="row g-2 align-items-end mb-3">
-                        <div class="col-md-3">
-                            <label class="form-label">站点</label>
-                            <select class="form-select" id="search_source">
-                                <option value="nhentai">nhentai</option>
-                                <option value="exhentai">exhentai</option>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">搜索关键词</label>
-                            <input type="text" class="form-control" id="search_query" placeholder="例如: tag:english  或  artist:shindol" onkeydown="if(event.key==='Enter')doSearch()">
-                        </div>
-                        <div class="col-md-3">
-                            <button class="btn btn-primary w-100" onclick="doSearch()"><i class="fas fa-search me-1"></i>搜索</button>
-                        </div>
-                    </div>
-                    <div id="search_output" class="output-box"></div>
-                    <div id="search_results"></div>
-                </div>
-            </div>
-        </div>
-
         <!-- ═══ 数据导出 ═══ -->
         <div id="page_export" class="page-section section-hidden">
             <div class="card">
@@ -580,7 +552,6 @@ function switchPage(name) {
         settings: ['系统设置', '下载路径、并发、User-Agent 等'],
         download: ['下载控制', '单一下载、批量下载、重试'],
         gallery: ['本地图库', '已下载的画廊列表'],
-        search: ['在线搜索', '搜索 nhentai / exhentai'],
         export: ['数据导出', '导出元数据为 JSON'],
     };
     const t = titles[name] || ['页面', ''];
@@ -1280,35 +1251,6 @@ function readerPrevPage() {
 
 function readerNextPage() {
     if (_readerCurrentPage < _readerTotalPages) readerGoToPage(_readerCurrentPage + 1);
-}
-
-// ─── Search ───
-async function doSearch() {
-    const source = document.getElementById('search_source').value;
-    const query = document.getElementById('search_query').value.trim();
-    if (!query) { showToast('请输入搜索关键词', 'warning'); return; }
-
-    document.getElementById('search_results').innerHTML = '<div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin me-1"></i>搜索中...</div>';
-    clearOutput('search_output');
-
-    const res = await api('search', { form: { action: 'search', source: source, query: query } });
-    if (!res.ok) {
-        showOutput('search_output', res.error || '搜索失败', true);
-        document.getElementById('search_results').innerHTML = '';
-        return;
-    }
-
-    if (res.raw) showOutput('search_output', res.raw, false);
-
-    if (!res.results || res.results.length === 0) {
-        document.getElementById('search_results').innerHTML = '<div class="text-center text-muted py-3">未找到结果</div>';
-        return;
-    }
-
-    document.getElementById('search_results').innerHTML =
-        '<div class="table-responsive mt-2"><table class="table table-sm table-hover"><thead class="table-light"><tr><th>ID</th><th>标题</th></tr></thead><tbody>' +
-        res.results.map(r => `<tr><td class="font-monospace">${r.id}</td><td>${r.title}</td></tr>`).join('') +
-        '</tbody></table></div>';
 }
 
 // ─── Export ───

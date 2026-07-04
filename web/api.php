@@ -659,26 +659,6 @@ try {
             ], $result['ok']);
             break;
 
-        case 'search':
-            $source = $_POST['source'] ?? 'nhentai';
-            $query = $_POST['query'] ?? '';
-            if (!$query) error_exit('Search query required');
-            $args = ['search', $source, '--query', $query];
-            $result = run_python($args, 60);
-            if (!$result['ok']) error_exit($result['stderr'] ?: 'Search failed');
-            $lines = array_filter(explode("\n", $result['stdout']));
-            $results = [];
-            foreach ($lines as $line) {
-                if (preg_match('/^\[(.+?)\]\s+(.+)$/', $line, $m)) {
-                    $results[] = [
-                        'id' => $m[1],
-                        'title' => $m[2],
-                    ];
-                }
-            }
-            json_exit(['results' => $results, 'raw' => $result['stdout']], true);
-            break;
-
         case 'export':
             $output = $root . '/data/export_' . date('Ymd_His') . '.json';
             if (!is_dir($root . '/data')) mkdir($root . '/data', 0755, true);

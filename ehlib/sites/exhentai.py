@@ -59,13 +59,6 @@ class ExhentaiSite(SiteBase):
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
 
-    async def search(self, query: str, page: int = 1) -> list[Gallery]:
-        url = f"{EHENTAI_BASE}/"
-        params = {"f_search": query, "page": page - 1}
-        response = await self._session.fetch(self.name, url, params=params)
-        response.raise_for_status()
-        return self._parse_search_results(response.text)
-
     def _parse_html(self, html: str, combined_id: str) -> Gallery:
         soup = BeautifulSoup(html, "html.parser")
 
@@ -169,26 +162,6 @@ class ExhentaiSite(SiteBase):
         if not image_url:
             raise RuntimeError(f"Display image URL missing on page: {image_page_url}")
         return image_url
-
-    def _parse_search_results(self, html: str) -> list[Gallery]:
-        soup = BeautifulSoup(html, "html.parser")
-        results: list[Gallery] = []
-        for item in soup.select(".itg.gld") or soup.select(".itg"):
-            for entry in item.select("tr"):
-                title_elem = entry.select_one(".it5 a, .glink a")
-                if not title_elem:
-                    continue
-                title = title_elem.get_text(strip=True)
-                url = title_elem.get("href", "")
-                result = parse_exhentai_url(url)
-                if result:
-                    combined_id = f"{result[0]}/{result[1]}"
-                    results.append(Gallery(
-                        source=self.name,
-                        source_id=combined_id,
-                        title=title,
-                    ))
-        return results
 
     @staticmethod
     def _extract_total_pages(soup: BeautifulSoup) -> int:

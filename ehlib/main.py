@@ -53,26 +53,6 @@ async def cmd_batch(args: argparse.Namespace, config: Config, db: Database) -> N
         await downloader.close()
 
 
-async def cmd_search(args: argparse.Namespace, config: Config, db: Database) -> None:
-    session = SessionManager(config)
-    source = args.source
-    if source == "nhentai":
-        site = NhentaiSite(config, session)
-    elif source == "exhentai":
-        site = ExhentaiSite(config, session)
-    else:
-        print(f"Error: Unknown source '{source}'")
-        await session.close()
-        return
-
-    try:
-        results = await site.search(args.query)
-        for g in results:
-            print(f"[{g.source_id}] {g.title}")
-    finally:
-        await session.close()
-
-
 async def cmd_list(args: argparse.Namespace, _config: Config, db: Database) -> None:
     tag_names = None
     if args.tags:
@@ -298,10 +278,6 @@ def main() -> None:
     batch.add_argument("--file", required=True, help="File containing URLs (one per line)")
     batch.add_argument("--force", action="store_true", help="Force re-download even if already complete (clears local data)")
 
-    search = subparsers.add_parser("search", help="Search galleries online")
-    search.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
-    search.add_argument("--query", required=True, help="Search query")
-
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
     lst.add_argument("--artist", help="Filter by artist")
@@ -349,7 +325,6 @@ def main() -> None:
         commands = {
             "download": cmd_download,
             "batch": cmd_batch,
-            "search": cmd_search,
             "list": cmd_list,
             "config": cmd_config,
             "retry": cmd_retry,

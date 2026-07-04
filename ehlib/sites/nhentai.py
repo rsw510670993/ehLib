@@ -43,18 +43,6 @@ class NhentaiSite(SiteBase):
         }
         return gallery
 
-    async def search(self, query: str, page: int = 1) -> list[Gallery]:
-        await self._ensure_cdn_config()
-        api_url = f"{NHENTAI_API_BASE}/search"
-        params = {"query": query, "page": page}
-        response = await self._session.fetch(self.name, api_url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        results = []
-        for item in data.get("items", []):
-            results.append(self._parse_gallery_list_item(item))
-        return results
-
     async def _ensure_cdn_config(self) -> int:
         if self._cdn_config is not None:
             return 0
