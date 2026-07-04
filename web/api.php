@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 
@@ -640,7 +640,9 @@ try {
             break;
 
         case 'retry':
+            $skip = !empty($_POST['skip_existing']);
             $args = ['retry'];
+            if ($skip) $args[] = '--skip-existing';
             $result = run_python_locked($args, 600);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],

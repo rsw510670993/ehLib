@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import asyncio
 import sys
 from pathlib import Path
@@ -118,7 +118,7 @@ async def cmd_config(args: argparse.Namespace, config: Config, _db: Database) ->
 async def cmd_retry(args: argparse.Namespace, config: Config, db: Database) -> None:
     downloader = Downloader(config, db)
     try:
-        results = await downloader.retry_incomplete()
+        results = await downloader.retry_incomplete(skip_existing=args.skip_existing)
         print(f"Retry complete: {len(results)} galleries re-downloaded")
     finally:
         await downloader.close()
@@ -306,7 +306,8 @@ def main() -> None:
     cfg.add_argument("--show-cookies", action="store_true", help="Show configured cookies (masked)")
     cfg.add_argument("--set-cookie", help="Set a cookie: source:cookie_name:value")
 
-    subparsers.add_parser("retry", help="Retry incomplete downloads")
+    retry_parser = subparsers.add_parser("retry", help="Retry incomplete downloads")
+    retry_parser.add_argument("--skip-existing", action="store_true", help="Skip already downloaded pages")
 
     exp = subparsers.add_parser("export", help="Export metadata to JSON")
     exp.add_argument("--output", default="metadata.json", help="Output file path")

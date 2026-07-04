@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -358,6 +358,11 @@ $base = rtrim(dirname($scriptName), '/');
                     <p class="mb-2 text-muted">重新尝试下载之前未完成的画廊（数据库标记为 is_complete=0 的记录）。</p>
                     <button class="btn btn-warning me-2" id="retry_btn" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
                     <button class="btn btn-outline-warning" onclick="recoverOrphans()" title="扫描下载目录恢复到数据库"><i class="fas fa-ambulance me-1"></i>恢复孤儿目录</button>
+                    <div class="mb-2">
+                        <label class="form-check-label" style="cursor:pointer">
+                            <input type="checkbox" id="retry_skip_existing" class="form-check-input" checked> 跳过已下载图片
+                        </label>
+                    </div>
                     <div id="retry_progress_list" class="mt-2 mb-2" style="display:none"></div>
                     <div id="retry_output" class="output-box"></div>
                 </div>
@@ -800,8 +805,13 @@ async function doRetry() {
     renderRetryProgress([], '等待重试任务启动...');
     startProgressPoller();
     try {
-        const res = await api('retry');
-        showOutput('retry_output', res.output || '重试完成', !res.ok);
+        const skip = document.getElementById('retry_skip_existing').checked;
+        const res = await api('retry', { form: { skip_existing: skip ? '1' : '0' } });
+        if (res.ok) {
+            showOutput('retry_output', res.output || '重试完成', false);
+        } else {
+            showOutput('retry_output', res.error || res.output || '重试失败（API 返回错误）', true);
+        }
     } catch (err) {
         showOutput('retry_output', '重试失败: ' + (err.message || err), true);
     } finally {
