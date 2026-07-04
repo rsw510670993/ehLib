@@ -128,12 +128,26 @@ class Downloader:
             len(incomplete), len(orphaned),
         )
         results = []
+        failures: list[str] = []
         for gallery in jobs:
             try:
                 result = await self.download(gallery.source, gallery.source_id, force=False)
                 results.append(result)
             except Exception as e:
-                logger.error("Retry failed for %s/%s: %s", gallery.source, gallery.source_id, e)
+                label = f"{gallery.source}/{gallery.source_id}"
+                failures.append(label)
+                write_progress(
+                    gallery.source,
+                    gallery.source_id,
+                    gallery.title,
+                    gallery.total_pages,
+                    len(self._file_manager.list_downloaded_pages(Path(gallery.local_path))) if gallery.local_path else 0,
+                    "failed",
+                    str(e),
+                )
+                logger.error("Retry failed for %s: %s", label, e, exc_info=True)
+        if failures:
+            raise RuntimeError("Retry failed for " + ", ".join(failures))
         return results
 
     async def _find_orphan_downloads(self, known: list[Gallery]) -> list[Gallery]:

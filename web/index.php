@@ -807,6 +807,7 @@ async function doRetry() {
     } finally {
         _retryActive = false;
         renderRetryProgress([]);
+        setButtonBusy('retry_btn', false);
         if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
     }
 }
