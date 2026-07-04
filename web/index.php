@@ -767,7 +767,6 @@ async function doBatchDownload() {
     if (!setButtonBusy('batch_download_btn', true, '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中')) return;
     clearOutput('batch_output');
     document.getElementById('batch_output').classList.add('show');
-    document.getElementById('batch_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中，请稍候...';
 
     _batchActive = true;
     renderBatchProgress([], '等待下载任务启动...');
@@ -790,7 +789,6 @@ async function doBatchDownload() {
         showOutput('batch_output', '批量下载失败: ' + (err.message || err), true);
     } finally {
         _batchActive = false;
-        renderBatchProgress([]);
         setButtonBusy('batch_download_btn', false);
         if (!_activeProgressKey && !_retryActive) stopProgressPoller();
     }
@@ -882,7 +880,26 @@ function renderProgressList(targetId, tasks, isActive, emptyText) {
 }
 
 function renderBatchProgress(tasks, emptyText) {
-    renderProgressList('batch_progress_list', tasks, _batchActive, emptyText);
+    // Show progress inside the batch_output black box instead of a separate element
+    var el = document.getElementById('batch_output');
+    if (!el) return;
+    el.classList.add('show');
+    if (!tasks || tasks.length === 0) {
+        if (_batchActive && emptyText) {
+            el.innerHTML = '<span class="info"><i class="fas fa-spinner fa-spin me-1"></i>' + escapeHtml(emptyText) + '</span>';
+        }
+        return;
+    }
+    var lines = tasks.map(function(t) {
+        var total = parseInt(t.total_pages, 10) || 0;
+        var current = parseInt(t.current, 10) || 0;
+        var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(current / total * 100))) : 0;
+        var source = escapeHtml(t.source || '');
+        var title = escapeHtml(t.title || t.source_id || '');
+        var msg = escapeHtml(t.message || (current + '/' + total));
+        return '[' + source + '] ' + title + ' - ' + msg + ' (' + pct + '%)';
+    }).join('\n');
+    el.innerHTML = '<span class="info">' + lines.replace(/\n/g, '<br>') + '</span>';
 }
 
 function renderRetryProgress(tasks, emptyText) {
@@ -920,7 +937,7 @@ async function checkDownloadProgress() {
     if (tasks.length === 0) {
         card.style.display = 'none';
         body.innerHTML = '';
-        renderBatchProgress([], '等待下载任务启动...');
+        if (_batchActive) renderBatchProgress([], '等待下载任务启动...');
         if (_retryActive) renderRetryProgress([], '重试中...');
         if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
         return;
