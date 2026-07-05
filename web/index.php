@@ -20,10 +20,10 @@ $base = rtrim(dirname($scriptName), '/');
     <div class="brand"><i class="fas fa-book-open me-2"></i>ehLib</div>
     <ul class="nav flex-column mt-2">
         <li class="nav-item"><a class="nav-link active" href="#" data-page="dashboard"><i class="fas fa-tachometer-alt"></i>仪表盘</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="cookies"><i class="fas fa-cookie-bite"></i>Cookie 配置</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="fas fa-cog"></i>系统设置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="download"><i class="fas fa-download"></i>下载控制</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="cookies"><i class="fas fa-cookie-bite"></i>Cookie 配置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="export"><i class="fas fa-file-export"></i>数据导出</a></li>
     </ul>
 </div>
