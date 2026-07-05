@@ -241,10 +241,17 @@ async function checkDownloadProgress() {
         body.innerHTML = '';
         if (_batchActive) renderBatchProgress([], '等待下载任务启动...');
         if (_retryActive) {
-            // Check if background retry is still running
+            // Check if background retry is still running AND show log progress
             api('retry_status', { form: { action: 'retry_status' } }).then(function(status) {
                 if (status && status.running) {
-                    renderRetryProgress([], '后台重试进行中...');
+                    // Fetch latest log lines so the user sees live progress
+                    api('retry_log', { form: { action: 'retry_log' } }).then(function(log) {
+                        if (log && log.ok && log.output && log.output !== '无日志') {
+                            showOutput('retry_output', log.output, false);
+                        } else {
+                            renderRetryProgress([], '后台重试进行中...');
+                        }
+                    });
                 } else {
                     _retryActive = false;
                     setButtonBusy('retry_btn', false);
@@ -265,7 +272,10 @@ async function checkDownloadProgress() {
     card.style.display = '';
     body.innerHTML = renderProgressTaskRows(tasks);
     if (_batchActive) renderBatchProgress(tasks);
-    if (_retryActive) renderRetryProgress(tasks);
+    if (_retryActive) {
+        // When tasks exist, show progress bar text in black box too
+        renderRetryProgress(tasks);
+    }
 
     if (_activeProgressKey) {
         var active = tasks.find(function(t) { return progressTaskKey(t) === _activeProgressKey; });
