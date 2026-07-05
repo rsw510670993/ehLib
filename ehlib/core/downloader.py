@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -34,7 +34,8 @@ class Downloader:
         self._retry_delay = config.download.get("retry_delay", 5)
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
 
-    async def download(self, source: str, identifier: str, force: bool = False) -> Gallery:
+    async def download(self, source: str, identifier: str, force: bool = False, skip_existing: bool = False) -> Gallery:
+        identifier = str(identifier)
         site = self._sites.get(source)
         if not site:
             raise ValueError(f"Unknown source: {source}. Use 'nhentai' or 'exhentai'.")
@@ -63,14 +64,27 @@ class Downloader:
 
         gallery_dir = self._file_manager.create_gallery_dir(source, gallery.source_id, gallery.title)
         gallery.local_path = str(gallery_dir)
+        gallery.is_complete = False
+        gallery.updated_at = datetime.now().isoformat()
+        await self._db.save_gallery(gallery)
 
         logger.info("Downloading [%s] %s (%d pages)", source, gallery.source_id, gallery.total_pages)
         write_progress(source, gallery.source_id, gallery.title, gallery.total_pages, 0, "downloading")
 
         try:
+            if skip_existing:
+                existing = self._file_manager.list_downloaded_pages(gallery_dir)
+                if existing:
+                    started = max(existing)
+                    write_progress(source, gallery.source_id, gallery.title, gallery.total_pages, started, 'downloading', str(started) + '/' + str(gallery.total_pages) + ' (skip)')
+
             await self._download_cover(gallery, gallery_dir)
-            await self._download_pages(gallery, gallery_dir)
+            await self._download_pages(gallery, gallery_dir, skip_existing=skip_existing)
         except Exception:
+            gallery.file_size = self._file_manager.get_dir_size(gallery_dir)
+            gallery.is_complete = False
+            gallery.updated_at = datetime.now().isoformat()
+            await self._db.save_gallery(gallery)
             remove_progress(source, gallery.source_id)
             raise
 
@@ -92,36 +106,102 @@ class Downloader:
         return gallery
 
     async def download_batch(self, urls: list[str], force: bool = False) -> list[Gallery]:
-        tasks = []
-        for url in urls:
-            url = url.strip()
+        jobs = []
+        for raw_url in urls:
+            url = str(raw_url).strip()
             if not url:
                 continue
             source, identifier = self._resolve_url(url)
             if source and identifier:
-                tasks.append(self.download(source, identifier, force=force))
-        if not tasks:
+                jobs.append((url, self.download(source, identifier, force=force)))
+        if not jobs:
             return []
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*(task for _, task in jobs), return_exceptions=True)
         galleries = []
-        for i, result in enumerate(results):
+        for (url, _task), result in zip(jobs, results):
             if isinstance(result, Exception):
-                logger.error("Batch download error for %s: %s", urls[i], result)
+                logger.error("Batch download error for %s", url, exc_info=(type(result), result, result.__traceback__))
             else:
                 galleries.append(result)
         return galleries
 
-    async def retry_incomplete(self) -> list[Gallery]:
+    async def count_retry_pages(self) -> int:
+        """Count total pages that need retry for timeout estimation."""
         incomplete = await self._db.get_incomplete_downloads()
-        logger.info("Found %d incomplete downloads to retry", len(incomplete))
+        orphaned = await self._find_orphan_downloads(incomplete)
+        total = sum(g.total_pages or 0 for g in incomplete)
+        for gallery in orphaned:
+            files = self._file_manager.list_downloaded_pages(Path(gallery.local_path)) if gallery.local_path else []
+            total += max(len(files), 1)
+        return total
+
+    async def retry_incomplete(self, skip_existing: bool = False) -> list[Gallery]:
+        incomplete = await self._db.get_incomplete_downloads()
+        orphaned = await self._find_orphan_downloads(incomplete)
+        jobs = incomplete + orphaned
+        logger.info(
+            "Found %d incomplete downloads and %d orphan directories to retry",
+            len(incomplete), len(orphaned),
+        )
         results = []
-        for gallery in incomplete:
+        failures: list[str] = []
+        for gallery in jobs:
             try:
-                result = await self.download(gallery.source, gallery.source_id, force=True)
+                result = await self.download(gallery.source, gallery.source_id, force=False, skip_existing=skip_existing)
                 results.append(result)
             except Exception as e:
-                logger.error("Retry failed for %s/%s: %s", gallery.source, gallery.source_id, e)
+                label = f"{gallery.source}/{gallery.source_id}"
+                failures.append(label)
+                write_progress(
+                    gallery.source,
+                    gallery.source_id,
+                    gallery.title,
+                    gallery.total_pages,
+                    len(self._file_manager.list_downloaded_pages(Path(gallery.local_path))) if gallery.local_path else 0,
+                    "failed",
+                    str(e),
+                )
+                logger.error("Retry failed for %s: %s", label, e, exc_info=True)
+        if failures:
+            raise RuntimeError("Retry failed for " + ", ".join(failures))
         return results
+
+    async def _find_orphan_downloads(self, known: list[Gallery]) -> list[Gallery]:
+        known_keys = {(gallery.source, gallery.source_id) for gallery in known}
+        orphaned: list[Gallery] = []
+        for source in ("nhentai", "exhentai"):
+            source_dir = self._file_manager.base_path / source
+            if not source_dir.exists():
+                continue
+            for directory in sorted(source_dir.iterdir()):
+                if not directory.is_dir():
+                    continue
+                source_id = self._source_id_from_dir_name(source, directory.name)
+                if not source_id or (source, source_id) in known_keys:
+                    continue
+                if await self._db.get_gallery(source, source_id):
+                    continue
+                if not self._file_manager.list_downloaded_pages(directory):
+                    continue
+                orphaned.append(Gallery(
+                    source=source,
+                    source_id=source_id,
+                    title=directory.name,
+                    local_path=str(directory),
+                    is_complete=False,
+                ))
+                known_keys.add((source, source_id))
+        return orphaned
+
+    @staticmethod
+    def _source_id_from_dir_name(source: str, dir_name: str) -> str | None:
+        if source == "nhentai" and dir_name.isdigit():
+            return dir_name
+        if source == "exhentai" and "_" in dir_name:
+            gid, token = dir_name.split("_", 1)
+            if gid.isdigit() and token:
+                return f"{gid}/{token}"
+        return None
 
     def _resolve_url(self, url: str) -> tuple[str | None, str | None]:
         from ehlib.utils.helpers import parse_nhentai_url, parse_exhentai_url
@@ -164,7 +244,7 @@ class Downloader:
             url = f"https://exhentai.org/g/{gid}/{token}/"
             import nodriver as uc
             ex_browser = await uc.start(
-                headless=not self._config.browser.get("headless", False),
+                headless=self._config.browser.get("headless", False),
                 browser_args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
             )
             try:
@@ -195,17 +275,17 @@ class Downloader:
             stats_key="cover_requests",
         )
 
-    async def _download_pages(self, gallery: Gallery, gallery_dir: Path) -> None:
+    async def _download_pages(self, gallery: Gallery, gallery_dir: Path, skip_existing: bool = False) -> None:
         urls = gallery.page_urls
         if not urls:
             logger.error("No page URLs for gallery %s", gallery.source_id)
             return
 
         if gallery.source == "exhentai":
-            await self._download_exhentai_display_pages(gallery, gallery_dir, urls)
+            await self._download_exhentai_display_pages(gallery, gallery_dir, urls, skip_existing)
             return
 
-        failed_pages = await self._download_pages_httpx(gallery, gallery_dir, urls)
+        failed_pages = await self._download_pages_httpx(gallery, gallery_dir, urls, skip_existing)
         if not failed_pages:
             return
 
@@ -217,16 +297,21 @@ class Downloader:
         )
         await self._download_pages_browser(gallery, gallery_dir, failed_pages)
 
-    async def _download_exhentai_display_pages(self, gallery: Gallery, gallery_dir: Path, urls: list[str]) -> None:
+    async def _download_exhentai_display_pages(self, gallery: Gallery, gallery_dir: Path, urls: list[str], skip_existing: bool = False) -> None:
         site = self._sites.get("exhentai")
         if not isinstance(site, ExhentaiSite):
             raise RuntimeError("Exhentai site handler is unavailable")
 
         stats = self._ensure_request_stats(gallery)
         failed_pages: list[int] = []
+        existing_pages: set[int] = set()
+        if skip_existing:
+            existing_pages = set(self._file_manager.list_downloaded_pages(gallery_dir))
 
         for i, image_page_url in enumerate(urls):
             page_num = i + 1
+            if skip_existing and page_num in existing_pages:
+                continue
             try:
                 stats["image_page_requests"] += 1
                 display_url = await site.resolve_display_image_url(image_page_url)
@@ -257,31 +342,57 @@ class Downloader:
                     ) from e
                 logger.warning("Exhentai display page %d failed: %s", page_num, e)
 
+        # Retry pass: retry failed pages one by one (transient errors like SSL handshake)
         if failed_pages:
-            raise RuntimeError(
-                f"Exhentai download incomplete, failed pages: {', '.join(map(str, failed_pages[:10]))}"
-            )
+            logger.info("Retrying %d failed pages for %s...", len(failed_pages), gallery.source_id)
+            still_failed: list[int] = []
+            for page_num in failed_pages:
+                i = page_num - 1
+                image_page_url = urls[i]
+                try:
+                    display_url = await site.resolve_display_image_url(image_page_url)
+                    ext = self._extract_ext(display_url)
+                    page_path = self._file_manager.page_path(gallery_dir, page_num, ext)
+                    if page_path.exists() and page_path.stat().st_size > 0:
+                        continue
+                    await self._download_file(
+                        "exhentai",
+                        display_url,
+                        page_path,
+                        str(page_num),
+                        stats=stats,
+                        stats_key="image_file_requests",
+                    )
+                except Exception as e:
+                    still_failed.append(page_num)
+                    logger.warning("Exhentai display page %d retry failed: %s", page_num, e)
+
+            if still_failed:
+                raise RuntimeError(
+                    f"Exhentai download incomplete, failed pages: {', '.join(map(str, still_failed[:10]))}"
+                )
 
     async def _download_pages_httpx(
         self,
         gallery: Gallery,
         gallery_dir: Path,
         urls: list[str],
+        skip_existing: bool = False,
     ) -> list[tuple[int, str]]:
         stats = self._ensure_request_stats(gallery)
         tasks = []
+        existing_pages: set[int] = set()
+        if skip_existing:
+            existing_pages = set(self._file_manager.list_downloaded_pages(gallery_dir))
         for i, page_url in enumerate(urls):
             page_num = i + 1
+            if skip_existing and page_num in existing_pages:
+                continue
             ext = self._extract_ext(page_url)
             page_path = self._file_manager.page_path(gallery_dir, page_num, ext)
             tasks.append(
-                self._download_with_semaphore(
-                    gallery.source,
-                    page_url,
-                    page_path,
-                    str(page_num),
-                    stats=stats,
-                    stats_key="image_file_requests",
+                self._download_page_with_progress(
+                    gallery, page_url, page_path, str(page_num),
                 )
             )
 
@@ -336,6 +447,28 @@ class Downloader:
                 )
         finally:
             await browser.close()
+
+    async def _download_page_with_progress(
+        self,
+        gallery: Gallery,
+        url: str,
+        path: Path,
+        label: str,
+    ) -> None:
+        stats = self._ensure_request_stats(gallery)
+        await self._download_with_semaphore(
+            gallery.source, url, path, label,
+            stats=stats, stats_key="image_file_requests",
+        )
+        write_progress(
+            gallery.source,
+            gallery.source_id,
+            gallery.title,
+            gallery.total_pages,
+            int(label),
+            "downloading",
+            f"{label}/{gallery.total_pages}",
+        )
 
     async def _download_with_semaphore(
         self,

@@ -53,26 +53,6 @@ async def cmd_batch(args: argparse.Namespace, config: Config, db: Database) -> N
         await downloader.close()
 
 
-async def cmd_search(args: argparse.Namespace, config: Config, db: Database) -> None:
-    session = SessionManager(config)
-    source = args.source
-    if source == "nhentai":
-        site = NhentaiSite(config, session)
-    elif source == "exhentai":
-        site = ExhentaiSite(config, session)
-    else:
-        print(f"Error: Unknown source '{source}'")
-        await session.close()
-        return
-
-    try:
-        results = await site.search(args.query)
-        for g in results:
-            print(f"[{g.source_id}] {g.title}")
-    finally:
-        await session.close()
-
-
 async def cmd_list(args: argparse.Namespace, _config: Config, db: Database) -> None:
     tag_names = None
     if args.tags:
@@ -118,8 +98,17 @@ async def cmd_config(args: argparse.Namespace, config: Config, _db: Database) ->
 async def cmd_retry(args: argparse.Namespace, config: Config, db: Database) -> None:
     downloader = Downloader(config, db)
     try:
-        results = await downloader.retry_incomplete()
+        results = await downloader.retry_incomplete(skip_existing=args.skip_existing)
         print(f"Retry complete: {len(results)} galleries re-downloaded")
+    finally:
+        await downloader.close()
+
+
+async def cmd_count_retry_pages(args: argparse.Namespace, config: Config, db: Database) -> None:
+    downloader = Downloader(config, db)
+    try:
+        total = await downloader.count_retry_pages()
+        print(total)
     finally:
         await downloader.close()
 
@@ -189,6 +178,77 @@ async def cmd_refresh_metadata(args: argparse.Namespace, config: Config, db: Dat
         await downloader.close()
 
 
+async def cmd_recover_orphans(args: argparse.Namespace, config: Config, db: Database) -> None:
+    file_manager = FileManager(config.download.get("path", "./downloads"))
+    sources = [args.source] if args.source else ["nhentai", "exhentai"]
+    count = 0
+
+    for source in sources:
+        source_dir = file_manager.base_path / source
+        if not source_dir.is_dir():
+            continue
+
+        existing_ids = set()
+        galleries = await db.get_all_galleries()
+        for g in galleries:
+            if g.source == source:
+                existing_ids.add(g.source_id)
+
+        for dir_entry in sorted(source_dir.iterdir()):
+            if not dir_entry.is_dir():
+                continue
+            dir_name = dir_entry.name
+            source_id = dir_name.replace("_", "/", 1) if source == "exhentai" else dir_name
+            if source_id in existing_ids:
+                continue
+
+            local_path = str(dir_entry.resolve())
+            image_count = len(file_manager.list_downloaded_pages(dir_entry))
+
+            if args.dry_run:
+                print(f"[{source}] Orphaned: {dir_name} (source_id: {source_id}, images: {image_count})")
+                count += 1
+                continue
+
+            try:
+                print(f"[{source}] Recovering: {dir_name} ({image_count} images)...", end=" ", flush=True)
+                session_mgr = SessionManager(config)
+                if source == "nhentai":
+                    site = NhentaiSite(config, session_mgr)
+                else:
+                    site = ExhentaiSite(config, session_mgr)
+                gallery = await site.fetch_gallery(source_id)
+                gallery.local_path = local_path
+                gallery.is_complete = True
+                gallery.file_size = file_manager.get_dir_size(dir_entry)
+                gallery.downloaded_at = _find_oldest_file_time(dir_entry)
+                await db.save_gallery(gallery)
+                from dataclasses import asdict
+                meta = asdict(gallery)
+                meta["tags"] = [asdict(t) for t in gallery.tags]
+                file_manager.save_metadata(dir_entry, meta)
+                await session_mgr.close()
+                print(f"Saved. Tags: {len(gallery.tags)}, Pages: {gallery.total_pages}")
+                count += 1
+            except Exception as e:
+                print(f"Failed: {e}")
+
+    print(f"\nRecovery complete: {count} galleries recovered.")
+
+
+def _find_oldest_file_time(directory: Path) -> str:
+    oldest = None
+    for f in directory.iterdir():
+        if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+            mtime = f.stat().st_mtime
+            if oldest is None or mtime < oldest:
+                oldest = mtime
+    if oldest:
+        from datetime import datetime
+        return datetime.fromtimestamp(oldest).isoformat()
+    return ""
+
+
 def _resolve_url(url: str) -> tuple[str | None, str | None]:
     nh_id = parse_nhentai_url(url)
     if nh_id:
@@ -218,10 +278,6 @@ def main() -> None:
     batch.add_argument("--file", required=True, help="File containing URLs (one per line)")
     batch.add_argument("--force", action="store_true", help="Force re-download even if already complete (clears local data)")
 
-    search = subparsers.add_parser("search", help="Search galleries online")
-    search.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
-    search.add_argument("--query", required=True, help="Search query")
-
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
     lst.add_argument("--artist", help="Filter by artist")
@@ -235,7 +291,10 @@ def main() -> None:
     cfg.add_argument("--show-cookies", action="store_true", help="Show configured cookies (masked)")
     cfg.add_argument("--set-cookie", help="Set a cookie: source:cookie_name:value")
 
-    subparsers.add_parser("retry", help="Retry incomplete downloads")
+    retry_parser = subparsers.add_parser("retry", help="Retry incomplete downloads")
+    retry_parser.add_argument("--skip-existing", action="store_true", help="Skip already downloaded pages")
+
+    count_retry_parser = subparsers.add_parser("count-retry-pages", help="Count total pages across incomplete galleries")
 
     exp = subparsers.add_parser("export", help="Export metadata to JSON")
     exp.add_argument("--output", default="metadata.json", help="Output file path")
@@ -246,6 +305,10 @@ def main() -> None:
     refresh = subparsers.add_parser("refresh-metadata", help="Re-fetch metadata for an existing gallery (preserves local images)")
     refresh.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
     refresh.add_argument("source_id", help="Gallery source ID or gid/token for exhentai")
+
+    recover = subparsers.add_parser("recover-orphans", help="Scan download dirs and recover galleries with no DB record")
+    recover.add_argument("--source", choices=["nhentai", "exhentai"], help="Limit scan to a specific source")
+    recover.add_argument("--dry-run", action="store_true", help="List orphaned dirs without recovering")
 
     args = parser.parse_args()
 
@@ -262,13 +325,14 @@ def main() -> None:
         commands = {
             "download": cmd_download,
             "batch": cmd_batch,
-            "search": cmd_search,
             "list": cmd_list,
             "config": cmd_config,
             "retry": cmd_retry,
+            "count-retry-pages": cmd_count_retry_pages,
             "export": cmd_export,
             "migrate-dirs": cmd_migrate_dirs,
             "refresh-metadata": cmd_refresh_metadata,
+            "recover-orphans": cmd_recover_orphans,
         }
         handler = commands.get(args.command)
         if handler:

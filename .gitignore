@@ -10,3 +10,6 @@ config.yaml
 *.egg-info/
 dist/
 build/
+.trae/documents/
+docs/
+web/ehlib_images/

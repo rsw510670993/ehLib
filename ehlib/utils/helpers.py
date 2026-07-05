@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 def sanitize_filename(filename: str) -> str:
+    filename = str(filename)
     illegal_chars = r'[<>:"/\\|?*]'
     sanitized = re.sub(illegal_chars, "_", filename)
     sanitized = sanitized.strip(". ")
@@ -25,6 +26,7 @@ def slugify(text: str) -> str:
 
 
 def parse_nhentai_url(url: str) -> str | None:
+    url = str(url)
     patterns = [
         r'nhentai\.(?:net|to)/g/(\d+)',
         r'nhentai\.(?:net|to)/g/(\d+)/',
@@ -37,6 +39,7 @@ def parse_nhentai_url(url: str) -> str | None:
 
 
 def parse_exhentai_url(url: str) -> tuple[str, str] | None:
+    url = str(url)
     patterns = [
         r'(?:exhentai|e-hentai)\.org/g/(\d+)/([a-f0-9]+)',
         r'(?:exhentai|e-hentai)\.org/g/(\d+)/([a-f0-9]+)/',

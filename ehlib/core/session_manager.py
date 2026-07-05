@@ -1,10 +1,29 @@
+import ssl
 import time
+
+import certifi
 import httpx
 
 from ehlib.config import Config
 from ehlib.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    """Build an SSL context that tolerates legacy server configurations (e.g. weak DH keys).
+
+    Some exhentai servers use DH keys smaller than 2048 bits, which are rejected
+    by OpenSSL's default SECLEVEL=2. This context lowers the security level to 1
+    to allow such connections.
+    """
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+    except ssl.SSLError:
+        pass
+    return ctx
 
 
 class SessionManager:
@@ -26,6 +45,7 @@ class SessionManager:
                 headers=headers,
                 timeout=httpx.Timeout(30.0),
                 follow_redirects=True,
+                verify=_build_ssl_context(),
             )
         return self._client
 
@@ -62,11 +82,12 @@ class SessionManager:
         return False
 
     def _load_cookies(self, source: str) -> dict[str, str]:
-        cookies = {}
+        cookies: dict[str, str] = {}
         source_cookies = self._config.cookies.get(source, {})
         for key, value in source_cookies.items():
-            if value:
-                cookies[key] = value
+            if value is None or value == "":
+                continue
+            cookies[str(key)] = str(value)
         return cookies
 
     async def _rate_limit(self, source: str, delay: float) -> None:

@@ -4,8 +4,12 @@ header('Access-Control-Allow-Origin: *');
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 $root = realpath(__DIR__ . '/..');
-$venv_python = $root . '/venv/Scripts/python.exe';
-$python = is_file($venv_python) ? $venv_python : 'python';
+if (DIRECTORY_SEPARATOR === '\\') {
+    $venv_python = $root . '/venv/Scripts/python.exe';
+} else {
+    $venv_python = $root . '/venv/bin/python';
+}
+$python = is_file($venv_python) ? $venv_python : (DIRECTORY_SEPARATOR === '\\' ? 'python' : 'python3');
 
 function json_exit($data, $ok = true) {
     $data['ok'] = $ok;
@@ -74,6 +78,68 @@ function is_path_within($child, $parent) {
     $child = rtrim(strtolower(normalize_path($child)), DIRECTORY_SEPARATOR);
     $parent = rtrim(strtolower(normalize_path($parent)), DIRECTORY_SEPARATOR);
     return $child === $parent || str_starts_with($child, $parent . DIRECTORY_SEPARATOR);
+}
+
+
+function public_gallery_image_url($source, $source_id, $file) {
+    if ($source === '' || $source_id === '' || $file === '') return '';
+    $public_source_id = str_replace('/', '_', $source_id);
+    foreach ([$source, $public_source_id, $file] as $part) {
+        if (str_contains($part, '/') || str_contains($part, '\\') || $part === '.' || $part === '..') return '';
+    }
+    return 'ehlib_images/' . rawurlencode($source) . '/' . rawurlencode($public_source_id) . '/' . rawurlencode($file);
+}
+
+function public_image_url_from_path($path) {
+    $download_base = resolve_download_path();
+    $normalized = normalize_path($path);
+    if (!is_path_within($normalized, $download_base)) return '';
+    $base = rtrim(normalize_path($download_base), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    $relative = substr($normalized, strlen($base));
+    if ($relative === false || $relative === '') return '';
+    $parts = preg_split('/[\\\\\/]+/', $relative);
+    $encoded = [];
+    foreach ($parts as $part) {
+        if ($part === '' || $part === '.' || $part === '..') return '';
+        $encoded[] = rawurlencode($part);
+    }
+    return 'ehlib_images/' . implode('/', $encoded);
+}
+
+function find_gallery_image_path($local_path, $page) {
+    $exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    if ($page === 'cover') {
+        foreach ($exts as $ext) {
+            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
+            if (is_file($candidate)) return $candidate;
+        }
+        foreach (['001', '1'] as $name) {
+            foreach ($exts as $ext) {
+                $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
+                if (is_file($candidate)) return $candidate;
+            }
+        }
+        return '';
+    }
+    $page_num = (int)$page;
+    if ($page_num < 1) return '';
+    foreach ([sprintf('%03d', $page_num), (string)$page_num] as $name) {
+        foreach ($exts as $ext) {
+            $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
+            if (is_file($candidate)) return $candidate;
+        }
+    }
+    return '';
+}
+
+function public_cover_url($source, $source_id) {
+    global $root;
+    $base = normalize_path($root . DIRECTORY_SEPARATOR . 'web' . DIRECTORY_SEPARATOR . 'ehlib_images');
+    $public_source_id = str_replace('/', '_', $source_id);
+    $dir = normalize_path($base . DIRECTORY_SEPARATOR . $source . DIRECTORY_SEPARATOR . $public_source_id);
+    if (!is_path_within($dir, $base) || !is_dir($dir)) return '';
+    $img_path = find_gallery_image_path($dir, 'cover');
+    return $img_path ? public_gallery_image_url($source, $source_id, basename($img_path)) : '';
 }
 
 function delete_dir_recursive($dir) {
@@ -183,6 +249,38 @@ function run_python($args, $timeout = 120) {
     ];
 }
 
+function run_python_locked($args, $timeout = 120) {
+    global $root;
+    $data_dir = $root . '/data';
+    if (!is_dir($data_dir)) mkdir($data_dir, 0755, true);
+    $lock_path = $data_dir . '/download.lock';
+    $lock = @fopen($lock_path, 'c');
+    if (!$lock) {
+        return [
+            'ok' => false,
+            'error' => 'Failed to open download lock',
+            'stdout' => '',
+            'stderr' => '',
+            'exit_code' => 75,
+        ];
+    }
+    if (!@flock($lock, LOCK_EX | LOCK_NB)) {
+        @fclose($lock);
+        return [
+            'ok' => false,
+            'error' => 'Another download task is already running',
+            'stdout' => '',
+            'stderr' => 'Another download task is already running',
+            'exit_code' => 75,
+        ];
+    }
+    try {
+        return run_python($args, $timeout);
+    } finally {
+        @flock($lock, LOCK_UN);
+        @fclose($lock);
+    }
+}
 function read_config() {
     global $root;
     $path = $root . '/config.yaml';
@@ -226,7 +324,7 @@ function write_config($data) {
     global $root;
     $path = $root . '/config.yaml';
     
-    function array_to_yaml($data, $indent = 0) {
+    function array_to_yaml($data, $indent = 0, $parents = []) {
         $out = '';
         $prefix = str_repeat('  ', $indent);
         foreach ($data as $key => $value) {
@@ -235,11 +333,11 @@ function write_config($data) {
                     $out .= $prefix . $key . ": {}\n";
                 } else {
                     $out .= $prefix . $key . ":\n";
-                    $out .= array_to_yaml($value, $indent + 1);
+                    $out .= array_to_yaml($value, $indent + 1, array_merge($parents, [(string)$key]));
                 }
             } elseif (is_bool($value)) {
                 $out .= $prefix . $key . ': ' . ($value ? 'true' : 'false') . "\n";
-            } elseif (is_numeric($value)) {
+            } elseif (is_numeric($value) && !in_array('cookies', $parents, true)) {
                 $out .= $prefix . $key . ': ' . $value . "\n";
             } else {
                 $out .= $prefix . $key . ': "' . str_replace('"', '\"', $value) . "\"\n";
@@ -249,7 +347,20 @@ function write_config($data) {
     }
     
     $yaml = array_to_yaml($data);
-    file_put_contents($path, $yaml, LOCK_EX);
+    $dir = dirname($path);
+    if (file_exists($path)) {
+        if (!is_writable($path)) {
+            throw new RuntimeException('Config file is not writable: ' . $path);
+        }
+    } elseif (!is_dir($dir) || !is_writable($dir)) {
+        throw new RuntimeException('Config directory is not writable: ' . $dir);
+    }
+    $written = @file_put_contents($path, $yaml, LOCK_EX);
+    if ($written === false) {
+        $error = error_get_last();
+        $message = $error['message'] ?? 'unknown error';
+        throw new RuntimeException('Failed to write config file: ' . $message);
+    }
     return true;
 }
 
@@ -297,6 +408,7 @@ try {
                         'title_jp' => $m[4],
                         'pages' => (int)$m[5],
                         'downloaded_at' => $m[6],
+                        'cover_url' => public_cover_url($m[1], $m[2]),
                     ];
                 }
             }
@@ -312,7 +424,7 @@ try {
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-                $stmt = $pdo->prepare('SELECT id, title, title_jp, artist, group_name, language, category, total_pages, file_size, local_path, downloaded_at FROM galleries WHERE source=? AND source_id=?');
+                $stmt = $pdo->prepare('SELECT id, title, title_jp, artist, group_name, language, category, total_pages, uploaded_at, file_size, local_path, downloaded_at FROM galleries WHERE source=? AND source_id=?');
                 $stmt->execute([$source, $source_id]);
                 $gallery = $stmt->fetch();
                 if (!$gallery) error_exit('Gallery not found');
@@ -506,7 +618,7 @@ try {
                     foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
                         $candidate = $local_path . DIRECTORY_SEPARATOR . sprintf('%03d', $i) . '.' . $ext;
                         if (is_file($candidate)) {
-                            $images[] = ['page' => $i, 'file' => sprintf('%03d', $i) . '.' . $ext];
+                            $images[] = ['page' => $i, 'file' => sprintf('%03d', $i) . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
                             $found = true;
                             break;
                         }
@@ -515,7 +627,7 @@ try {
                         foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
                             $candidate = $local_path . DIRECTORY_SEPARATOR . $i . '.' . $ext;
                             if (is_file($candidate)) {
-                                $images[] = ['page' => $i, 'file' => $i . '.' . $ext];
+                                $images[] = ['page' => $i, 'file' => $i . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
                                 $found = true;
                                 break;
                             }
@@ -536,6 +648,18 @@ try {
             }
             break;
 
+        case 'recover_orphans':
+            $source = $_POST['source'] ?? '';
+            $args = ['recover-orphans'];
+            if ($source) { $args[] = '--source'; $args[] = $source; }
+            $result = run_python($args, 300);
+            $ok = $result['ok'] || (strpos($result['stdout'] . $result['stderr'], 'Recovery complete') !== false);
+            json_exit([
+                'output' => $result['stdout'] ?: $result['stderr'],
+                'exit_code' => $result['exit_code'],
+            ], $ok);
+            break;
+
         case 'download':
             $source = $_POST['source'] ?? '';
             $id = $_POST['id'] ?? '';
@@ -554,7 +678,7 @@ try {
                 error_exit('Provide --url, --id+source, or --gid+--token');
             }
             if ($force) $args[] = '--force';
-            $result = run_python($args, 900);
+            $result = run_python_locked($args, 900);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
                 'exit_code' => $result['exit_code'],
@@ -570,7 +694,7 @@ try {
             $args = ['batch', '--file', $tmpfile];
             $force = !empty($_POST['force']);
             if ($force) $args[] = '--force';
-            $result = run_python($args, 600);
+            $result = run_python_locked($args, 600);
             @unlink($tmpfile);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
@@ -579,32 +703,23 @@ try {
             break;
 
         case 'retry':
+            $skip = !empty($_POST['skip_existing']);
+            // First count total pages that need retry, then calculate dynamic timeout
+            $count_result = run_python(['count-retry-pages'], 30);
+            $total_pages = 0;
+            if ($count_result['ok'] && is_numeric(trim($count_result['stdout']))) {
+                $total_pages = intval(trim($count_result['stdout']));
+            }
+            // 6 seconds per page estimate: delay_between_requests(1.5s) + avg_request(2s) + retry_overhead
+            // Minimum 600s (10 min), max 7200s (2 hours)
+            $dl_timeout = max(600, min(7200, $total_pages * 6));
             $args = ['retry'];
-            $result = run_python($args, 600);
+            if ($skip) $args[] = '--skip-existing';
+            $result = run_python_locked($args, $dl_timeout);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
                 'exit_code' => $result['exit_code'],
             ], $result['ok']);
-            break;
-
-        case 'search':
-            $source = $_POST['source'] ?? 'nhentai';
-            $query = $_POST['query'] ?? '';
-            if (!$query) error_exit('Search query required');
-            $args = ['search', $source, '--query', $query];
-            $result = run_python($args, 60);
-            if (!$result['ok']) error_exit($result['stderr'] ?: 'Search failed');
-            $lines = array_filter(explode("\n", $result['stdout']));
-            $results = [];
-            foreach ($lines as $line) {
-                if (preg_match('/^\[(.+?)\]\s+(.+)$/', $line, $m)) {
-                    $results[] = [
-                        'id' => $m[1],
-                        'title' => $m[2],
-                    ];
-                }
-            }
-            json_exit(['results' => $results, 'raw' => $result['stdout']], true);
             break;
 
         case 'export':
