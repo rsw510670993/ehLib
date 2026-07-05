@@ -99,22 +99,24 @@ async function doRetry() {
     document.getElementById('retry_output').classList.add('show');
 
     _retryActive = true;
-    renderRetryProgress([], '重试中...');
+    renderRetryProgress([], '正在启动后台重试任务...');
     startProgressPoller();
     try {
         const skip = document.getElementById('retry_skip_existing').checked;
         const res = await api('retry', { form: { skip_existing: skip ? '1' : '0' } });
         if (res.ok) {
-            showOutput('retry_output', res.output || '重试完成', false);
+            showOutput('retry_output', res.output || '重试任务已在后台启动', false);
+            // Keep _retryActive = true so the poller tracks background progress
         } else {
-            showOutput('retry_output', res.error || res.output || '重试失败（API 返回错误）', true);
+            showOutput('retry_output', res.error || res.output || '重试失败', true);
+            _retryActive = false;
         }
     } catch (err) {
         showOutput('retry_output', '重试失败: ' + (err.message || err), true);
-    } finally {
         _retryActive = false;
+    } finally {
         setButtonBusy('retry_btn', false);
-        if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
+        if (!_retryActive && !_activeProgressKey && !_batchActive) stopProgressPoller();
     }
 }
 // ─── Download Progress ───
@@ -238,7 +240,24 @@ async function checkDownloadProgress() {
         card.style.display = 'none';
         body.innerHTML = '';
         if (_batchActive) renderBatchProgress([], '等待下载任务启动...');
-        if (_retryActive) renderRetryProgress([], '重试中...');
+        if (_retryActive) {
+            // Check if background retry is still running
+            api('retry_status', { form: { action: 'retry_status' } }).then(function(status) {
+                if (status && status.running) {
+                    renderRetryProgress([], '后台重试进行中...');
+                } else {
+                    _retryActive = false;
+                    setButtonBusy('retry_btn', false);
+                    api('retry_log', { form: { action: 'retry_log' } }).then(function(log) {
+                        if (log && log.ok && log.output) {
+                            showOutput('retry_output', log.output, false);
+                        }
+                    });
+                    if (!_retryActive && !_activeProgressKey && !_batchActive) stopProgressPoller();
+                }
+            });
+            return;
+        }
         if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
         return;
     }

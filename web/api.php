@@ -81,6 +81,25 @@ function is_path_within($child, $parent) {
 }
 
 
+
+function count_downloaded_pages($local_path) {
+    $local_path = trim((string)$local_path);
+    if ($local_path === '') return 0;
+    $dir = normalize_path($local_path);
+    if (!is_dir($dir)) return 0;
+    $count = 0;
+    $items = scandir($dir);
+    if ($items === false) return 0;
+    foreach ($items as $item) {
+        $path = $dir . DIRECTORY_SEPARATOR . $item;
+        if (!is_file($path)) continue;
+        $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) continue;
+        $name = pathinfo($item, PATHINFO_FILENAME);
+        if (ctype_digit($name)) $count++;
+    }
+    return $count;
+}
 function public_gallery_image_url($source, $source_id, $file) {
     if ($source === '' || $source_id === '' || $file === '') return '';
     $public_source_id = str_replace('/', '_', $source_id);
@@ -249,6 +268,27 @@ function run_python($args, $timeout = 120) {
     ];
 }
 
+function run_python_background($args) {
+    global $root, $python;
+    $data_dir = $root . '/data';
+    if (!is_dir($data_dir)) mkdir($data_dir, 0755, true);
+
+    $cmd = escapeshellcmd($python) . ' -m ehlib';
+    foreach ($args as $a) {
+        $cmd .= ' ' . escapeshellarg($a);
+    }
+
+    $log_file = $data_dir . '/retry_bg.log';
+    $pid_file = $data_dir . '/retry.pid';
+
+    // Start in background; write PID so we can track it later
+    $full_cmd = 'nohup ' . $cmd . ' > ' . $log_file . ' 2>&1 & echo $! > ' . $pid_file;
+    exec($full_cmd);
+
+    $pid = is_file($pid_file) ? trim(file_get_contents($pid_file)) : 'unknown';
+    return $pid;
+}
+
 function run_python_locked($args, $timeout = 120) {
     global $root;
     $data_dir = $root . '/data';
@@ -386,35 +426,67 @@ try {
             $tag_mode = $_GET['tag_mode'] ?? 'any';
             $artist = $_GET['artist'] ?? '';
             $language = $_GET['language'] ?? '';
-            $limit = (int)($_GET['limit'] ?? 50);
-            $args = ['list'];
-            if ($source) { $args[] = '--source'; $args[] = $source; }
-            if ($tag_name) { $args[] = '--tag'; $args[] = $tag_name; }
-            if ($tags_raw) { $args[] = '--tags'; $args[] = $tags_raw; }
-            if ($tag_mode !== 'any') { $args[] = '--tag-mode'; $args[] = $tag_mode; }
-            if ($artist) { $args[] = '--artist'; $args[] = $artist; }
-            if ($language) { $args[] = '--language'; $args[] = $language; }
-            if ($limit !== 50) { $args[] = '--limit'; $args[] = (string)$limit; }
-            $result = run_python($args);
-            if (!$result['ok']) error_exit($result['stderr'] ?: 'Command failed');
-            $lines = array_filter(explode("\n", $result['stdout']));
-            $galleries = [];
-            foreach ($lines as $line) {
-                if (preg_match('/^\[(.+?)\/(.+?)\]\s+(.+?)\s+\|\s*(.*?)\s*\((\d+)p\)\s+-\s+(.*)$/', $line, $m)) {
-                    $galleries[] = [
-                        'source' => $m[1],
-                        'source_id' => $m[2],
-                        'title' => $m[3],
-                        'title_jp' => $m[4],
-                        'pages' => (int)$m[5],
-                        'downloaded_at' => $m[6],
-                        'cover_url' => public_cover_url($m[1], $m[2]),
-                    ];
+            $limit = max(1, min(200, (int)($_GET['limit'] ?? 50)));
+            $tag_names = [];
+            if ($tags_raw !== '') {
+                foreach (explode(',', $tags_raw) as $tag) {
+                    $tag = trim($tag);
+                    if ($tag !== '') $tag_names[] = $tag;
                 }
             }
-            json_exit(['galleries' => $galleries]);
+            if ($tag_name !== '' && !$tag_names) $tag_names[] = $tag_name;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $params = [];
+                if ($tag_names && $tag_mode === 'any') {
+                    $query = 'SELECT DISTINCT g.* FROM galleries g JOIN gallery_tags gt ON g.id = gt.gallery_id JOIN tags t ON gt.tag_id = t.id WHERE (' . implode(' OR ', array_fill(0, count($tag_names), 't.name LIKE ?')) . ')';
+                    foreach ($tag_names as $tag) $params[] = '%' . $tag . '%';
+                } elseif ($tag_names && $tag_mode === 'all') {
+                    $query = 'SELECT g.* FROM galleries g JOIN gallery_tags gt ON g.id = gt.gallery_id JOIN tags t ON gt.tag_id = t.id WHERE (' . implode(' OR ', array_fill(0, count($tag_names), 't.name LIKE ?')) . ')';
+                    foreach ($tag_names as $tag) $params[] = '%' . $tag . '%';
+                } else {
+                    $query = 'SELECT * FROM galleries WHERE 1=1';
+                }
+                $prefix = ($tag_names ? 'g.' : '');
+                if ($source) { $query .= ' AND ' . $prefix . 'source=?'; $params[] = $source; }
+                if ($artist) { $query .= ' AND ' . $prefix . 'artist LIKE ?'; $params[] = '%' . $artist . '%'; }
+                if ($language) { $query .= ' AND ' . $prefix . 'language=?'; $params[] = $language; }
+                if ($tag_names && $tag_mode === 'all') {
+                    $query .= ' GROUP BY g.id HAVING COUNT(DISTINCT t.id) = ' . count($tag_names);
+                }
+                $order_prefix = ($tag_names ? 'g.' : '');
+                $query .= ' ORDER BY COALESCE(NULLIF(' . $order_prefix . 'uploaded_at, ' . $pdo->quote('') . '), ' . $pdo->quote('0000-00-00') . ') DESC, CAST(SUBSTR(' . $order_prefix . 'source_id || ' . $pdo->quote('/') . ', 1, INSTR(' . $order_prefix . 'source_id || ' . $pdo->quote('/') . ', ' . $pdo->quote('/') . ') - 1) AS INTEGER) DESC LIMIT ?';
+                $params[] = $limit;
+                $stmt = $pdo->prepare($query);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll();
+                $galleries = [];
+                foreach ($rows as $row) {
+                    $total_pages = (int)($row['total_pages'] ?? 0);
+                    $downloaded_pages = count_downloaded_pages($row['local_path'] ?? '');
+                    $is_complete = (int)($row['is_complete'] ?? 0) === 1;
+                    $galleries[] = [
+                        'source' => $row['source'] ?? '',
+                        'source_id' => $row['source_id'] ?? '',
+                        'title' => $row['title'] ?? '',
+                        'title_jp' => $row['title_jp'] ?? '',
+                        'pages' => $total_pages,
+                        'total_pages' => $total_pages,
+                        'downloaded_pages' => $downloaded_pages,
+                        'is_complete' => $is_complete,
+                        'downloaded_at' => $row['downloaded_at'] ?? '',
+                        'uploaded_at' => $row['uploaded_at'] ?? '',
+                        'cover_url' => public_cover_url($row['source'] ?? '', $row['source_id'] ?? ''),
+                    ];
+                }
+                json_exit(['galleries' => $galleries]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
             break;
-
         case 'get_gallery_detail':
             $source = $_GET['source'] ?? '';
             $source_id = $_GET['source_id'] ?? '';
@@ -704,22 +776,56 @@ try {
 
         case 'retry':
             $skip = !empty($_POST['skip_existing']);
-            // First count total pages that need retry, then calculate dynamic timeout
-            $count_result = run_python(['count-retry-pages'], 30);
-            $total_pages = 0;
-            if ($count_result['ok'] && is_numeric(trim($count_result['stdout']))) {
-                $total_pages = intval(trim($count_result['stdout']));
+            $data_dir = $root . '/data';
+            $pid_file = $data_dir . '/retry.pid';
+
+            // Check if a background retry is already running
+            if (is_file($pid_file)) {
+                $old_pid = trim(file_get_contents($pid_file));
+                if ($old_pid && is_dir('/proc/' . $old_pid)) {
+                    json_exit(['output' => '重试任务已在后台运行 (PID: ' . $old_pid . ')'], true);
+                    break;
+                }
             }
-            // 6 seconds per page estimate: delay_between_requests(1.5s) + avg_request(2s) + retry_overhead
-            // Minimum 600s (10 min), max 7200s (2 hours)
-            $dl_timeout = max(600, min(7200, $total_pages * 6));
+
             $args = ['retry'];
             if ($skip) $args[] = '--skip-existing';
-            $result = run_python_locked($args, $dl_timeout);
-            json_exit([
-                'output' => $result['stdout'] ?: $result['stderr'],
-                'exit_code' => $result['exit_code'],
-            ], $result['ok']);
+            $pid = run_python_background($args);
+            json_exit(['output' => '重试任务已在后台启动 (PID: ' . $pid . ')'], true);
+            break;
+
+        case 'retry_status':
+            $pid_file = $root . '/data/retry.pid';
+            if (!is_file($pid_file)) {
+                json_exit(['running' => false]);
+                break;
+            }
+            $pid = trim(file_get_contents($pid_file));
+            $running = $pid && is_dir('/proc/' . $pid);
+            if (!$running) {
+                @unlink($pid_file);
+                // Clean up stale progress files
+                foreach (glob($root . '/data/*.progress') as $f) {
+                    if (time() - filemtime($f) > 3600) @unlink($f);
+                }
+            }
+            json_exit(['running' => $running]);
+            break;
+
+        case 'retry_log':
+            $log_file = $root . '/data/retry_bg.log';
+            $output = '';
+            if (is_file($log_file)) {
+                $size = filesize($log_file);
+                $max_bytes = 4000;
+                if ($size > $max_bytes) {
+                    $output = file_get_contents($log_file, false, null, $size - $max_bytes);
+                    $output = '(日志已截断, 仅显示末尾' . $max_bytes . '字节)' . "\n" . $output;
+                } else {
+                    $output = file_get_contents($log_file);
+                }
+            }
+            json_exit(['output' => $output ?: '无日志'], true);
             break;
 
         case 'export':
