@@ -146,3 +146,12 @@ body { background: #f5f7fa; }
     .reader-header .reader-title { flex-basis: calc(100% - 4rem); }
     .reader-header .reader-meta { max-width: none; }
 }
+.confirm-message { white-space: pre-wrap; line-height: 1.5; }
+.confirm-detail { margin-top: .75rem; padding: .75rem; border-radius: 6px; background: #f8fafc; color: #475569; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+@media (max-width: 768px) {
+    #confirm_modal .modal-dialog { margin: .75rem; }
+    #confirm_modal .modal-title { font-size: 1rem; }
+    #confirm_modal .modal-body { font-size: .92rem; }
+    #confirm_modal .modal-footer { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    #confirm_modal .modal-footer .btn { width: 100%; margin: 0; }
+}

@@ -42,6 +42,22 @@ $base = rtrim(dirname($scriptName), '/');
         <!-- ═══ Toast ═══ -->
         <div class="toast-container" id="toast_container"></div>
 
+        <div class="modal fade" id="confirm_modal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="confirm_modal_title">确认操作</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body" id="confirm_modal_body"></div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" id="confirm_modal_cancel" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-danger" id="confirm_modal_ok">确认</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ Dashboard ═══ -->
         <div id="page_dashboard" class="page-section">
             <div class="row g-3 mb-3" id="stats_cards">

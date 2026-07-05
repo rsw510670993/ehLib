@@ -14,6 +14,56 @@ function fallbackImageOnError(img) {
     img.style.display = 'none';
 }
 
+
+function confirmDialog(options) {
+    options = options || {};
+    return new Promise(function(resolve) {
+        var modalEl = document.getElementById('confirm_modal');
+        if (!modalEl || typeof bootstrap === 'undefined') {
+            resolve(window.confirm(options.message || '确定要继续吗？'));
+            return;
+        }
+        var titleEl = document.getElementById('confirm_modal_title');
+        var bodyEl = document.getElementById('confirm_modal_body');
+        var okBtn = document.getElementById('confirm_modal_ok');
+        var cancelBtn = document.getElementById('confirm_modal_cancel');
+        titleEl.textContent = options.title || '确认操作';
+        bodyEl.innerHTML = '';
+        var message = document.createElement('div');
+        message.className = 'confirm-message';
+        message.textContent = options.message || '确定要继续吗？';
+        bodyEl.appendChild(message);
+        if (options.detail) {
+            var detail = document.createElement('div');
+            detail.className = 'confirm-detail';
+            detail.textContent = options.detail;
+            bodyEl.appendChild(detail);
+        }
+        okBtn.textContent = options.okText || '确认';
+        cancelBtn.textContent = options.cancelText || '取消';
+        okBtn.className = 'btn ' + (options.okClass || 'btn-danger');
+
+        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        var settled = false;
+        var cleanup = function() {
+            okBtn.removeEventListener('click', onOk);
+            modalEl.removeEventListener('hidden.bs.modal', onHidden);
+        };
+        var onOk = function() {
+            settled = true;
+            cleanup();
+            modal.hide();
+            resolve(true);
+        };
+        var onHidden = function() {
+            cleanup();
+            if (!settled) resolve(false);
+        };
+        okBtn.addEventListener('click', onOk);
+        modalEl.addEventListener('hidden.bs.modal', onHidden, { once: true });
+        modal.show();
+    });
+}
 function showToast(msg, type = 'success') {
     const c = document.getElementById('toast_container');
     const el = document.createElement('div');

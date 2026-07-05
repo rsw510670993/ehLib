@@ -11,7 +11,7 @@ async function doDownload() {
     const url = document.getElementById('dl_url').value.trim();
     if (!url) { showToast('请输入 URL', 'warning'); return; }
     const force = document.getElementById('dl_force_url').checked;
-    if (force && !confirm('⚠ 强制重新下载将清空本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
+    if (force && !await confirmDialog({ title: '确认强制重新下载', message: '强制重新下载将清空本地图片文件并覆盖数据库记录。', detail: '这个操作不可撤销，确定要继续吗？', okText: '强制下载' })) return;
     clearOutput('dl_output');
     document.getElementById('dl_output').classList.add('show');
     document.getElementById('dl_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>下载中，请稍候...';
@@ -33,7 +33,7 @@ async function doDownloadById() {
     const gid = document.getElementById('dl_gid').value.trim();
     const token = document.getElementById('dl_token').value.trim();
     const force = document.getElementById('dl_force_id').checked;
-    if (force && !confirm('⚠ 强制重新下载将清空本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
+    if (force && !await confirmDialog({ title: '确认强制重新下载', message: '强制重新下载将清空本地图片文件并覆盖数据库记录。', detail: '这个操作不可撤销，确定要继续吗？', okText: '强制下载' })) return;
 
     clearOutput('dl_output');
     document.getElementById('dl_output').classList.add('show');
@@ -63,7 +63,7 @@ async function doBatchDownload() {
     const urls = document.getElementById('batch_urls').value.trim();
     if (!urls) { showToast('请输入 URL', 'warning'); return; }
     const force = document.getElementById('batch_force').checked;
-    if (force && !confirm('⚠ 强制重新下载将清空所有本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
+    if (force && !await confirmDialog({ title: '确认批量强制重新下载', message: '强制重新下载将清空所有匹配画廊的本地图片文件并覆盖数据库记录。', detail: '这个操作不可撤销，确定要继续吗？', okText: '强制批量下载' })) return;
     if (!setButtonBusy('batch_download_btn', true, '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中')) return;
     clearOutput('batch_output');
     document.getElementById('batch_output').classList.add('show');

@@ -72,7 +72,7 @@ function clearGalleryFilter() {
 }
 
 async function recoverOrphans() {
-    if (!confirm('扫描下载目录，将已下载但无数据库记录的画廊恢复到列表中？\n已有记录的画廊不受影响。')) return;
+    if (!await confirmDialog({ title: '恢复孤儿目录', message: '扫描下载目录，将已下载但无数据库记录的画廊恢复到列表中。', detail: '已有记录的画廊不受影响。', okText: '开始恢复', okClass: 'btn-warning' })) return;
     var btn = document.querySelector('[onclick*="recoverOrphans"]');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 恢复中...'; }
     try {
@@ -86,7 +86,7 @@ async function recoverOrphans() {
 }
 
 async function deleteGalleryFromCard(btn, source, sourceId, title) {
-    if (!confirm('⚠ 确定删除这本本地画廊吗？\n\n' + title + '\n\n这会同时删除本地图片文件和数据库记录。')) return;
+    if (!await confirmDialog({ title: '删除本地画廊', message: '确定删除这本本地画廊吗？', detail: title + '\n\n这会同时删除本地图片文件和数据库记录。', okText: '删除', okClass: 'btn-danger' })) return;
     btn.disabled = true;
     var oldHtml = btn.innerHTML;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
