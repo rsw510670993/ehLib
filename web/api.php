@@ -427,7 +427,9 @@ try {
             $tag_mode = $_GET['tag_mode'] ?? 'any';
             $artist = $_GET['artist'] ?? '';
             $language = $_GET['language'] ?? '';
-            $limit = max(1, min(200, (int)($_GET['limit'] ?? 50)));
+            $per_page = max(1, min(200, (int)($_GET['per_page'] ?? 20)));
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $offset = ($page - 1) * $per_page;
             $tag_names = [];
             if ($tags_raw !== '') {
                 foreach (explode(',', $tags_raw) as $tag) {
@@ -442,26 +444,44 @@ try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
                 $params = [];
-                if ($tag_names && $tag_mode === 'any') {
-                    $query = 'SELECT DISTINCT g.* FROM galleries g JOIN gallery_tags gt ON g.id = gt.gallery_id JOIN tags t ON gt.tag_id = t.id WHERE (' . implode(' OR ', array_fill(0, count($tag_names), 't.name LIKE ?')) . ')';
+                $has_tags = !empty($tag_names);
+                $from = $has_tags ? 'galleries g' : 'galleries';
+                $joins = '';
+                $prefix = $has_tags ? 'g.' : '';
+                $where = 'WHERE 1=1';
+
+                if ($has_tags) {
+                    $joins = ' JOIN gallery_tags gt ON g.id = gt.gallery_id JOIN tags t ON gt.tag_id = t.id';
+                    $where = 'WHERE (' . implode(' OR ', array_fill(0, count($tag_names), 't.name LIKE ?')) . ')';
                     foreach ($tag_names as $tag) $params[] = '%' . $tag . '%';
-                } elseif ($tag_names && $tag_mode === 'all') {
-                    $query = 'SELECT g.* FROM galleries g JOIN gallery_tags gt ON g.id = gt.gallery_id JOIN tags t ON gt.tag_id = t.id WHERE (' . implode(' OR ', array_fill(0, count($tag_names), 't.name LIKE ?')) . ')';
-                    foreach ($tag_names as $tag) $params[] = '%' . $tag . '%';
+                }
+                if ($source) { $where .= ' AND ' . $prefix . 'source=?'; $params[] = $source; }
+                if ($artist) { $where .= ' AND ' . $prefix . 'artist LIKE ?'; $params[] = '%' . $artist . '%'; }
+                if ($language) { $where .= ' AND ' . $prefix . 'language=?'; $params[] = $language; }
+
+                $group_having = '';
+                if ($has_tags && $tag_mode === 'all') {
+                    $group_having = ' GROUP BY g.id HAVING COUNT(DISTINCT t.id) = ' . count($tag_names);
+                }
+
+                // Count query
+                if ($has_tags && $tag_mode === 'all') {
+                    $count_query = "SELECT COUNT(*) FROM (SELECT g.id FROM $from $joins $where $group_having) AS cnt";
+                } elseif ($has_tags) {
+                    $count_query = "SELECT COUNT(DISTINCT g.id) FROM $from $joins $where";
                 } else {
-                    $query = 'SELECT * FROM galleries WHERE 1=1';
+                    $count_query = "SELECT COUNT(*) FROM $from $where";
                 }
-                $prefix = ($tag_names ? 'g.' : '');
-                if ($source) { $query .= ' AND ' . $prefix . 'source=?'; $params[] = $source; }
-                if ($artist) { $query .= ' AND ' . $prefix . 'artist LIKE ?'; $params[] = '%' . $artist . '%'; }
-                if ($language) { $query .= ' AND ' . $prefix . 'language=?'; $params[] = $language; }
-                if ($tag_names && $tag_mode === 'all') {
-                    $query .= ' GROUP BY g.id HAVING COUNT(DISTINCT t.id) = ' . count($tag_names);
-                }
-                $order_prefix = ($tag_names ? 'g.' : '');
-                $query .= ' ORDER BY COALESCE(NULLIF(' . $order_prefix . 'uploaded_at, ' . $pdo->quote('') . '), ' . $pdo->quote('0000-00-00') . ') DESC, CAST(SUBSTR(' . $order_prefix . 'source_id || ' . $pdo->quote('/') . ', 1, INSTR(' . $order_prefix . 'source_id || ' . $pdo->quote('/') . ', ' . $pdo->quote('/') . ') - 1) AS INTEGER) DESC LIMIT ?';
-                $params[] = $limit;
-                $stmt = $pdo->prepare($query);
+                $count_stmt = $pdo->prepare($count_query);
+                $count_stmt->execute($params);
+                $total = (int)$count_stmt->fetchColumn();
+
+                // Data query with limit/offset
+                $select_cols = $has_tags ? 'g.*' : '*';
+                $order_col = $prefix . 'uploaded_at';
+                $order_id_col = $prefix . 'source_id';
+                $data_query = "SELECT $select_cols FROM $from $joins $where $group_having ORDER BY COALESCE(NULLIF($order_col, '') , '0000-00-00') DESC, CAST(SUBSTR($order_id_col || '/', 1, INSTR($order_id_col || '/', '/') - 1) AS INTEGER) DESC LIMIT $per_page OFFSET $offset";
+                $stmt = $pdo->prepare($data_query);
                 $stmt->execute($params);
                 $rows = $stmt->fetchAll();
                 $galleries = [];
@@ -483,7 +503,7 @@ try {
                         'cover_url' => public_cover_url($row['source'] ?? '', $row['source_id'] ?? ''),
                     ];
                 }
-                json_exit(['galleries' => $galleries]);
+                json_exit(['galleries' => $galleries, 'total' => $total, 'page' => $page, 'per_page' => $per_page]);
             } catch (Exception $e) {
                 error_exit($e->getMessage());
             }

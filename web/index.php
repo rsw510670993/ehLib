@@ -303,12 +303,12 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="card-header">重新下载</div>
                 <div class="card-body">
                     <p class="mb-2 text-muted">重新尝试下载之前未完成的画廊（数据库标记为 is_complete=0 的记录）。</p>
-                    <button class="btn btn-warning me-2" id="retry_btn" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
-                    <button class="btn btn-outline-warning" onclick="recoverOrphans()" title="扫描下载目录恢复到数据库"><i class="fas fa-ambulance me-1"></i>恢复孤儿目录</button>
-                    <div class="mb-2">
-                        <label class="form-check-label" style="cursor:pointer">
-                            <input type="checkbox" id="retry_skip_existing" class="form-check-input" checked> 跳过已下载图片
+                    <div class="d-flex align-items-center gap-3 mb-2">
+                        <label class="form-check-label d-flex align-items-center gap-1" style="cursor:pointer">
+                            <input type="checkbox" id="retry_skip_existing" class="form-check-input mt-0" checked> 跳过已下载图片
                         </label>
+                        <button class="btn btn-warning" id="retry_btn" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
+                        <button class="btn btn-outline-warning" onclick="recoverOrphans()" title="扫描下载目录恢复到数据库"><i class="fas fa-ambulance me-1"></i>恢复孤儿目录</button>
                     </div>
                     <div id="retry_progress_list" class="mt-2 mb-2" style="display:none"></div>
                     <div id="retry_output" class="output-box"></div>
@@ -360,6 +360,7 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="card-body" id="gallery_grid_body">
                     <div class="text-center text-muted py-5"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
                 </div>
+                <div class="card-footer" id="gallery_pagination"></div>
             </div>
         </div>
 

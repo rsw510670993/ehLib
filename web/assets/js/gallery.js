@@ -1,7 +1,19 @@
 // ─── Gallery (Card Grid) ───
 let _galleryFilters = {};
+let _galleryPage = 1;
+let _galleryPerPage = 20;
+let _galleryTotal = 0;
 
+function gotoGalleryPage(page) {
+    _galleryPage = page;
+    loadGalleries(_galleryFilters);
+}
 
+function setGalleryPerPage(n) {
+    _galleryPerPage = n;
+    _galleryPage = 1;
+    loadGalleries(_galleryFilters);
+}
 
 function openIncompleteGalleryRetry(source, sourceId) {
     switchPage('download');
@@ -21,7 +33,7 @@ async function loadGalleries(filters) {
     const body = document.getElementById('gallery_grid_body');
     body.innerHTML = '<div class="text-center text-muted py-5"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>';
 
-    let params = '?action=get_galleries';
+    let params = '?action=get_galleries&page=' + _galleryPage + '&per_page=' + _galleryPerPage;
     if (filters.source) params += '&source=' + encodeURIComponent(filters.source);
     if (filters.tags) params += '&tags=' + encodeURIComponent(filters.tags);
     if (filters.tag_mode) params += '&tag_mode=' + encodeURIComponent(filters.tag_mode);
@@ -34,8 +46,11 @@ async function loadGalleries(filters) {
 
     if (!data.ok || !data.galleries || data.galleries.length === 0) {
         body.innerHTML = '<div class="text-center text-muted py-5">暂无数据</div>';
+        document.getElementById('gallery_pagination').innerHTML = '';
         return;
     }
+
+    _galleryTotal = data.total || 0;
 
     body.innerHTML = '<div class="gallery-flex-grid" id="gallery_grid">' +
         data.galleries.map(function(g) {
@@ -70,9 +85,54 @@ async function loadGalleries(filters) {
                 '</div>';
         }).join('') +
         '</div>';
+
+    renderGalleryPagination();
+}
+
+function renderGalleryPagination() {
+    const el = document.getElementById('gallery_pagination');
+    if (!el) return;
+    var totalPages = Math.ceil(_galleryTotal / _galleryPerPage);
+    if (totalPages <= 1) { el.innerHTML = ''; return; }
+
+    var html = '<div class="d-flex flex-wrap align-items-center justify-content-center gap-3">';
+
+    html += '<nav aria-label="Gallery pagination"><ul class="pagination pagination-sm mb-0">';
+
+    html += '<li class="page-item' + (_galleryPage <= 1 ? ' disabled' : '') + '"><a class="page-link" href="#" onclick="event.preventDefault();gotoGalleryPage(' + (_galleryPage - 1) + ')" aria-label="上一页">&laquo;</a></li>';
+
+    var start = Math.max(1, _galleryPage - 2);
+    var end = Math.min(totalPages, _galleryPage + 2);
+    if (start > 1) {
+        html += '<li class="page-item"><a class="page-link" href="#" onclick="event.preventDefault();gotoGalleryPage(1)">1</a></li>';
+        if (start > 2) html += '<li class="page-item disabled"><span class="page-link" aria-hidden="true">&hellip;</span></li>';
+    }
+    for (var i = start; i <= end; i++) {
+        html += '<li class="page-item' + (i === _galleryPage ? ' active' : '') + '"' + (i === _galleryPage ? ' aria-current="page"' : '') + '><a class="page-link" href="#" onclick="event.preventDefault();gotoGalleryPage(' + i + ')">' + i + '</a></li>';
+    }
+    if (end < totalPages) {
+        if (end < totalPages - 1) html += '<li class="page-item disabled"><span class="page-link" aria-hidden="true">&hellip;</span></li>';
+        html += '<li class="page-item"><a class="page-link" href="#" onclick="event.preventDefault();gotoGalleryPage(' + totalPages + ')">' + totalPages + '</a></li>';
+    }
+
+    html += '<li class="page-item' + (_galleryPage >= totalPages ? ' disabled' : '') + '"><a class="page-link" href="#" onclick="event.preventDefault();gotoGalleryPage(' + (_galleryPage + 1) + ')" aria-label="下一页">&raquo;</a></li>';
+
+    html += '</ul></nav>';
+
+    html += '<div class="d-flex align-items-center gap-1 text-nowrap"><span class="text-muted small">每页</span>' +
+        '<div class="btn-group btn-group-sm" role="group" aria-label="每页显示数量">' +
+        '<button type="button" class="btn ' + (_galleryPerPage === 20 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(20)">20</button>' +
+        '<button type="button" class="btn ' + (_galleryPerPage === 50 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(50)">50</button>' +
+        '</div>' +
+        '<span class="text-muted small">共 ' + _galleryTotal + ' 本</span></div>';
+
+    html += '</div>';
+
+    el.innerHTML = html;
 }
 
 function applyGalleryFilter() {
+    _galleryPage = 1;
     const tags = document.getElementById('gallery_tag_filter').value.trim();
     const tagMode = document.getElementById('gallery_tag_mode').value;
     const artist = document.getElementById('gallery_artist_filter').value.trim();
@@ -86,6 +146,7 @@ function applyGalleryFilter() {
 }
 
 function clearGalleryFilter() {
+    _galleryPage = 1;
     document.getElementById('gallery_tag_filter').value = '';
     document.getElementById('gallery_tag_mode').value = 'any';
     document.getElementById('gallery_artist_filter').value = '';
