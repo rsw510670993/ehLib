@@ -96,10 +96,14 @@ async def cmd_config(args: argparse.Namespace, config: Config, _db: Database) ->
 
 
 async def cmd_retry(args: argparse.Namespace, config: Config, db: Database) -> None:
+    import sys
     downloader = Downloader(config, db)
     try:
         results = await downloader.retry_incomplete(skip_existing=args.skip_existing)
-        print(f"Retry complete: {len(results)} galleries re-downloaded")
+        print(f"重试完成: {len(results)} 个画廊已重新下载")
+    except Exception as e:
+        print(f"重试失败: {e}", file=sys.stderr)
+        raise
     finally:
         await downloader.close()
 

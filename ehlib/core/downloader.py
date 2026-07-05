@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -139,18 +139,23 @@ class Downloader:
         incomplete = await self._db.get_incomplete_downloads()
         orphaned = await self._find_orphan_downloads(incomplete)
         jobs = incomplete + orphaned
+        total_jobs = len(jobs)
+        print(f"找到 {len(incomplete)} 个未完成的下载和 {len(orphaned)} 个孤儿目录，共 {total_jobs} 个任务")
         logger.info(
             "Found %d incomplete downloads and %d orphan directories to retry",
             len(incomplete), len(orphaned),
         )
         results = []
         failures: list[str] = []
-        for gallery in jobs:
+        for idx, gallery in enumerate(jobs, 1):
+            label = f"{gallery.source}/{gallery.source_id}"
+            title_display = (gallery.title or gallery.source_id)[:60]
+            print(f"[{idx}/{total_jobs}] 正在重试: [{gallery.source}] {title_display} ...")
             try:
                 result = await self.download(gallery.source, gallery.source_id, force=False, skip_existing=skip_existing)
                 results.append(result)
+                print(f"[{idx}/{total_jobs}] 完成: [{gallery.source}] {title_display}")
             except Exception as e:
-                label = f"{gallery.source}/{gallery.source_id}"
                 failures.append(label)
                 write_progress(
                     gallery.source,
@@ -161,9 +166,12 @@ class Downloader:
                     "failed",
                     str(e),
                 )
+                print(f"[{idx}/{total_jobs}] 失败: [{gallery.source}] {title_display} - {e}")
                 logger.error("Retry failed for %s: %s", label, e, exc_info=True)
         if failures:
-            raise RuntimeError("Retry failed for " + ", ".join(failures))
+            err_msg = "重试失败: " + ", ".join(failures)
+            print(err_msg)
+            raise RuntimeError(err_msg)
         return results
 
     async def _find_orphan_downloads(self, known: list[Gallery]) -> list[Gallery]:

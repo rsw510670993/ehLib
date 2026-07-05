@@ -241,26 +241,19 @@ async function checkDownloadProgress() {
         body.innerHTML = '';
         if (_batchActive) renderBatchProgress([], '等待下载任务启动...');
         if (_retryActive) {
-            // Check if background retry is still running AND show log progress
-            api('retry_status', { form: { action: 'retry_status' } }).then(function(status) {
+            // Check if background retry is still running
+            api('retry_status').then(function(status) {
                 if (status && status.running) {
-                    // Fetch latest log lines so the user sees live progress
-                    api('retry_log', { form: { action: 'retry_log' } }).then(function(log) {
-                        if (log && log.ok && log.output && log.output !== '无日志') {
-                            showOutput('retry_output', log.output, false);
-                        } else {
-                            renderRetryProgress([], '后台重试进行中...');
-                        }
-                    });
+                    renderRetryProgress([], '后台重试进行中...');
                 } else {
                     _retryActive = false;
-                    setButtonBusy('retry_btn', false);
-                    api('retry_log', { form: { action: 'retry_log' } }).then(function(log) {
-                        if (log && log.ok && log.output) {
-                            showOutput('retry_output', log.output, false);
-                        }
-                    });
-                    if (!_retryActive && !_activeProgressKey && !_batchActive) stopProgressPoller();
+                    renderRetryProgress([], '重试已完成');
+                    // Auto-hide the output box after 5 seconds
+                    setTimeout(function() {
+                        var el = document.getElementById('retry_output');
+                        if (el) { el.classList.remove('show'); el.innerHTML = ''; }
+                    }, 5000);
+                    if (!_activeProgressKey && !_batchActive) stopProgressPoller();
                 }
             });
             return;

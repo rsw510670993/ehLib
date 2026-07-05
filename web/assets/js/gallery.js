@@ -3,6 +3,18 @@ let _galleryFilters = {};
 
 
 
+function openIncompleteGalleryRetry(source, sourceId) {
+    switchPage('download');
+    showToast('这本画廊尚未下载完成，请使用“重试未完成下载”。', 'warning');
+    setTimeout(function() {
+        var retryBtn = document.getElementById('retry_btn');
+        if (retryBtn) {
+            retryBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            retryBtn.classList.add('btn-danger');
+            setTimeout(function() { retryBtn.classList.remove('btn-danger'); }, 1800);
+        }
+    }, 80);
+}
 async function loadGalleries(filters) {
     filters = filters || _galleryFilters || {};
     _galleryFilters = { ...filters };
@@ -31,17 +43,27 @@ async function loadGalleries(filters) {
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
             var fallbackImgUrl = imageApiUrl(g.source, g.source_id, 'cover');
             var imgUrl = g.cover_url || fallbackImgUrl;
+            var totalPages = parseInt(g.total_pages || g.pages || 0, 10) || 0;
+            var downloadedPages = parseInt(g.downloaded_pages || 0, 10) || 0;
+            var isComplete = g.is_complete !== false && g.is_complete !== 0 && g.is_complete !== '0';
+            var progressText = isComplete ? (totalPages + 'p') : (downloadedPages + '/' + totalPages + 'p');
+            var cardClass = isComplete ? '' : ' gallery-card-incomplete';
+            var clickAction = isComplete
+                ? 'openReader(\'' + g.source + '\',\'' + g.source_id + '\')'
+                : 'openIncompleteGalleryRetry(\'' + g.source + '\',\'' + g.source_id + '\')';
+            var statusBadge = isComplete ? '' : '<span class="badge bg-warning text-dark gallery-status-badge">未完成</span>';
             return '<div data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
-                '<div class="card h-100 gallery-card" onclick="openReader(\'' + g.source + '\',\'' + g.source_id + '\')">' +
+                '<div class="card h-100 gallery-card' + cardClass + '" onclick="' + clickAction + '">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
                 '<img src="' + imgUrl + '" data-fallback="' + fallbackImgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="fallbackImageOnError(this)">' +
+                statusBadge +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitle) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
                 '<div class="card-body p-2">' +
                 '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
-                '<div class="d-flex justify-content-between align-items-center">' +
+                '<div class="d-flex justify-content-between align-items-center gap-1">' +
                 '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + g.source + '</span>' +
-                '<span class="small text-muted">' + g.pages + 'p</span>' +
+                '<span class="small ' + (isComplete ? 'text-muted' : 'text-warning fw-semibold') + '">' + progressText + '</span>' +
                 '</div>' +
                 '</div>' +
                 '</div>' +

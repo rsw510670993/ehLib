@@ -278,11 +278,12 @@ function run_python_background($args) {
         $cmd .= ' ' . escapeshellarg($a);
     }
 
-    $log_file = $data_dir . '/retry_bg.log';
     $pid_file = $data_dir . '/retry.pid';
 
     // Start in background; write PID so we can track it later
-    $full_cmd = 'nohup ' . $cmd . ' > ' . $log_file . ' 2>&1 & echo $! > ' . $pid_file;
+    // cd to $root so relative paths (e.g. data/progress) resolve correctly
+    // stdout/stderr discarded — progress is tracked via data/progress/*.json files
+    $full_cmd = 'cd ' . escapeshellarg($root) . ' && nohup ' . $cmd . ' > /dev/null 2>&1 & echo $! > ' . $pid_file;
     exec($full_cmd);
 
     $pid = is_file($pid_file) ? trim(file_get_contents($pid_file)) : 'unknown';
@@ -599,7 +600,9 @@ try {
                 $tasks[] = $data;
             }
             usort($tasks, function ($a, $b) {
-                return ($b['updated_at'] ?? 0) - ($a['updated_at'] ?? 0);
+                $cmp = strcmp($a['source'] ?? '', $b['source'] ?? '');
+                if ($cmp !== 0) return $cmp;
+                return strcmp($a['source_id'] ?? '', $b['source_id'] ?? '');
             });
             json_exit(['tasks' => $tasks]);
             break;
@@ -810,22 +813,6 @@ try {
                 }
             }
             json_exit(['running' => $running]);
-            break;
-
-        case 'retry_log':
-            $log_file = $root . '/data/retry_bg.log';
-            $output = '';
-            if (is_file($log_file)) {
-                $size = filesize($log_file);
-                $max_bytes = 4000;
-                if ($size > $max_bytes) {
-                    $output = file_get_contents($log_file, false, null, $size - $max_bytes);
-                    $output = '(日志已截断, 仅显示末尾' . $max_bytes . '字节)' . "\n" . $output;
-                } else {
-                    $output = file_get_contents($log_file);
-                }
-            }
-            json_exit(['output' => $output ?: '无日志'], true);
             break;
 
         case 'export':
