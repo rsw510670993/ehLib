@@ -1,5 +1,19 @@
 const API = 'api.php';
 
+function imageApiUrl(source, sourceId, page) {
+    return API + '?action=serve_image&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId) + '&page=' + encodeURIComponent(page);
+}
+
+function fallbackImageOnError(img) {
+    var fallback = img.dataset ? img.dataset.fallback : '';
+    if (fallback && img.src.indexOf(fallback) === -1) {
+        img.dataset.fallback = '';
+        img.src = fallback;
+        return;
+    }
+    img.style.display = 'none';
+}
+
 function showToast(msg, type = 'success') {
     const c = document.getElementById('toast_container');
     const el = document.createElement('div');

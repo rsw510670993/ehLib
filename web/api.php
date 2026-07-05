@@ -80,6 +80,68 @@ function is_path_within($child, $parent) {
     return $child === $parent || str_starts_with($child, $parent . DIRECTORY_SEPARATOR);
 }
 
+
+function public_gallery_image_url($source, $source_id, $file) {
+    if ($source === '' || $source_id === '' || $file === '') return '';
+    $public_source_id = str_replace('/', '_', $source_id);
+    foreach ([$source, $public_source_id, $file] as $part) {
+        if (str_contains($part, '/') || str_contains($part, '\\') || $part === '.' || $part === '..') return '';
+    }
+    return 'ehlib_images/' . rawurlencode($source) . '/' . rawurlencode($public_source_id) . '/' . rawurlencode($file);
+}
+
+function public_image_url_from_path($path) {
+    $download_base = resolve_download_path();
+    $normalized = normalize_path($path);
+    if (!is_path_within($normalized, $download_base)) return '';
+    $base = rtrim(normalize_path($download_base), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    $relative = substr($normalized, strlen($base));
+    if ($relative === false || $relative === '') return '';
+    $parts = preg_split('/[\\\\\/]+/', $relative);
+    $encoded = [];
+    foreach ($parts as $part) {
+        if ($part === '' || $part === '.' || $part === '..') return '';
+        $encoded[] = rawurlencode($part);
+    }
+    return 'ehlib_images/' . implode('/', $encoded);
+}
+
+function find_gallery_image_path($local_path, $page) {
+    $exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    if ($page === 'cover') {
+        foreach ($exts as $ext) {
+            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
+            if (is_file($candidate)) return $candidate;
+        }
+        foreach (['001', '1'] as $name) {
+            foreach ($exts as $ext) {
+                $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
+                if (is_file($candidate)) return $candidate;
+            }
+        }
+        return '';
+    }
+    $page_num = (int)$page;
+    if ($page_num < 1) return '';
+    foreach ([sprintf('%03d', $page_num), (string)$page_num] as $name) {
+        foreach ($exts as $ext) {
+            $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
+            if (is_file($candidate)) return $candidate;
+        }
+    }
+    return '';
+}
+
+function public_cover_url($source, $source_id) {
+    global $root;
+    $base = normalize_path($root . DIRECTORY_SEPARATOR . 'web' . DIRECTORY_SEPARATOR . 'ehlib_images');
+    $public_source_id = str_replace('/', '_', $source_id);
+    $dir = normalize_path($base . DIRECTORY_SEPARATOR . $source . DIRECTORY_SEPARATOR . $public_source_id);
+    if (!is_path_within($dir, $base) || !is_dir($dir)) return '';
+    $img_path = find_gallery_image_path($dir, 'cover');
+    return $img_path ? public_gallery_image_url($source, $source_id, basename($img_path)) : '';
+}
+
 function delete_dir_recursive($dir) {
     if (!is_dir($dir)) return true;
     $items = scandir($dir);
@@ -346,6 +408,7 @@ try {
                         'title_jp' => $m[4],
                         'pages' => (int)$m[5],
                         'downloaded_at' => $m[6],
+                        'cover_url' => public_cover_url($m[1], $m[2]),
                     ];
                 }
             }
@@ -555,7 +618,7 @@ try {
                     foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
                         $candidate = $local_path . DIRECTORY_SEPARATOR . sprintf('%03d', $i) . '.' . $ext;
                         if (is_file($candidate)) {
-                            $images[] = ['page' => $i, 'file' => sprintf('%03d', $i) . '.' . $ext];
+                            $images[] = ['page' => $i, 'file' => sprintf('%03d', $i) . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
                             $found = true;
                             break;
                         }
@@ -564,7 +627,7 @@ try {
                         foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
                             $candidate = $local_path . DIRECTORY_SEPARATOR . $i . '.' . $ext;
                             if (is_file($candidate)) {
-                                $images[] = ['page' => $i, 'file' => $i . '.' . $ext];
+                                $images[] = ['page' => $i, 'file' => $i . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
                                 $found = true;
                                 break;
                             }

@@ -29,11 +29,12 @@ async function loadGalleries(filters) {
         data.galleries.map(function(g) {
             var displayTitle = g.title_jp || g.title;
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
-            var imgUrl = API + '?action=serve_image&source=' + encodeURIComponent(g.source) + '&source_id=' + encodeURIComponent(g.source_id) + '&page=cover';
+            var fallbackImgUrl = imageApiUrl(g.source, g.source_id, 'cover');
+            var imgUrl = g.cover_url || fallbackImgUrl;
             return '<div data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
                 '<div class="card h-100 gallery-card" onclick="openReader(\'' + g.source + '\',\'' + g.source_id + '\')">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
-                '<img src="' + imgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="this.style.display=\'none\'">' +
+                '<img src="' + imgUrl + '" data-fallback="' + fallbackImgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="fallbackImageOnError(this)">' +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitle) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
                 '<div class="card-body p-2">' +

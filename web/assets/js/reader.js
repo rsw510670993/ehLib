@@ -40,6 +40,18 @@ var _readerCurrentPage = 1;
 var _readerTotalPages = 0;
 var _readerImageList = [];
 
+function readerImageForPage(page) {
+    for (var i = 0; i < _readerImageList.length; i++) {
+        if ((_readerImageList[i].page || (i + 1)) === page) return _readerImageList[i];
+    }
+    return null;
+}
+
+function readerImageUrl(page) {
+    var img = readerImageForPage(page);
+    return (img && img.url) ? img.url : imageApiUrl(_readerSource, _readerSourceId, page);
+}
+
 function openReader(source, sourceId) {
     _readerSource = source;
     _readerSourceId = sourceId;
@@ -103,9 +115,10 @@ function openReader(source, sourceId) {
             data.images.forEach(function(img, idx) {
                 var pageNum = img.page || (idx + 1);
                 if (img.file) {
-                    var thumbUrl = API + '?action=serve_image&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId) + '&page=' + pageNum;
+                    var fallbackThumbUrl = imageApiUrl(source, sourceId, pageNum);
+                    var thumbUrl = img.url || fallbackThumbUrl;
                     thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')">' +
-                        '<img src="' + thumbUrl + '" alt="p' + pageNum + '" loading="lazy">' +
+                        '<img src="' + thumbUrl + '" data-fallback="' + fallbackThumbUrl + '" alt="p' + pageNum + '" loading="lazy" onerror="fallbackImageOnError(this)">' +
                         '</div>';
                 } else {
                     thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')" style="text-align:center;padding:.5rem;color:#666;font-size:.75rem">' +
@@ -151,14 +164,19 @@ function readerGoToPage(page) {
     }
 
     // Load main image
-    var imgUrl = API + '?action=serve_image&source=' + encodeURIComponent(_readerSource) + '&source_id=' + encodeURIComponent(_readerSourceId) + '&page=' + page;
-    document.getElementById('reader_main_img').src = imgUrl;
+    var fallbackImgUrl = imageApiUrl(_readerSource, _readerSourceId, page);
+    var imgUrl = readerImageUrl(page);
+    var mainImg = document.getElementById('reader_main_img');
+    mainImg.style.display = '';
+    mainImg.dataset.fallback = fallbackImgUrl;
+    mainImg.onerror = function() { fallbackImageOnError(this); };
+    mainImg.src = imgUrl;
 
     // Preload next 2 pages
     for (var i = 1; i <= 2; i++) {
         var nextPage = page + i;
         if (nextPage <= _readerTotalPages) {
-            var preloadUrl = API + '?action=serve_image&source=' + encodeURIComponent(_readerSource) + '&source_id=' + encodeURIComponent(_readerSourceId) + '&page=' + nextPage;
+            var preloadUrl = readerImageUrl(nextPage);
             var link = document.createElement('link');
             link.rel = 'preload';
             link.as = 'image';
