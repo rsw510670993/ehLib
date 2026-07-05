@@ -797,6 +797,29 @@ try {
             ], $result['ok']);
             break;
 
+        case 'search':
+            $source = $_POST['source'] ?? 'exhentai';
+            $query = $_POST['query'] ?? '';
+            $page = max(1, (int)($_POST['page'] ?? 1));
+            $next = $_POST['next'] ?? '';
+            if (!$query) error_exit('Search query required');
+            $args = ['search', $source, '--query', $query, '--page', (string)$page];
+            if ($next !== '') {
+                $args[] = '--next';
+                $args[] = $next;
+            }
+            $result = run_python($args, 60);
+            if (!$result['ok']) error_exit($result['stderr'] ?: 'Search failed');
+            $data = json_decode($result['stdout'], true);
+            if (!is_array($data)) error_exit('Invalid search results');
+            json_exit([
+                'results' => $data['galleries'] ?? $data,
+                'page' => $data['page'] ?? $page,
+                'next_cursor' => $data['next_cursor'] ?? '',
+                'has_next' => !empty($data['has_next']),
+            ]);
+            break;
+
         case 'retry':
             $skip = !empty($_POST['skip_existing']);
             $data_dir = $root . '/data';

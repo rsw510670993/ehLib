@@ -12,6 +12,7 @@ function switchPage(name) {
         settings: ['系统设置', '下载路径、并发、User-Agent 等'],
         download: ['下载控制', '单一下载、批量下载、重试'],
         gallery: ['本地图库', '已下载的画廊列表'],
+        search: ['在线搜索', '搜索 exhentai 并批量下载'],
         export: ['数据导出', '导出元数据为 JSON'],
     };
     const t = titles[name] || ['页面', ''];

@@ -21,6 +21,9 @@ class ExhentaiSite(SiteBase):
 
     def __init__(self, config: Config, session: SessionManager):
         super().__init__(config, session)
+        self.current_page: int = 1
+        self.next_cursor: str = ""
+        self.has_next: bool = False
 
     def parse_gallery_id_from_url(self, url: str) -> str:
         result = parse_exhentai_url(url)
@@ -58,6 +61,153 @@ class ExhentaiSite(SiteBase):
             gallery.page_urls = gallery.page_urls[:total_pages]
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
+
+    async def search(self, query: str, page: int = 1, next_cursor: str = "") -> list[Gallery]:
+        params = {"f_search": query}
+        if next_cursor:
+            params["next"] = next_cursor
+            self.current_page = page
+        else:
+            self.current_page = 1
+        url = f"{EXHENTAI_BASE}/"
+        response = await self._session.fetch(self.name, url, params=params)
+        if self._session.is_cloudflare_blocked(response):
+            raise RuntimeError("Cloudflare blocked search request. Try updating cookies.")
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        return self._parse_search_results(response.text)
+
+    def _parse_next_cursor(self, soup: BeautifulSoup) -> None:
+        import re
+        self.next_cursor = ""
+        self.has_next = False
+        for a in soup.select("a"):
+            href = a.get("href", "")
+            m = re.search(r"[?&]next=(\d+)", href)
+            if m and "next" in a.get_text(strip=True).lower():
+                self.next_cursor = m.group(1)
+                self.has_next = True
+                break
+
+    def _parse_search_results(self, html: str) -> list[Gallery]:
+        import re
+        soup = BeautifulSoup(html, "html.parser")
+        results: list[Gallery] = []
+
+        self._parse_next_cursor(soup)
+
+        table = soup.select_one("table.itg.gltm")
+        if table:
+            for row in table.select("tr"):
+                link = row.select_one("td a[href*='/g/']")
+                if not link:
+                    continue
+                href = link.get("href", "")
+                parsed = parse_exhentai_url(href)
+                if not parsed:
+                    continue
+                gid, token = parsed
+                combined_id = f"{gid}/{token}"
+
+                title_elem = row.select_one(".glink, .gl3m")
+                title = title_elem.get_text(strip=True) if title_elem else ""
+
+                total_pages_gallery = 0
+                uploaded_at = ""
+                gl2m = row.select_one(".gl2m")
+                if gl2m:
+                    text = gl2m.get_text(" ", strip=True)
+                    m = re.search(r"(\d+)\s+pages?", text, re.IGNORECASE)
+                    if m:
+                        total_pages_gallery = int(m.group(1))
+                    date_m = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", text)
+                    if date_m:
+                        uploaded_at = date_m.group(1)
+
+                results.append(Gallery(
+                    source="exhentai",
+                    source_id=combined_id,
+                    title=title,
+                    total_pages=total_pages_gallery,
+                    uploaded_at=uploaded_at,
+                ))
+            return results
+
+        if not results:
+            container = soup.select_one("table.itg.gld") or soup.select_one("table.itg")
+            if container:
+                for row in container.select("tr"):
+                    link = row.select_one("a[href*='/g/']")
+                    if not link:
+                        continue
+                    href = link.get("href", "")
+                    parsed = parse_exhentai_url(href)
+                    if not parsed:
+                        continue
+                    gid, token = parsed
+                    combined_id = f"{gid}/{token}"
+
+                    title_elem = row.select_one(".glink")
+                    title = title_elem.get_text(strip=True) if title_elem else ""
+
+                    total_pages_gallery = 0
+                    uploaded_at = ""
+                    for cell in row.select("td"):
+                        cls = " ".join(cell.get("class", []))
+                        text = cell.get_text(" ", strip=True)
+                        if "gl4c" in cls:
+                            m = re.search(r"(\d+)\s+pages?", text, re.IGNORECASE)
+                            if m:
+                                total_pages_gallery = int(m.group(1))
+                        elif "gl7c" in cls:
+                            uploaded_at = text
+
+                    results.append(Gallery(
+                        source="exhentai",
+                        source_id=combined_id,
+                        title=title,
+                        total_pages=total_pages_gallery,
+                        uploaded_at=uploaded_at,
+                    ))
+
+        if not results:
+            container = soup.select_one("div.itg")
+            if container:
+                for item in container.find_all("div", class_=re.compile(r"^gl1"), recursive=False):
+                    link = item.select_one("a[href*='/g/']")
+                    if not link:
+                        continue
+                    href = link.get("href", "")
+                    parsed = parse_exhentai_url(href)
+                    if not parsed:
+                        continue
+                    gid, token = parsed
+                    combined_id = f"{gid}/{token}"
+
+                    title_elem = item.select_one(".glink")
+                    title = title_elem.get_text(strip=True) if title_elem else ""
+
+                    total_pages_gallery = 0
+                    uploaded_at = ""
+                    gl5t = item.select_one(".gl5t")
+                    if gl5t:
+                        text = gl5t.get_text(" ", strip=True)
+                        m = re.search(r"(\d+)\s+pages?", text, re.IGNORECASE)
+                        if m:
+                            total_pages_gallery = int(m.group(1))
+                        posted_div = gl5t.select_one("div[id^='posted_']")
+                        if posted_div:
+                            uploaded_at = posted_div.get_text(strip=True)
+
+                    results.append(Gallery(
+                        source="exhentai",
+                        source_id=combined_id,
+                        title=title,
+                        total_pages=total_pages_gallery,
+                        uploaded_at=uploaded_at,
+                    ))
+        return results
 
     def _parse_html(self, html: str, combined_id: str) -> Gallery:
         soup = BeautifulSoup(html, "html.parser")

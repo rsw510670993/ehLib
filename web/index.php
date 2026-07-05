@@ -21,6 +21,7 @@ $base = rtrim(dirname($scriptName), '/');
     <ul class="nav flex-column mt-2">
         <li class="nav-item"><a class="nav-link active" href="#" data-page="dashboard"><i class="fas fa-tachometer-alt"></i>仪表盘</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="search"><i class="fas fa-search"></i>在线搜索</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="fas fa-cog"></i>系统设置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="download"><i class="fas fa-download"></i>下载控制</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="cookies"><i class="fas fa-cookie-bite"></i>Cookie 配置</a></li>
@@ -65,15 +66,6 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_db">-</div><div class="stat-label">数据库状态</div></div></div>
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_venv">-</div><div class="stat-label">虚拟环境</div></div></div>
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_config">-</div><div class="stat-label">配置文件</div></div></div>
-            </div>
-            <div id="active_downloads_card" class="mb-3" style="display:none">
-                <div class="card border-primary">
-                    <div class="card-header bg-primary text-white py-2">
-                        <i class="fas fa-download me-1"></i>活跃下载
-                    </div>
-                    <div class="card-body py-2" id="active_downloads_body">
-                    </div>
-                </div>
             </div>
             <div class="card">
                 <div class="card-header">快捷操作</div>
@@ -364,6 +356,31 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
+        <!-- ═══ 在线搜索 ═══ -->
+        <div id="page_search" class="page-section section-hidden">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span>在线搜索 (exhentai 精简模式)</span>
+                    <button class="btn btn-sm btn-success" id="ex_batch_dl_btn2" onclick="batchDownloadSelected()" disabled><i class="fas fa-download me-1"></i>批量下载 <span id="ex_batch_count2">0</span></button>
+                </div>
+                <div class="card-body">
+                    <div class="row g-2 align-items-end mb-3">
+                        <div class="col-md-10">
+                            <input type="text" class="form-control" id="ex_search_query" placeholder="artist:shindol / tag:english / 任意关键词" onkeydown="if(event.key==='Enter')doExSearch()">
+                        </div>
+                        <div class="col-md-2">
+                            <button class="btn btn-primary w-100" onclick="doExSearch()"><i class="fas fa-search me-1"></i>搜索</button>
+                        </div>
+                    </div>
+                    <div id="ex_search_meta" class="small text-muted mb-2"></div>
+                    <div id="ex_search_results" class="table-responsive">
+                        <div class="text-center text-muted py-4">输入关键词开始搜索</div>
+                    </div>
+                    <div id="ex_search_pagination" class="mt-2"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ 阅读器 ═══ -->
         <div id="reader_page" class="section-hidden">
             <div class="reader-header">
@@ -421,6 +438,15 @@ $base = rtrim(dirname($scriptName), '/');
         </div>
 
     </div>
+
+    <!-- ═══ Persistent Downloads Progress Tray ═══ -->
+    <div id="active_downloads_card" class="downloads-tray collapsed">
+        <div class="downloads-tray-header" onclick="toggleDownloadsTray()">
+            <span><i class="fas fa-download me-1"></i>下载进度 <span class="small text-muted" id="tray_status_label">(空闲)</span></span>
+            <button class="downloads-tray-toggle" id="tray_toggle_btn" onclick="event.stopPropagation();toggleDownloadsTray()"><i class="fas fa-chevron-up"></i></button>
+        </div>
+        <div class="downloads-tray-body" id="active_downloads_body"></div>
+    </div>
 </div>
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
@@ -431,5 +457,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/gallery.js"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
+<script src="assets/js/search.js"></script>
 </body>
 </html>

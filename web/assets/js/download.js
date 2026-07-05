@@ -124,6 +124,7 @@ let _progressPoller = null;
 let _activeProgressKey = null;
 let _batchActive = false;
 let _retryActive = false;
+let _trayManualCollapsed = false;
 
 function startProgressPoller() {
     if (_progressPoller) return;
@@ -236,19 +237,22 @@ async function checkDownloadProgress() {
 
     const card = document.getElementById('active_downloads_card');
     const body = document.getElementById('active_downloads_body');
+    const label = document.getElementById('tray_status_label');
+    const btn = document.getElementById('tray_toggle_btn');
+
     if (tasks.length === 0) {
-        card.style.display = 'none';
         body.innerHTML = '';
+        if (label) label.textContent = _batchActive ? '(等待中...)' : '(空闲)';
+        card.classList.add('collapsed');
+        _trayManualCollapsed = false;
         if (_batchActive) renderBatchProgress([], '等待下载任务启动...');
         if (_retryActive) {
-            // Check if background retry is still running
             api('retry_status').then(function(status) {
                 if (status && status.running) {
                     renderRetryProgress([], '后台重试进行中...');
                 } else {
                     _retryActive = false;
                     renderRetryProgress([], '重试已完成');
-                    // Auto-hide the output box after 5 seconds
                     setTimeout(function() {
                         var el = document.getElementById('retry_output');
                         if (el) { el.classList.remove('show'); el.innerHTML = ''; }
@@ -262,13 +266,25 @@ async function checkDownloadProgress() {
         return;
     }
 
-    card.style.display = '';
-    body.innerHTML = renderProgressTaskRows(tasks);
+    if (label) label.textContent = '(' + tasks.length + ' 个任务)';
+    if (!_trayManualCollapsed) card.classList.remove('collapsed');
+    body.innerHTML = tasks.map(function(t) {
+        var total = parseInt(t.total_pages, 10) || 0;
+        var current = parseInt(t.current, 10) || 0;
+        var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(current / total * 100))) : 0;
+        var title = escapeHtml(t.title || t.source_id || '');
+        var srcClass = t.source === 'exhentai' ? 'badge-ex' : 'badge-nh';
+        var msg = escapeHtml(t.message || (current + '/' + total));
+        return '<div class="tray-row">' +
+            '<span class="badge ' + srcClass + '">' + escapeHtml(t.source || '') + '</span>' +
+            '<span class="tray-title" title="' + title + '">' + title + '</span>' +
+            '<div class="tray-bar"><div class="tray-bar-fill" style="width:' + pct + '%"></div></div>' +
+            '<span class="tray-pct">' + pct + '%</span>' +
+            '<span class="tray-status">' + msg + '</span>' +
+            '</div>';
+    }).join('');
     if (_batchActive) renderBatchProgress(tasks);
-    if (_retryActive) {
-        // When tasks exist, show progress bar text in black box too
-        renderRetryProgress(tasks);
-    }
+    if (_retryActive) renderRetryProgress(tasks);
 
     if (_activeProgressKey) {
         var active = tasks.find(function(t) { return progressTaskKey(t) === _activeProgressKey; });
@@ -284,6 +300,16 @@ async function checkDownloadProgress() {
                 bar.textContent = current + '/' + total;
             }
         }
+    }
+}
+function toggleDownloadsTray() {
+    var card = document.getElementById('active_downloads_card');
+    if (!card) return;
+    var isCollapsed = card.classList.toggle('collapsed');
+    _trayManualCollapsed = isCollapsed;
+    var btn = document.getElementById('tray_toggle_btn');
+    if (btn) {
+        btn.innerHTML = isCollapsed ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
     }
 }
 function trackDownloadProgress(source, sourceId) {

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -51,6 +52,40 @@ async def cmd_batch(args: argparse.Namespace, config: Config, db: Database) -> N
         print(f"Batch complete: {len(results)} galleries downloaded")
     finally:
         await downloader.close()
+
+
+async def cmd_search(args: argparse.Namespace, config: Config, _db: Database) -> None:
+    session = SessionManager(config)
+    try:
+        if args.source == "nhentai":
+            site = NhentaiSite(config, session)
+        elif args.source == "exhentai":
+            site = ExhentaiSite(config, session)
+        else:
+            print(json.dumps({"error": f"Unknown source '{args.source}'"}))
+            return
+
+        next_cursor = getattr(args, 'next_cursor', '')
+        results = await site.search(args.query, args.page, next_cursor)
+        galleries = []
+        for g in results:
+            galleries.append({
+                "source": g.source,
+                "source_id": g.source_id,
+                "title": g.title,
+                "title_jp": g.title_jp,
+                "total_pages": g.total_pages,
+                "uploaded_at": g.uploaded_at,
+            })
+        output = {
+            "galleries": galleries,
+            "page": getattr(site, 'current_page', args.page),
+            "next_cursor": getattr(site, 'next_cursor', ''),
+            "has_next": getattr(site, 'has_next', False),
+        }
+        print(json.dumps(output))
+    finally:
+        await session.close()
 
 
 async def cmd_list(args: argparse.Namespace, _config: Config, db: Database) -> None:
@@ -282,6 +317,12 @@ def main() -> None:
     batch.add_argument("--file", required=True, help="File containing URLs (one per line)")
     batch.add_argument("--force", action="store_true", help="Force re-download even if already complete (clears local data)")
 
+    search = subparsers.add_parser("search", help="Search galleries online")
+    search.add_argument("source", choices=["exhentai", "nhentai"], help="Source site")
+    search.add_argument("--query", required=True, help="Search query")
+    search.add_argument("--page", type=int, default=1, help="Page number (starting from 1)")
+    search.add_argument("--next", dest="next_cursor", default="", help="Next cursor from previous search results")
+
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
     lst.add_argument("--artist", help="Filter by artist")
@@ -329,6 +370,7 @@ def main() -> None:
         commands = {
             "download": cmd_download,
             "batch": cmd_batch,
+            "search": cmd_search,
             "list": cmd_list,
             "config": cmd_config,
             "retry": cmd_retry,

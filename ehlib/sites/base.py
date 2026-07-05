@@ -17,5 +17,9 @@ class SiteBase(ABC):
         ...
 
     @abstractmethod
+    async def search(self, query: str, page: int = 1) -> list[Gallery]:
+        ...
+
+    @abstractmethod
     def parse_gallery_id_from_url(self, url: str) -> str:
         ...
