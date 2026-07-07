@@ -67,7 +67,7 @@ async def cmd_search(args: argparse.Namespace, config: Config, _db: Database) ->
 
         next_cursor = getattr(args, 'next_cursor', '')
         prev_cursor = getattr(args, 'prev_cursor', '')
-        range_val = getattr(args, 'range', None)
+        range_val = getattr(args, 'range_val', None)
         categories = None
         categories_str = getattr(args, 'categories', '')
         if categories_str:

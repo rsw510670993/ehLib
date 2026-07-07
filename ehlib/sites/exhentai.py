@@ -103,7 +103,8 @@ class ExhentaiSite(SiteBase):
                 self.next_cursor = m.group(1)
                 self.has_next = True
             m = re.search(r"[?&]prev=(\d+)", href)
-            if m and "prev" in txt:
+            # "prev=1" link may have text "Last" (Last >>), not "prev"
+            if m and ("prev" in txt or "last" in txt):
                 self.prev_cursor = m.group(1)
 
     def _parse_total_results(self, soup: BeautifulSoup) -> None:
