@@ -121,6 +121,7 @@ async function performSearch() {
     _nextCursor = res.next_cursor || '';
     _hasNext = !!res.has_next;
     _totalPages = res.total_pages || 0;
+    if (!_hasNext && _totalPages > _searchPage) _totalPages = _searchPage;
     renderSearchTable();
     updateBatchButton();
 }
@@ -142,6 +143,7 @@ async function goToSearchPageDirect(p) {
 
     while (_searchPage < p) {
         if (!_hasNext || !_nextCursor) {
+            _totalPages = _searchPage;
             showToast('只有 ' + _searchPage + ' 页', 'warning');
             break;
         }
@@ -158,6 +160,7 @@ async function goToSearchPageDirect(p) {
         _nextCursor = res.next_cursor || '';
         _hasNext = !!res.has_next;
         _totalPages = res.total_pages || 0;
+        if (!_hasNext && _totalPages > _searchPage) _totalPages = _searchPage;
     }
     renderSearchTable();
     updateBatchButton();
