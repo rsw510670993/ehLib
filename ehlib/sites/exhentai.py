@@ -102,7 +102,7 @@ class ExhentaiSite(SiteBase):
         import re
         el = soup.select_one(".searchtext")
         if el:
-            m = re.search(r"Found\s+([\d,]+)\s+result", el.get_text())
+            m = re.search(r"Found\s+(?:about\s+)?([\d,]+)\s+result", el.get_text())
             if m:
                 self.total_results = int(m.group(1).replace(",", ""))
         if self.total_results > 0:
