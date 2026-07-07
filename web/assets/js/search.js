@@ -125,6 +125,13 @@ async function performSearch() {
     updateBatchButton();
 }
 
+var CAT_COLORS = {
+    'Doujinshi': '#e74c3c', 'Manga': '#3498db', 'Artist CG': '#9b59b6',
+    'Game CG': '#e67e22', 'Western': '#27ae60', 'Non-H': '#95a5a6',
+    'Image Set': '#1abc9c', 'Cosplay': '#e91e63', 'Asian Porn': '#795548',
+    'Misc': '#607d8b'
+};
+
 function renderSearchTable() {
     const el = document.getElementById('ex_search_results');
     const meta = document.getElementById('ex_search_meta');
@@ -145,12 +152,13 @@ function renderSearchTable() {
         var pages = parseInt(g.total_pages, 10) || 0;
         var posted = escapeHtml(g.uploaded_at || '');
         var cat = g.category || '';
-        var catBadge = cat ? '<span class="badge bg-secondary cat-badge">' + escapeHtml(cat) + '</span>' : '<span class="text-muted small">-</span>';
+        var catColor = CAT_COLORS[cat] || '#6c757d';
+        var catBadge = cat ? '<span class="cat-badge" style="color:#fff;background:' + catColor + '">' + escapeHtml(cat) + '</span>' : '<span class="text-muted small">-</span>';
         var checked = _selectedIds[sid] ? ' checked' : '';
         return '<tr>' +
             '<td style="width:36px"><input type="checkbox" class="form-check-input search-select mt-0" data-idx="' + idx + '"' + checked + ' onchange="toggleSearchResult(this,\'' + escapeAttr(sid) + '\')"></td>' +
+            '<td class="text-nowrap text-muted small" style="width:80px">' + catBadge + '</td>' +
             '<td><span class="small" title="' + displayTitle + '">' + displayTitle + '</span></td>' +
-            '<td class="text-nowrap text-muted small">' + catBadge + '</td>' +
             '<td class="text-nowrap text-muted small">' + pages + '</td>' +
             '<td class="text-nowrap text-muted small">' + posted + '</td>' +
             '<td class="text-nowrap" style="width:60px"><button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="doDownloadSingle(\'' + escapeAttr(sid) + '\')" title="下载"><i class="fas fa-download"></i></button></td>' +
@@ -160,19 +168,55 @@ function renderSearchTable() {
     el.innerHTML = '<table class="table table-sm table-hover align-middle mb-0">' +
         '<thead class="table-light"><tr>' +
         '<th style="width:36px"><input type="checkbox" class="form-check-input mt-0" onchange="toggleSelectAll(this)" title="全选/取消"></th>' +
-        '<th>标题</th><th style="width:80px">分类</th><th style="width:60px">页数</th><th style="width:150px">上传时间</th><th style="width:60px"></th>' +
+        '<th style="width:80px">分类</th><th>标题</th><th style="width:60px">页数</th><th style="width:150px">上传时间</th><th style="width:60px"></th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table>';
 
-    var pagHtml = '<div class="d-flex justify-content-center align-items-center gap-2">';
-    if (_searchPage > 1) {
-        pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="doExSearchPrev()"><i class="fas fa-chevron-left me-1"></i>上一页 (' + (_searchPage - 1) + ')</button>';
+    // ─── Pagination ───
+    var maxVisited = _cursorHistory.length;
+    var windowSize = 5;
+    var startPage = Math.max(1, _searchPage - Math.floor(windowSize / 2));
+    var endPage = startPage + windowSize - 1;
+    if (_hasNext && endPage <= _searchPage) endPage = _searchPage + 1;
+
+    var pagHtml = '<div class="d-flex justify-content-center align-items-center gap-1 flex-wrap">';
+
+    // First page
+    pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPage(1)"' + (_searchPage === 1 ? ' disabled' : '') + ' title="首页"><i class="fas fa-angle-double-left"></i></button>';
+    // Prev page
+    pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="doExSearchPrev()"' + (_searchPage <= 1 ? ' disabled' : '') + ' title="上一页"><i class="fas fa-chevron-left"></i></button>';
+
+    if (startPage > 2) pagHtml += '<span class="text-muted small px-1">…</span>';
+    if (startPage > 1) pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPage(1)">1</button>';
+
+    for (var p = startPage; p <= endPage; p++) {
+        if (p < 1) continue;
+        var loaded = p <= maxVisited;
+        if (p === _searchPage) {
+            pagHtml += '<button class="btn btn-primary btn-sm active">' + p + '</button>';
+        } else if (loaded) {
+            pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPage(' + p + ')">' + p + '</button>';
+        } else if (_hasNext && p === _searchPage + 1) {
+            pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()">' + p + '</button>';
+        }
     }
-    pagHtml += '<span class="small text-muted">' + _searchPage + '</span>';
-    if (_hasNext) {
-        pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()"><i class="fas fa-chevron-right me-1"></i>下一页 (' + (_searchPage + 1) + ')</button>';
+
+    if (_hasNext && _searchPage + 1 > endPage) {
+        pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()">' + (_searchPage + 1) + '</button>';
     }
+
+    // Next page
+    pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()"' + (!_hasNext ? ' disabled' : '') + ' title="下一页"><i class="fas fa-chevron-right"></i></button>';
+
     pagHtml += '</div>';
     pag.innerHTML = pagHtml;
+}
+
+function goToSearchPage(p) {
+    if (p < 1 || p === _searchPage) return;
+    if (p <= _cursorHistory.length) {
+        _searchPage = p;
+        performSearch();
+    }
 }
 
 function toggleSelectAll(cb) {

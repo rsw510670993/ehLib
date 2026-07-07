@@ -473,6 +473,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/gallery.js"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/search.js"></script>
+<script src="assets/js/search.js?v=2"></script>
 </body>
 </html>
