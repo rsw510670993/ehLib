@@ -802,11 +802,16 @@ try {
             $query = $_POST['query'] ?? '';
             $page = max(1, (int)($_POST['page'] ?? 1));
             $next = $_POST['next'] ?? '';
+            $categories = $_POST['categories'] ?? '';
             if (!$query) error_exit('Search query required');
             $args = ['search', $source, '--query', $query, '--page', (string)$page];
             if ($next !== '') {
                 $args[] = '--next';
                 $args[] = $next;
+            }
+            if ($categories !== '') {
+                $args[] = '--categories';
+                $args[] = $categories;
             }
             $result = run_python($args, 60);
             if (!$result['ok']) error_exit($result['stderr'] ?: 'Search failed');

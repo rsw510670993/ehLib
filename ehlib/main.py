@@ -66,7 +66,11 @@ async def cmd_search(args: argparse.Namespace, config: Config, _db: Database) ->
             return
 
         next_cursor = getattr(args, 'next_cursor', '')
-        results = await site.search(args.query, args.page, next_cursor)
+        categories = None
+        categories_str = getattr(args, 'categories', '')
+        if categories_str:
+            categories = [int(x.strip()) for x in categories_str.split(',') if x.strip().isdigit()]
+        results = await site.search(args.query, args.page, next_cursor, categories=categories)
         galleries = []
         for g in results:
             galleries.append({
@@ -74,6 +78,7 @@ async def cmd_search(args: argparse.Namespace, config: Config, _db: Database) ->
                 "source_id": g.source_id,
                 "title": g.title,
                 "title_jp": g.title_jp,
+                "category": g.category,
                 "total_pages": g.total_pages,
                 "uploaded_at": g.uploaded_at,
             })
@@ -322,6 +327,7 @@ def main() -> None:
     search.add_argument("--query", required=True, help="Search query")
     search.add_argument("--page", type=int, default=1, help="Page number (starting from 1)")
     search.add_argument("--next", dest="next_cursor", default="", help="Next cursor from previous search results")
+    search.add_argument("--categories", default="", help="Comma-separated category bitmask values (e.g. 2,4,8 for Doujinshi,Manga,Artist CG)")
 
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")

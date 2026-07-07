@@ -172,6 +172,59 @@ body { background: #f5f7fa; }
 }
 .confirm-message { white-space: pre-wrap; line-height: 1.5; }
 .confirm-detail { margin-top: .75rem; padding: .75rem; border-radius: 6px; background: #f8fafc; color: #475569; white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
+
+/* ─── Category Tags ─── */
+button.cat-tag {
+    display: inline-block;
+    padding: .2rem .6rem;
+    font-size: .78rem;
+    font-weight: 500;
+    border: 1.5px solid var(--cat-color, #d1d5db);
+    border-radius: 4px;
+    background: #fff none !important;
+    color: var(--cat-color, #6b7280);
+    cursor: pointer;
+    transition: all .15s ease;
+    user-select: none;
+    line-height: 1.4;
+    outline: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    box-shadow: none;
+    text-decoration: none;
+    font-family: inherit;
+    text-shadow: none;
+    min-height: 0;
+    width: auto;
+    height: auto;
+}
+button.cat-tag:hover {
+    border-color: var(--cat-color, #9ca3af);
+    color: var(--cat-color, #374151);
+    background: #f9fafb !important;
+}
+button.cat-tag.active {
+    border-color: var(--cat-color, #0d6efd) !important;
+    color: #fff !important;
+    background: var(--cat-color, #0d6efd) !important;
+}
+button.cat-tag[data-cat="all"].active {
+    border-color: #0d6efd !important;
+    background: #0d6efd !important;
+}
+button.cat-tag[data-cat="all"]:not(.active):hover {
+    background: #f0f4ff !important;
+}
+.cat-badge {
+    font-size: .72rem;
+    font-weight: 500;
+    padding: .18rem .45rem;
+    border-radius: 3px;
+}
+@media (max-width: 768px) {
+    .cat-tag { padding: .18rem .5rem; font-size: .72rem; }
+}
 @media (max-width: 768px) {
     #confirm_modal .modal-dialog { margin: .75rem; }
     #confirm_modal .modal-title { font-size: 1rem; }

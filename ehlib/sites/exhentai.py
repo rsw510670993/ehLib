@@ -62,8 +62,13 @@ class ExhentaiSite(SiteBase):
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
 
-    async def search(self, query: str, page: int = 1, next_cursor: str = "") -> list[Gallery]:
+    async def search(self, query: str, page: int = 1, next_cursor: str = "", categories: list[int] | None = None) -> list[Gallery]:
         params = {"f_search": query}
+        if categories is not None:
+            if categories:
+                params["f_cats"] = str(self._calc_categories_mask(categories))
+            else:
+                params["f_cats"] = "0"
         if next_cursor:
             params["next"] = next_cursor
             self.current_page = page
@@ -113,6 +118,9 @@ class ExhentaiSite(SiteBase):
                 title_elem = row.select_one(".glink, .gl3m")
                 title = title_elem.get_text(strip=True) if title_elem else ""
 
+                cat_elem = row.select_one(".glcat")
+                category = cat_elem.get_text(strip=True) if cat_elem else ""
+
                 total_pages_gallery = 0
                 uploaded_at = ""
                 gl2m = row.select_one(".gl2m")
@@ -129,6 +137,7 @@ class ExhentaiSite(SiteBase):
                     source="exhentai",
                     source_id=combined_id,
                     title=title,
+                    category=category,
                     total_pages=total_pages_gallery,
                     uploaded_at=uploaded_at,
                 ))
@@ -151,6 +160,9 @@ class ExhentaiSite(SiteBase):
                     title_elem = row.select_one(".glink")
                     title = title_elem.get_text(strip=True) if title_elem else ""
 
+                    cat_elem = row.select_one(".glcat")
+                    category = cat_elem.get_text(strip=True) if cat_elem else ""
+
                     total_pages_gallery = 0
                     uploaded_at = ""
                     for cell in row.select("td"):
@@ -167,6 +179,7 @@ class ExhentaiSite(SiteBase):
                         source="exhentai",
                         source_id=combined_id,
                         title=title,
+                        category=category,
                         total_pages=total_pages_gallery,
                         uploaded_at=uploaded_at,
                     ))
@@ -188,6 +201,9 @@ class ExhentaiSite(SiteBase):
                     title_elem = item.select_one(".glink")
                     title = title_elem.get_text(strip=True) if title_elem else ""
 
+                    cat_elem = item.select_one(".glcat, .gl3")
+                    category = cat_elem.get_text(strip=True) if cat_elem else ""
+
                     total_pages_gallery = 0
                     uploaded_at = ""
                     gl5t = item.select_one(".gl5t")
@@ -204,6 +220,7 @@ class ExhentaiSite(SiteBase):
                         source="exhentai",
                         source_id=combined_id,
                         title=title,
+                        category=category,
                         total_pages=total_pages_gallery,
                         uploaded_at=uploaded_at,
                     ))
@@ -312,6 +329,15 @@ class ExhentaiSite(SiteBase):
         if not image_url:
             raise RuntimeError(f"Display image URL missing on page: {image_page_url}")
         return image_url
+
+    @staticmethod
+    def _calc_categories_mask(category_ids: list[int]) -> int:
+        CAT_BITS = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512}
+        include_bits = 0
+        for cid in category_ids:
+            if cid in CAT_BITS:
+                include_bits |= cid
+        return 1023 ^ include_bits
 
     @staticmethod
     def _extract_total_pages(soup: BeautifulSoup) -> int:

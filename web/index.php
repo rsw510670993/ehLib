@@ -7,7 +7,7 @@
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css">
+    <link rel="stylesheet" href="assets/css/app.css?v=3">
 </head>
 <body>
 
@@ -364,6 +364,22 @@ $base = rtrim(dirname($scriptName), '/');
                     <button class="btn btn-sm btn-success" id="ex_batch_dl_btn2" onclick="batchDownloadSelected()" disabled><i class="fas fa-download me-1"></i>批量下载 <span id="ex_batch_count2">0</span></button>
                 </div>
                 <div class="card-body">
+                    <div class="mb-2">
+                        <span class="small text-muted me-2">分类:</span>
+                        <div id="ex_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-cat="all" onclick="toggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag" data-cat="2" onclick="toggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
+                            <button class="cat-tag" data-cat="4" onclick="toggleCategory(this)" style="--cat-color:#3498db">Manga</button>
+                            <button class="cat-tag" data-cat="8" onclick="toggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
+                            <button class="cat-tag" data-cat="16" onclick="toggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
+                            <button class="cat-tag" data-cat="512" onclick="toggleCategory(this)" style="--cat-color:#27ae60">Western</button>
+                            <button class="cat-tag" data-cat="256" onclick="toggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
+                            <button class="cat-tag" data-cat="32" onclick="toggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
+                            <button class="cat-tag" data-cat="64" onclick="toggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
+                            <button class="cat-tag" data-cat="128" onclick="toggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
+                            <button class="cat-tag" data-cat="1" onclick="toggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
+                        </div>
+                    </div>
                     <div class="row g-2 align-items-end mb-3">
                         <div class="col-md-10">
                             <input type="text" class="form-control" id="ex_search_query" placeholder="artist:shindol / tag:english / 任意关键词" onkeydown="if(event.key==='Enter')doExSearch()">
