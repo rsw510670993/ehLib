@@ -182,22 +182,16 @@ function renderSearchTable() {
     pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPage(1)"' + (_searchPage === 1 ? ' disabled' : '') + ' title="首页"><i class="fas fa-angle-double-left"></i></button>';
     pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="doExSearchPrev()"' + (_searchPage <= 1 ? ' disabled' : '') + ' title="上一页"><i class="fas fa-chevron-left"></i></button>';
 
-    // Collect page numbers to show: 1 .. window .. last+next
+    // Collect loaded page numbers to show: 1 .. window around current .. last
     var pages = [];
-    var W = 2; // pages on each side of current
+    var W = 2;
     var windowStart = Math.max(1, _searchPage - W);
     var windowEnd = Math.min(maxLoaded, _searchPage + W);
 
-    // Always include page 1
     if (1 < windowStart) { pages.push(1); pages.push('…1'); }
-    // Window around current
     for (var p = windowStart; p <= windowEnd; p++) pages.push(p);
-    // Gap before last loaded
     if (windowEnd < maxLoaded - 1) pages.push('…2');
-    // Last loaded page
     if (maxLoaded > 1 && maxLoaded > windowEnd) pages.push(maxLoaded);
-    // Next unloaded page
-    if (hasNextPage) pages.push('next');
 
     var prevWasEllipsis = false;
     for (var i = 0; i < pages.length; i++) {
@@ -208,9 +202,7 @@ function renderSearchTable() {
             continue;
         }
         prevWasEllipsis = false;
-        if (p === 'next') {
-            pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()">' + (maxLoaded + 1) + '</button>';
-        } else if (p === _searchPage) {
+        if (p === _searchPage) {
             pagHtml += '<button class="btn btn-primary btn-sm active">' + p + '</button>';
         } else {
             pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPage(' + p + ')">' + p + '</button>';
