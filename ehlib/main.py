@@ -87,6 +87,8 @@ async def cmd_search(args: argparse.Namespace, config: Config, _db: Database) ->
             "page": getattr(site, 'current_page', args.page),
             "next_cursor": getattr(site, 'next_cursor', ''),
             "has_next": getattr(site, 'has_next', False),
+            "total_pages": getattr(site, 'total_pages', 0),
+            "total_results": getattr(site, 'total_results', 0),
         }
         print(json.dumps(output))
     finally:

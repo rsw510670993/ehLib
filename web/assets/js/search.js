@@ -6,6 +6,7 @@ let _nextCursor = '';
 let _hasNext = false;
 let _selectedIds = {};
 let _cursorHistory = [];
+let _totalPages = 0;
 
 // ─── Category Tags (data-cat = e-hentai bitmask value) ───
 
@@ -89,9 +90,7 @@ async function doExSearch() {
 
 async function doExSearchNext() {
     if (!_hasNext || !_nextCursor) { showToast('没有更多结果', 'info'); return; }
-    _cursorHistory[_searchPage] = _nextCursor;
-    _searchPage++;
-    await performSearch();
+    await goToSearchPageDirect(_searchPage + 1);
 }
 
 async function doExSearchPrev() {
@@ -121,6 +120,45 @@ async function performSearch() {
     _searchResults = res.results || [];
     _nextCursor = res.next_cursor || '';
     _hasNext = !!res.has_next;
+    _totalPages = res.total_pages || 0;
+    renderSearchTable();
+    updateBatchButton();
+}
+
+async function goToSearchPageDirect(p) {
+    if (p < 1 || p === _searchPage) return;
+
+    // Direct jump if cursor known (page already visited)
+    if (p <= _cursorHistory.length) {
+        _searchPage = p;
+        await performSearch();
+        return;
+    }
+
+    // Fast-forward: load intermediate pages sequentially until target reached
+    var spinner = '<div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>跳转到第 ' + p + ' 页...</div>';
+    document.getElementById('ex_search_results').innerHTML = spinner;
+    document.getElementById('ex_search_pagination').innerHTML = '';
+
+    while (_searchPage < p) {
+        if (!_hasNext || !_nextCursor) {
+            showToast('只有 ' + _searchPage + ' 页', 'warning');
+            break;
+        }
+        _cursorHistory[_searchPage] = _nextCursor;
+        _searchPage++;
+
+        var form = { action: 'search', source: 'exhentai', query: _searchQuery, page: _searchPage };
+        form.next = _nextCursor;
+        var cats = getSelectedCategories();
+        if (cats) form.categories = categoriesToParam(cats);
+
+        const res = await api('search', { form: form });
+        if (!res.ok) return;
+        _nextCursor = res.next_cursor || '';
+        _hasNext = !!res.has_next;
+        _totalPages = res.total_pages || 0;
+    }
     renderSearchTable();
     updateBatchButton();
 }
@@ -173,55 +211,52 @@ function renderSearchTable() {
 
     // ─── Pagination ───
     var maxLoaded = _cursorHistory.length;
-    var nextUnloaded = maxLoaded + 1;
-    var hasNextPage = _hasNext;
+    var totalPages = Math.max(_totalPages, maxLoaded + (_hasNext ? 1 : 0));
+    var showAll = totalPages <= 15;
 
     var pagHtml = '<div class="d-flex justify-content-center align-items-center gap-1 flex-wrap">';
 
     // First + Prev
-    pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPage(1)"' + (_searchPage === 1 ? ' disabled' : '') + ' title="首页"><i class="fas fa-angle-double-left"></i></button>';
+    pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPageDirect(1)"' + (_searchPage === 1 ? ' disabled' : '') + ' title="首页"><i class="fas fa-angle-double-left"></i></button>';
     pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="doExSearchPrev()"' + (_searchPage <= 1 ? ' disabled' : '') + ' title="上一页"><i class="fas fa-chevron-left"></i></button>';
 
-    // Collect loaded page numbers to show: 1 .. window around current .. last
-    var pages = [];
-    var W = 2;
-    var windowStart = Math.max(1, _searchPage - W);
-    var windowEnd = Math.min(maxLoaded, _searchPage + W);
-
-    if (1 < windowStart) { pages.push(1); pages.push('…1'); }
-    for (var p = windowStart; p <= windowEnd; p++) pages.push(p);
-    if (windowEnd < maxLoaded - 1) pages.push('…2');
-    if (maxLoaded > 1 && maxLoaded > windowEnd) pages.push(maxLoaded);
-
-    var prevWasEllipsis = false;
-    for (var i = 0; i < pages.length; i++) {
-        var p = pages[i];
-        if (p === '…1' || p === '…2') {
-            if (!prevWasEllipsis) pagHtml += '<span class="text-muted small px-1">…</span>';
-            prevWasEllipsis = true;
-            continue;
+    if (showAll) {
+        for (var p = 1; p <= totalPages; p++) {
+            pagHtml += pageBtn(p);
         }
-        prevWasEllipsis = false;
-        if (p === _searchPage) {
-            pagHtml += '<button class="btn btn-primary btn-sm active">' + p + '</button>';
-        } else {
-            pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPage(' + p + ')">' + p + '</button>';
+    } else {
+        // Page 1
+        var pages = [];
+        var W = 2;
+        var s = Math.max(1, _searchPage - W);
+        var e = Math.min(totalPages, _searchPage + W);
+
+        if (s > 2) { pages.push(1); pages.push('…'); }
+        else if (s === 2) pages.push(1);
+        for (var p = s; p <= e; p++) pages.push(p);
+        if (e < totalPages - 1) { pages.push('…'); pages.push(totalPages); }
+        else if (e === totalPages - 1) pages.push(totalPages);
+
+        for (var i = 0; i < pages.length; i++) {
+            if (pages[i] === '…') {
+                pagHtml += '<span class="text-muted small px-1">…</span>';
+            } else {
+                pagHtml += pageBtn(pages[i]);
+            }
         }
     }
 
     // Next
-    pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()"' + (!hasNextPage ? ' disabled' : '') + ' title="下一页"><i class="fas fa-chevron-right"></i></button>';
+    pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()"' + (!_hasNext ? ' disabled' : '') + ' title="下一页"><i class="fas fa-chevron-right"></i></button>';
 
     pagHtml += '</div>';
     pag.innerHTML = pagHtml;
 }
 
-function goToSearchPage(p) {
-    if (p < 1 || p === _searchPage) return;
-    if (p <= _cursorHistory.length) {
-        _searchPage = p;
-        performSearch();
-    }
+function pageBtn(p) {
+    if (p === _searchPage) return '<button class="btn btn-primary btn-sm active">' + p + '</button>';
+    if (p <= _cursorHistory.length) return '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchPageDirect(' + p + ')">' + p + '</button>';
+    return '<button class="btn btn-outline-secondary btn-sm" style="opacity:0.5" onclick="goToSearchPageDirect(' + p + ')">' + p + '</button>';
 }
 
 function toggleSelectAll(cb) {

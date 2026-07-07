@@ -822,6 +822,8 @@ try {
                 'page' => $data['page'] ?? $page,
                 'next_cursor' => $data['next_cursor'] ?? '',
                 'has_next' => !empty($data['has_next']),
+                'total_pages' => (int)($data['total_pages'] ?? 0),
+                'total_results' => (int)($data['total_results'] ?? 0),
             ]);
             break;
 

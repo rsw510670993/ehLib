@@ -18,12 +18,15 @@ EHENTAI_BASE = "https://e-hentai.org"
 
 class ExhentaiSite(SiteBase):
     name = "exhentai"
+    PAGE_SIZE = 25
 
     def __init__(self, config: Config, session: SessionManager):
         super().__init__(config, session)
         self.current_page: int = 1
         self.next_cursor: str = ""
         self.has_next: bool = False
+        self.total_results: int = 0
+        self.total_pages: int = 0
 
     def parse_gallery_id_from_url(self, url: str) -> str:
         result = parse_exhentai_url(url)
@@ -95,12 +98,23 @@ class ExhentaiSite(SiteBase):
                 self.has_next = True
                 break
 
+    def _parse_total_results(self, soup: BeautifulSoup) -> None:
+        import re
+        el = soup.select_one(".searchtext")
+        if el:
+            m = re.search(r"Found\s+([\d,]+)\s+result", el.get_text())
+            if m:
+                self.total_results = int(m.group(1).replace(",", ""))
+        if self.total_results > 0:
+            self.total_pages = (self.total_results + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+
     def _parse_search_results(self, html: str) -> list[Gallery]:
         import re
         soup = BeautifulSoup(html, "html.parser")
         results: list[Gallery] = []
 
         self._parse_next_cursor(soup)
+        self._parse_total_results(soup)
 
         table = soup.select_one("table.itg.gltm")
         if table:
