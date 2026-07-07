@@ -65,7 +65,9 @@ class ExhentaiSite(SiteBase):
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
 
-    async def search(self, query: str, page: int = 1, next_cursor: str = "", categories: list[int] | None = None) -> list[Gallery]:
+    async def search(self, query: str, page: int = 1, next_cursor: str = "", 
+                     categories: list[int] | None = None,
+                     prev_cursor: str = "", range_val: int | None = None) -> list[Gallery]:
         params = {"f_search": query}
         if categories is not None:
             if categories:
@@ -74,9 +76,11 @@ class ExhentaiSite(SiteBase):
                 params["f_cats"] = "0"
         if next_cursor:
             params["next"] = next_cursor
-            self.current_page = page
-        else:
-            self.current_page = 1
+        if prev_cursor:
+            params["prev"] = prev_cursor
+        if range_val is not None:
+            params["range"] = str(range_val)
+        self.current_page = page if (next_cursor or prev_cursor or range_val is not None) else 1
         url = f"{EXHENTAI_BASE}/"
         response = await self._session.fetch(self.name, url, params=params)
         if self._session.is_cloudflare_blocked(response):
@@ -90,13 +94,17 @@ class ExhentaiSite(SiteBase):
         import re
         self.next_cursor = ""
         self.has_next = False
+        self.prev_cursor = ""
         for a in soup.select("a"):
             href = a.get("href", "")
+            txt = a.get_text(strip=True).lower()
             m = re.search(r"[?&]next=(\d+)", href)
-            if m and "next" in a.get_text(strip=True).lower():
+            if m and "next" in txt:
                 self.next_cursor = m.group(1)
                 self.has_next = True
-                break
+            m = re.search(r"[?&]prev=(\d+)", href)
+            if m and "prev" in txt:
+                self.prev_cursor = m.group(1)
 
     def _parse_total_results(self, soup: BeautifulSoup) -> None:
         import re
