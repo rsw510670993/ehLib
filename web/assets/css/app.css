@@ -225,6 +225,35 @@ button.cat-tag[data-cat="all"]:not(.active):hover {
 @media (max-width: 768px) {
     .cat-tag { padding: .18rem .5rem; font-size: .72rem; }
 }
+
+/* ─── Saved Search Tags ─── */
+.saved-search-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: .15rem .5rem;
+    font-size: .78rem;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    background: #f3f4f6;
+    color: #374151;
+    cursor: pointer;
+    transition: all .15s ease;
+    user-select: none;
+}
+.saved-search-tag:hover {
+    background: #e5e7eb;
+    border-color: #9ca3af;
+}
+.saved-search-del {
+    font-size: .65rem;
+    color: #9ca3af;
+    margin-left: 2px;
+    padding: 1px 2px;
+}
+.saved-search-del:hover {
+    color: #ef4444;
+}
 @media (max-width: 768px) {
     #confirm_modal .modal-dialog { margin: .75rem; }
     #confirm_modal .modal-title { font-size: 1rem; }

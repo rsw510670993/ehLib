@@ -173,6 +173,93 @@ async function doExSearchPrev() {
     await performSearch();
 }
 
+// ─── Saved Searches (localStorage) ───
+
+function loadSavedSearches() {
+    try {
+        var raw = localStorage.getItem('ehlib_saved_searches');
+        return raw ? JSON.parse(raw) : [];
+    } catch(e) { return []; }
+}
+
+function saveSavedSearches(arr) {
+    try { localStorage.setItem('ehlib_saved_searches', JSON.stringify(arr)); } catch(e) {}
+}
+
+function renderSavedSearches() {
+    var el = document.getElementById('ex_saved_searches');
+    if (!el) return;
+    var saved = loadSavedSearches();
+    if (saved.length === 0) { el.innerHTML = ''; return; }
+    var html = '';
+    for (var i = 0; i < saved.length; i++) {
+        var s = saved[i];
+        html += '<span class="saved-search-tag" onclick="loadSavedSearch(' + i + ')" title="' + escapeAttr(s.query) + '">' +
+            escapeHtml(s.label) +
+            '<i class="fas fa-times ms-1 saved-search-del" onclick="event.stopPropagation();deleteSavedSearch(' + i + ')" title="删除"></i></span>';
+    }
+    el.innerHTML = html;
+}
+
+async function saveCurrentSearch() {
+    var q = document.getElementById('ex_search_query').value.trim();
+    if (!q) { showToast('请先输入搜索关键词', 'warning'); return; }
+    var label = prompt('为这个搜索起个名字:', q.substring(0, 30));
+    if (!label) return;
+    var cats = getSelectedCategories();
+    var saved = loadSavedSearches();
+    // Avoid duplicates: replace if same query + same categories
+    var catsStr = cats ? cats.join(',') : '';
+    var found = false;
+    for (var i = 0; i < saved.length; i++) {
+        var sc = saved[i].categories || '';
+        if (saved[i].query === q && sc === catsStr) {
+            saved[i].label = label;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        saved.push({ label: label, query: q, categories: cats });
+    }
+    saveSavedSearches(saved);
+    renderSavedSearches();
+    showToast('搜索已保存: ' + label, 'success');
+}
+
+async function loadSavedSearch(idx) {
+    var saved = loadSavedSearches();
+    var s = saved[idx];
+    if (!s) return;
+    document.getElementById('ex_search_query').value = s.query;
+
+    // Apply saved categories
+    document.querySelectorAll('#ex_category_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+    var cats = s.categories;
+    if (cats && cats.length > 0) {
+        cats.forEach(function(c) {
+            var btn = document.querySelector('#ex_category_tags .cat-tag[data-cat="' + c + '"]');
+            if (btn) btn.classList.add('active');
+        });
+    } else {
+        document.querySelectorAll('#ex_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
+    }
+    saveCategorySelection();
+    await doExSearch();
+}
+
+function deleteSavedSearch(idx) {
+    var saved = loadSavedSearches();
+    var s = saved[idx];
+    if (!s) return;
+    if (!confirm('删除保存的搜索 "' + s.label + '" 吗？')) return;
+    saved.splice(idx, 1);
+    saveSavedSearches(saved);
+    renderSavedSearches();
+}
+
+document.addEventListener('DOMContentLoaded', renderSavedSearches);
+
 var CAT_COLORS = {
     'Doujinshi': '#e74c3c', 'Manga': '#3498db', 'Artist CG': '#9b59b6',
     'Game CG': '#e67e22', 'Western': '#27ae60', 'Non-H': '#95a5a6',

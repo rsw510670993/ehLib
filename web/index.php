@@ -7,7 +7,7 @@
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=3">
+    <link rel="stylesheet" href="assets/css/app.css?v=4">
 </head>
 <body>
 
@@ -384,10 +384,12 @@ $base = rtrim(dirname($scriptName), '/');
                         <div class="col-md-10">
                             <input type="text" class="form-control" id="ex_search_query" placeholder="artist:shindol / tag:english / 任意关键词" onkeydown="if(event.key==='Enter')doExSearch()">
                         </div>
-                        <div class="col-md-2">
-                            <button class="btn btn-primary w-100" onclick="doExSearch()"><i class="fas fa-search me-1"></i>搜索</button>
+                        <div class="col-md-2 d-flex gap-1">
+                            <button class="btn btn-primary flex-grow-1" onclick="doExSearch()"><i class="fas fa-search me-1"></i>搜索</button>
+                            <button class="btn btn-outline-secondary" onclick="saveCurrentSearch()" title="保存当前搜索"><i class="fas fa-save"></i></button>
                         </div>
                     </div>
+                    <div id="ex_saved_searches" class="mb-2 d-flex flex-wrap gap-1"></div>
                     <div id="ex_search_meta" class="small text-muted mb-2"></div>
                     <div id="ex_search_results" class="table-responsive">
                         <div class="text-center text-muted py-4">输入关键词开始搜索</div>
@@ -473,6 +475,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/gallery.js"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/search.js?v=2"></script>
+<script src="assets/js/search.js?v=3"></script>
 </body>
 </html>
