@@ -18,12 +18,15 @@ EHENTAI_BASE = "https://e-hentai.org"
 
 class ExhentaiSite(SiteBase):
     name = "exhentai"
+    PAGE_SIZE = 25
 
     def __init__(self, config: Config, session: SessionManager):
         super().__init__(config, session)
         self.current_page: int = 1
         self.next_cursor: str = ""
         self.has_next: bool = False
+        self.total_results: int = 0
+        self.total_pages: int = 0
 
     def parse_gallery_id_from_url(self, url: str) -> str:
         result = parse_exhentai_url(url)
@@ -62,13 +65,22 @@ class ExhentaiSite(SiteBase):
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
 
-    async def search(self, query: str, page: int = 1, next_cursor: str = "") -> list[Gallery]:
+    async def search(self, query: str, page: int = 1, next_cursor: str = "", 
+                     categories: list[int] | None = None,
+                     prev_cursor: str = "", range_val: int | None = None) -> list[Gallery]:
         params = {"f_search": query}
+        if categories is not None:
+            if categories:
+                params["f_cats"] = str(self._calc_categories_mask(categories))
+            else:
+                params["f_cats"] = "0"
         if next_cursor:
             params["next"] = next_cursor
-            self.current_page = page
-        else:
-            self.current_page = 1
+        if prev_cursor:
+            params["prev"] = prev_cursor
+        if range_val is not None:
+            params["range"] = str(range_val)
+        self.current_page = page if (next_cursor or prev_cursor or range_val is not None) else 1
         url = f"{EXHENTAI_BASE}/"
         response = await self._session.fetch(self.name, url, params=params)
         if self._session.is_cloudflare_blocked(response):
@@ -82,13 +94,28 @@ class ExhentaiSite(SiteBase):
         import re
         self.next_cursor = ""
         self.has_next = False
+        self.prev_cursor = ""
         for a in soup.select("a"):
             href = a.get("href", "")
+            txt = a.get_text(strip=True).lower()
             m = re.search(r"[?&]next=(\d+)", href)
-            if m and "next" in a.get_text(strip=True).lower():
+            if m and "next" in txt:
                 self.next_cursor = m.group(1)
                 self.has_next = True
-                break
+            m = re.search(r"[?&]prev=(\d+)", href)
+            # "prev=1" link may have text "Last" (Last >>), not "prev"
+            if m and ("prev" in txt or "last" in txt):
+                self.prev_cursor = m.group(1)
+
+    def _parse_total_results(self, soup: BeautifulSoup) -> None:
+        import re
+        el = soup.select_one(".searchtext")
+        if el:
+            m = re.search(r"Found\s+(?:about\s+)?([\d,]+)\s+result", el.get_text())
+            if m:
+                self.total_results = int(m.group(1).replace(",", ""))
+        if self.total_results > 0:
+            self.total_pages = (self.total_results + self.PAGE_SIZE - 1) // self.PAGE_SIZE
 
     def _parse_search_results(self, html: str) -> list[Gallery]:
         import re
@@ -96,6 +123,7 @@ class ExhentaiSite(SiteBase):
         results: list[Gallery] = []
 
         self._parse_next_cursor(soup)
+        self._parse_total_results(soup)
 
         table = soup.select_one("table.itg.gltm")
         if table:
@@ -113,6 +141,9 @@ class ExhentaiSite(SiteBase):
                 title_elem = row.select_one(".glink, .gl3m")
                 title = title_elem.get_text(strip=True) if title_elem else ""
 
+                cat_elem = row.select_one(".glcat")
+                category = cat_elem.get_text(strip=True) if cat_elem else ""
+
                 total_pages_gallery = 0
                 uploaded_at = ""
                 gl2m = row.select_one(".gl2m")
@@ -129,6 +160,7 @@ class ExhentaiSite(SiteBase):
                     source="exhentai",
                     source_id=combined_id,
                     title=title,
+                    category=category,
                     total_pages=total_pages_gallery,
                     uploaded_at=uploaded_at,
                 ))
@@ -151,6 +183,9 @@ class ExhentaiSite(SiteBase):
                     title_elem = row.select_one(".glink")
                     title = title_elem.get_text(strip=True) if title_elem else ""
 
+                    cat_elem = row.select_one(".glcat")
+                    category = cat_elem.get_text(strip=True) if cat_elem else ""
+
                     total_pages_gallery = 0
                     uploaded_at = ""
                     for cell in row.select("td"):
@@ -167,6 +202,7 @@ class ExhentaiSite(SiteBase):
                         source="exhentai",
                         source_id=combined_id,
                         title=title,
+                        category=category,
                         total_pages=total_pages_gallery,
                         uploaded_at=uploaded_at,
                     ))
@@ -188,6 +224,9 @@ class ExhentaiSite(SiteBase):
                     title_elem = item.select_one(".glink")
                     title = title_elem.get_text(strip=True) if title_elem else ""
 
+                    cat_elem = item.select_one(".glcat, .gl3")
+                    category = cat_elem.get_text(strip=True) if cat_elem else ""
+
                     total_pages_gallery = 0
                     uploaded_at = ""
                     gl5t = item.select_one(".gl5t")
@@ -204,6 +243,7 @@ class ExhentaiSite(SiteBase):
                         source="exhentai",
                         source_id=combined_id,
                         title=title,
+                        category=category,
                         total_pages=total_pages_gallery,
                         uploaded_at=uploaded_at,
                     ))
@@ -312,6 +352,15 @@ class ExhentaiSite(SiteBase):
         if not image_url:
             raise RuntimeError(f"Display image URL missing on page: {image_page_url}")
         return image_url
+
+    @staticmethod
+    def _calc_categories_mask(category_ids: list[int]) -> int:
+        CAT_BITS = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512}
+        include_bits = 0
+        for cid in category_ids:
+            if cid in CAT_BITS:
+                include_bits |= cid
+        return 1023 ^ include_bits
 
     @staticmethod
     def _extract_total_pages(soup: BeautifulSoup) -> int:

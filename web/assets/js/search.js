@@ -6,6 +6,76 @@ let _nextCursor = '';
 let _hasNext = false;
 let _selectedIds = {};
 let _cursorHistory = [];
+let _prevCursor = '';
+let _totalPages = 0;
+
+// ─── Category Tags (data-cat = e-hentai bitmask value) ───
+
+function toggleCategory(el) {
+    const cat = el.dataset.cat;
+    if (cat === 'all') {
+        document.querySelectorAll('#ex_category_tags .cat-tag').forEach(function(tag) {
+            tag.classList.add('active');
+        });
+    } else {
+        el.classList.toggle('active');
+        const allTags = document.querySelectorAll('#ex_category_tags .cat-tag[data-cat]:not([data-cat="all"])');
+        const activeTags = document.querySelectorAll('#ex_category_tags .cat-tag.active[data-cat]:not([data-cat="all"])');
+        const allBtn = document.querySelector('#ex_category_tags .cat-tag[data-cat="all"]');
+        if (activeTags.length === allTags.length) {
+            allBtn.classList.add('active');
+        } else {
+            allBtn.classList.remove('active');
+        }
+    }
+    saveCategorySelection();
+}
+
+function getSelectedCategories() {
+    var allBtn = document.querySelector('#ex_category_tags .cat-tag[data-cat="all"]');
+    if (allBtn && allBtn.classList.contains('active')) return ['1','2','4','8','16','32','64','128','256','512'];
+    var cats = [];
+    document.querySelectorAll('#ex_category_tags .cat-tag.active[data-cat]').forEach(function(tag) {
+        if (tag.dataset.cat !== 'all') cats.push(tag.dataset.cat);
+    });
+    return cats.length > 0 ? cats : null;
+}
+
+function categoriesToParam(cats) {
+    if (!cats) return '';
+    return cats.join(',');
+}
+
+function saveCategorySelection() {
+    var cats = getSelectedCategories();
+    try {
+        localStorage.setItem('ehlib_cat_selection', JSON.stringify(cats));
+    } catch(e) {}
+}
+
+function loadCategorySelection() {
+    try {
+        var saved = localStorage.getItem('ehlib_cat_selection');
+        if (saved === null) {
+            document.querySelectorAll('#ex_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
+            return;
+        }
+        var cats = JSON.parse(saved);
+        document.querySelectorAll('#ex_category_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+        if (cats) {
+            cats.forEach(function(c) {
+                var btn = document.querySelector('#ex_category_tags .cat-tag[data-cat="' + c + '"]');
+                if (btn) btn.classList.add('active');
+            });
+        }
+        var allTags = document.querySelectorAll('#ex_category_tags .cat-tag[data-cat]:not([data-cat="all"])');
+        var activeTags = document.querySelectorAll('#ex_category_tags .cat-tag.active[data-cat]:not([data-cat="all"])');
+        var allBtn = document.querySelector('#ex_category_tags .cat-tag[data-cat="all"]');
+        if (allBtn && activeTags.length === allTags.length) allBtn.classList.add('active');
+    } catch(e) {}
+}
+
+loadCategorySelection();
 
 async function doExSearch() {
     const q = document.getElementById('ex_search_query').value.trim();
@@ -17,6 +87,77 @@ async function doExSearch() {
     _selectedIds = {};
     _cursorHistory = [''];
     await performSearch();
+}
+
+async function performSearch() {
+    const el = document.getElementById('ex_search_results');
+    el.innerHTML = '<div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>搜索中...</div>';
+    document.getElementById('ex_search_meta').textContent = '';
+    document.getElementById('ex_search_pagination').innerHTML = '';
+
+    var cursor = _cursorHistory[_searchPage - 1] || '';
+    var form = { action: 'search', source: 'exhentai', query: _searchQuery, page: _searchPage };
+    if (cursor) form.next = cursor;
+    var cats = getSelectedCategories();
+    if (cats) form.categories = categoriesToParam(cats);
+
+    const res = await api('search', { form: form });
+    if (!res.ok) {
+        el.innerHTML = '<div class="text-center text-danger py-4">' + escapeHtml(res.error || '搜索失败') + '</div>';
+        return;
+    }
+
+    _searchResults = res.results || [];
+    _nextCursor = res.next_cursor || '';
+    _prevCursor = res.prev_cursor || '';
+    _hasNext = !!res.has_next;
+    _totalPages = res.total_pages || 0;
+    if (!_hasNext && _totalPages > _searchPage) _totalPages = _searchPage;
+    renderSearchTable();
+    updateBatchButton();
+}
+
+async function goToSearchFirst() {
+    if (_searchPage === 1) return;
+    _searchPage = 1;
+    await performSearch();
+}
+
+async function goToSearchLast() {
+    if (!_prevCursor) { showToast('没有上一页信息', 'warning'); return; }
+    await _navSearch({ prev: '1' });
+}
+
+async function goToSearchRange(pct) {
+    await _navSearch({ range: String(pct) });
+}
+
+async function _navSearch(params) {
+    var spinner = '<div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>搜索中...</div>';
+    document.getElementById('ex_search_results').innerHTML = spinner;
+    document.getElementById('ex_search_pagination').innerHTML = '';
+
+    var form = { action: 'search', source: 'exhentai', query: _searchQuery, page: 1 };
+    for (var k in params) form[k] = params[k];
+    var cats = getSelectedCategories();
+    if (cats) form.categories = categoriesToParam(cats);
+
+    const res = await api('search', { form: form });
+    if (!res.ok) {
+        document.getElementById('ex_search_results').innerHTML = '<div class="text-center text-danger py-4">' + escapeHtml(res.error || '搜索失败') + '</div>';
+        return;
+    }
+    _searchResults = res.results || [];
+    _nextCursor = res.next_cursor || '';
+    _prevCursor = res.prev_cursor || '';
+    _hasNext = !!res.has_next;
+    _totalPages = res.total_pages || 0;
+
+    // Reset cursor history — prev/range jumps start a fresh navigation context
+    _cursorHistory = [''];
+    _searchPage = 1;
+    renderSearchTable();
+    updateBatchButton();
 }
 
 async function doExSearchNext() {
@@ -32,28 +173,99 @@ async function doExSearchPrev() {
     await performSearch();
 }
 
-async function performSearch() {
-    const el = document.getElementById('ex_search_results');
-    el.innerHTML = '<div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>搜索中...</div>';
-    document.getElementById('ex_search_meta').textContent = '';
-    document.getElementById('ex_search_pagination').innerHTML = '';
+// ─── Saved Searches (localStorage) ───
 
-    var cursor = _cursorHistory[_searchPage - 1] || '';
-    var form = { action: 'search', source: 'exhentai', query: _searchQuery, page: _searchPage };
-    if (cursor) form.next = cursor;
-
-    const res = await api('search', { form: form });
-    if (!res.ok) {
-        el.innerHTML = '<div class="text-center text-danger py-4">' + escapeHtml(res.error || '搜索失败') + '</div>';
-        return;
-    }
-
-    _searchResults = res.results || [];
-    _nextCursor = res.next_cursor || '';
-    _hasNext = !!res.has_next;
-    renderSearchTable();
-    updateBatchButton();
+function loadSavedSearches() {
+    try {
+        var raw = localStorage.getItem('ehlib_saved_searches');
+        return raw ? JSON.parse(raw) : [];
+    } catch(e) { return []; }
 }
+
+function saveSavedSearches(arr) {
+    try { localStorage.setItem('ehlib_saved_searches', JSON.stringify(arr)); } catch(e) {}
+}
+
+function renderSavedSearches() {
+    var el = document.getElementById('ex_saved_searches');
+    if (!el) return;
+    var saved = loadSavedSearches();
+    if (saved.length === 0) { el.innerHTML = ''; return; }
+    var html = '';
+    for (var i = 0; i < saved.length; i++) {
+        var s = saved[i];
+        html += '<span class="saved-search-tag" onclick="loadSavedSearch(' + i + ')" title="' + escapeAttr(s.query) + '">' +
+            escapeHtml(s.label) +
+            '<i class="fas fa-times ms-1 saved-search-del" onclick="event.stopPropagation();deleteSavedSearch(' + i + ')" title="删除"></i></span>';
+    }
+    el.innerHTML = html;
+}
+
+async function saveCurrentSearch() {
+    var q = document.getElementById('ex_search_query').value.trim();
+    if (!q) { showToast('请先输入搜索关键词', 'warning'); return; }
+    var label = prompt('为这个搜索起个名字:', q.substring(0, 30));
+    if (!label) return;
+    var cats = getSelectedCategories();
+    var saved = loadSavedSearches();
+    // Avoid duplicates: replace if same query + same categories
+    var catsStr = cats ? cats.join(',') : '';
+    var found = false;
+    for (var i = 0; i < saved.length; i++) {
+        var sc = saved[i].categories || '';
+        if (saved[i].query === q && sc === catsStr) {
+            saved[i].label = label;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        saved.push({ label: label, query: q, categories: cats });
+    }
+    saveSavedSearches(saved);
+    renderSavedSearches();
+    showToast('搜索已保存: ' + label, 'success');
+}
+
+async function loadSavedSearch(idx) {
+    var saved = loadSavedSearches();
+    var s = saved[idx];
+    if (!s) return;
+    document.getElementById('ex_search_query').value = s.query;
+
+    // Apply saved categories
+    document.querySelectorAll('#ex_category_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+    var cats = s.categories;
+    if (cats && cats.length > 0) {
+        cats.forEach(function(c) {
+            var btn = document.querySelector('#ex_category_tags .cat-tag[data-cat="' + c + '"]');
+            if (btn) btn.classList.add('active');
+        });
+    } else {
+        document.querySelectorAll('#ex_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
+    }
+    saveCategorySelection();
+    await doExSearch();
+}
+
+function deleteSavedSearch(idx) {
+    var saved = loadSavedSearches();
+    var s = saved[idx];
+    if (!s) return;
+    if (!confirm('删除保存的搜索 "' + s.label + '" 吗？')) return;
+    saved.splice(idx, 1);
+    saveSavedSearches(saved);
+    renderSavedSearches();
+}
+
+document.addEventListener('DOMContentLoaded', renderSavedSearches);
+
+var CAT_COLORS = {
+    'Doujinshi': '#e74c3c', 'Manga': '#3498db', 'Artist CG': '#9b59b6',
+    'Game CG': '#e67e22', 'Western': '#27ae60', 'Non-H': '#95a5a6',
+    'Image Set': '#1abc9c', 'Cosplay': '#e91e63', 'Asian Porn': '#795548',
+    'Misc': '#607d8b'
+};
 
 function renderSearchTable() {
     const el = document.getElementById('ex_search_results');
@@ -67,16 +279,22 @@ function renderSearchTable() {
         return;
     }
 
-    meta.textContent = '第 ' + _searchPage + ' 页 · ' + _searchResults.length + ' 个结果';
+    var metaParts = ['第 ' + _searchPage + ' 页 · ' + _searchResults.length + ' 个结果'];
+    if (_totalPages > 0) metaParts.push('共约 ' + _totalPages + ' 页');
+    meta.textContent = metaParts.join(' · ');
 
     var rows = _searchResults.map(function(g, idx) {
         var displayTitle = escapeHtml(g.title_jp || g.title || '(无标题)');
         var sid = g.source_id || '';
         var pages = parseInt(g.total_pages, 10) || 0;
         var posted = escapeHtml(g.uploaded_at || '');
+        var cat = g.category || '';
+        var catColor = CAT_COLORS[cat] || '#6c757d';
+        var catBadge = cat ? '<span class="cat-badge" style="color:#fff;background:' + catColor + '">' + escapeHtml(cat) + '</span>' : '<span class="text-muted small">-</span>';
         var checked = _selectedIds[sid] ? ' checked' : '';
         return '<tr>' +
             '<td style="width:36px"><input type="checkbox" class="form-check-input search-select mt-0" data-idx="' + idx + '"' + checked + ' onchange="toggleSearchResult(this,\'' + escapeAttr(sid) + '\')"></td>' +
+            '<td class="text-nowrap text-muted small" style="width:80px">' + catBadge + '</td>' +
             '<td><span class="small" title="' + displayTitle + '">' + displayTitle + '</span></td>' +
             '<td class="text-nowrap text-muted small">' + pages + '</td>' +
             '<td class="text-nowrap text-muted small">' + posted + '</td>' +
@@ -87,18 +305,31 @@ function renderSearchTable() {
     el.innerHTML = '<table class="table table-sm table-hover align-middle mb-0">' +
         '<thead class="table-light"><tr>' +
         '<th style="width:36px"><input type="checkbox" class="form-check-input mt-0" onchange="toggleSelectAll(this)" title="全选/取消"></th>' +
-        '<th>标题</th><th style="width:60px">页数</th><th style="width:150px">上传时间</th><th style="width:60px"></th>' +
+        '<th style="width:80px">分类</th><th>标题</th><th style="width:60px">页数</th><th style="width:150px">上传时间</th><th style="width:60px"></th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table>';
 
-    var pagHtml = '<div class="d-flex justify-content-center align-items-center gap-2">';
-    if (_searchPage > 1) {
-        pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="doExSearchPrev()"><i class="fas fa-chevron-left me-1"></i>上一页 (' + (_searchPage - 1) + ')</button>';
-    }
-    pagHtml += '<span class="small text-muted">' + _searchPage + '</span>';
-    if (_hasNext) {
-        pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()"><i class="fas fa-chevron-right me-1"></i>下一页 (' + (_searchPage + 1) + ')</button>';
+    // ─── Pagination row 1: navigation ⏪ ◀ ▶ ⏭ ───
+    var pagHtml = '<div class="d-flex justify-content-center align-items-center gap-1 flex-wrap mb-1">';
+
+    pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchFirst()"' + (_searchPage === 1 ? ' disabled' : '') + ' title="首页"><i class="fas fa-angle-double-left"></i></button>';
+    pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="doExSearchPrev()"' + (_searchPage <= 1 ? ' disabled' : '') + ' title="上一页"><i class="fas fa-chevron-left"></i></button>';
+
+    pagHtml += '<button class="btn btn-outline-primary btn-sm" onclick="doExSearchNext()"' + (!_hasNext ? ' disabled' : '') + ' title="下一页"><i class="fas fa-chevron-right"></i></button>';
+    pagHtml += '<button class="btn btn-outline-secondary btn-sm" onclick="goToSearchLast()"' + (!_prevCursor ? ' disabled' : '') + ' title="末页"><i class="fas fa-angle-double-right"></i></button>';
+
+    pagHtml += '</div>';
+
+    // ─── Pagination row 2: range jumps ───
+    var rangeSteps = [0, 20, 40, 60, 80];
+    pagHtml += '<div class="d-flex justify-content-center align-items-center gap-1 flex-wrap">';
+    pagHtml += '<span class="text-muted small me-1">跳转:</span>';
+    for (var i = 0; i < rangeSteps.length; i++) {
+        (function(r) {
+            pagHtml += '<button class="btn btn-outline-info btn-sm px-2" onclick="goToSearchRange(' + r + ')">' + r + '%</button>';
+        })(rangeSteps[i]);
     }
     pagHtml += '</div>';
+
     pag.innerHTML = pagHtml;
 }
 

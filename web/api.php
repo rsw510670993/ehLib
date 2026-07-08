@@ -802,11 +802,26 @@ try {
             $query = $_POST['query'] ?? '';
             $page = max(1, (int)($_POST['page'] ?? 1));
             $next = $_POST['next'] ?? '';
+            $prev = $_POST['prev'] ?? '';
+            $range = $_POST['range'] ?? '';
+            $categories = $_POST['categories'] ?? '';
             if (!$query) error_exit('Search query required');
             $args = ['search', $source, '--query', $query, '--page', (string)$page];
             if ($next !== '') {
                 $args[] = '--next';
                 $args[] = $next;
+            }
+            if ($prev !== '') {
+                $args[] = '--prev';
+                $args[] = $prev;
+            }
+            if ($range !== '') {
+                $args[] = '--range';
+                $args[] = $range;
+            }
+            if ($categories !== '') {
+                $args[] = '--categories';
+                $args[] = $categories;
             }
             $result = run_python($args, 60);
             if (!$result['ok']) error_exit($result['stderr'] ?: 'Search failed');
@@ -816,7 +831,10 @@ try {
                 'results' => $data['galleries'] ?? $data,
                 'page' => $data['page'] ?? $page,
                 'next_cursor' => $data['next_cursor'] ?? '',
+                'prev_cursor' => $data['prev_cursor'] ?? '',
                 'has_next' => !empty($data['has_next']),
+                'total_pages' => (int)($data['total_pages'] ?? 0),
+                'total_results' => (int)($data['total_results'] ?? 0),
             ]);
             break;
 
