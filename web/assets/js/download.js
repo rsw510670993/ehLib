@@ -124,6 +124,8 @@ let _progressPoller = null;
 let _activeProgressKey = null;
 let _batchActive = false;
 let _retryActive = false;
+let _crawlActive = false;
+let _crawlEverSeen = false;
 let _trayManualCollapsed = false;
 
 function startProgressPoller() {
@@ -231,6 +233,10 @@ function renderRetryProgress(tasks, emptyText) {
     }).join('\n');
     el.innerHTML = '<span class="info">' + lines.replace(/\n/g, '<br>') + '</span>';
 }
+function isCrawlTask(t) {
+    return t.source === 'crawl' || String(t.source_id || '').startsWith('crawl');
+}
+
 async function checkDownloadProgress() {
     const data = await api('get_download_progress');
     const tasks = (data && data.tasks) || [];
@@ -242,7 +248,11 @@ async function checkDownloadProgress() {
 
     if (tasks.length === 0) {
         body.innerHTML = '';
-        if (label) label.textContent = _batchActive ? '(等待中...)' : '(空闲)';
+        var statusText = '(空闲)';
+        if (_batchActive) statusText = '(等待中...)';
+        else if (_crawlActive) statusText = '(爬取等待中...)';
+        else if (_retryActive) statusText = '(重试等待中...)';
+        if (label) label.textContent = statusText;
         card.classList.add('collapsed');
         _trayManualCollapsed = false;
         if (_batchActive) renderBatchProgress([], '等待下载任务启动...');
@@ -262,13 +272,40 @@ async function checkDownloadProgress() {
             });
             return;
         }
+        if (_crawlActive && _crawlEverSeen) {
+            _crawlActive = false;
+            _crawlEverSeen = false;
+            statusText = '(爬取已完成)';
+            if (label) label.textContent = statusText;
+        } else if (_crawlActive) {
+            return;
+        }
         if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
         return;
     }
 
+    var hasCrawl = tasks.some(isCrawlTask);
+    if (hasCrawl) _crawlEverSeen = true;
+    _crawlActive = hasCrawl;
+
     if (label) label.textContent = '(' + tasks.length + ' 个任务)';
     if (!_trayManualCollapsed) card.classList.remove('collapsed');
     body.innerHTML = tasks.map(function(t) {
+        if (isCrawlTask(t)) {
+            var title = escapeHtml(t.title || '爬取任务');
+            var page = parseInt(t.current, 10) || 0;
+            var msg = escapeHtml(t.message || '');
+            var sourceId = escapeAttr(t.source_id || '');
+            return '<div class="tray-row">' +
+                '<span class="badge bg-secondary">爬取</span>' +
+                '<span class="tray-title" title="' + title + '">' + title + '</span>' +
+                '<div class="tray-bar"><div class="tray-bar-fill" style="width:100%;background:#0d6efd;animation:none"></div></div>' +
+                '<span class="tray-pct">' + page + '</span>' +
+                '<span class="tray-status">' + msg + '</span>' +
+                '<button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="checkDownloadProgress()" title="手动刷新" style="font-size:.7rem"><i class="fas fa-sync"></i></button>' +
+                '<button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="stopCrawl()" title="终止爬取" style="font-size:.7rem"><i class="fas fa-stop"></i></button>' +
+                '</div>';
+        }
         var total = parseInt(t.total_pages, 10) || 0;
         var current = parseInt(t.current, 10) || 0;
         var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(current / total * 100))) : 0;
@@ -285,6 +322,11 @@ async function checkDownloadProgress() {
     }).join('');
     if (_batchActive) renderBatchProgress(tasks);
     if (_retryActive) renderRetryProgress(tasks);
+
+    // crawl shown, stop auto polling (user refreshes manually via sync button)
+    if (_crawlActive && !_activeProgressKey && !_batchActive && !_retryActive) {
+        stopProgressPoller();
+    }
 
     if (_activeProgressKey) {
         var active = tasks.find(function(t) { return progressTaskKey(t) === _activeProgressKey; });
@@ -324,9 +366,14 @@ function trackDownloadProgress(source, sourceId) {
     startProgressPoller();
 }
 
+async function stopCrawl() {
+    if (!await confirmDialog({ title: '终止爬取', message: '确定终止正在运行的后台爬取任务吗？', okText: '终止', okClass: 'btn-danger' })) return;
+    await api('stop_crawl', { form: { action: 'stop_crawl', source: 'exhentai' } });
+    checkDownloadProgress();
+}
+
 function clearDownloadProgress() {
     _activeProgressKey = null;
-    if (!_batchActive && !_retryActive) stopProgressPoller();
     var el = document.getElementById('dl_progress');
     var bar = document.getElementById('dl_progress_bar');
     if (el && bar) {

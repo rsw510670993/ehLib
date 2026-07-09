@@ -1,5 +1,6 @@
+from asyncio import sleep
 from math import ceil
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode
 
 from bs4 import BeautifulSoup
 
@@ -89,6 +90,158 @@ class ExhentaiSite(SiteBase):
             return []
         response.raise_for_status()
         return self._parse_search_results(response.text)
+
+    async def crawl_all_pages(
+        self, query: str, page_size: int = 25,
+        categories: list[int] | None = None,
+        resume_cursor: str = "",
+        resume_page: int = 1,
+        on_page: callable = None,
+    ) -> list[dict]:
+        """爬取所有搜索结果页，返回简化后的 dict 列表。
+        resume_cursor: 从哪个 next_cursor 开始续传
+        resume_page: 当前恢复的页码（仅用于回调）
+        on_page: 每爬完一页的回调，接收 (page, items, next_cursor)
+        """
+        all_items: list[dict] = []
+        page = resume_page
+        next_cursor = resume_cursor
+        has_next = True
+        consecutive_empty = 0
+
+        while has_next:
+            params = {"f_search": query, "f_sname": "on"}
+            if categories is not None:
+                params["f_cats"] = str(self._calc_categories_mask(categories))
+            if next_cursor:
+                params["next"] = next_cursor
+
+            url = f"{EXHENTAI_BASE}/"
+            response = await self._session.fetch(self.name, url, params=params)
+            if self._session.is_cloudflare_blocked(response):
+                logger.warning("Cloudflare blocked on page %d, waiting 60s...", page)
+                await sleep(60)
+                response = await self._session.fetch(self.name, url, params=params)
+                if self._session.is_cloudflare_blocked(response):
+                    raise RuntimeError("Cloudflare still blocking after retry")
+            if response.status_code == 404:
+                break
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            self._parse_next_cursor(soup)
+            page_items = self._parse_search_results_flat(soup)
+
+            if not page_items:
+                consecutive_empty += 1
+                if consecutive_empty >= 3:
+                    break
+            else:
+                consecutive_empty = 0
+                all_items.extend(page_items)
+
+            if on_page:
+                await on_page(page, page_items, self.next_cursor)
+
+            if self.has_next and self.next_cursor:
+                next_cursor = self.next_cursor
+                page += 1
+                logger.info("Crawl page %d complete (%d items), next_cursor=%s, waiting 30min...", page, len(page_items), next_cursor)
+                await sleep(1800)
+            else:
+                has_next = False
+
+        return all_items
+
+    def _parse_search_results_flat(self, soup: BeautifulSoup) -> list[dict]:
+        """解析搜索结果页，返回简化 dict 列表（不含 Gallery 对象构造）"""
+        import re
+        items: list[dict] = []
+        table = soup.select_one("table.itg.gltm") or soup.select_one("table.itg.gld") or soup.select_one("table.itg")
+        if table:
+            for row in table.select("tr"):
+                link = row.select_one("td a[href*='/g/']") or row.select_one("a[href*='/g/']")
+                if not link:
+                    continue
+                href = link.get("href", "")
+                parsed = parse_exhentai_url(href)
+                if not parsed:
+                    continue
+                gid, token = parsed
+                title_elem = row.select_one(".glink, .gl3m")
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                cat_elem = row.select_one(".glcat")
+                category = cat_elem.get_text(strip=True) if cat_elem else ""
+                total_pages = 0
+                uploaded_at = ""
+                gl2m = row.select_one(".gl2m") or row.select_one(".gl4c")
+                if gl2m:
+                    text = gl2m.get_text(" ", strip=True)
+                    m = re.search(r"(\d+)\s+pages?", text, re.IGNORECASE)
+                    if m:
+                        total_pages = int(m.group(1))
+                    date_m = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", text)
+                    if date_m:
+                        uploaded_at = date_m.group(1)
+                # cover thumbnail
+                thumb = ""
+                img = row.select_one("img[src]")
+                if img:
+                    src = img.get("src", "")
+                    if src:
+                        thumb = src
+                items.append({
+                    "source": "exhentai",
+                    "source_id": f"{gid}/{token}",
+                    "title": title,
+                    "category": category,
+                    "total_pages": total_pages,
+                    "uploaded_at": uploaded_at,
+                    "thumbnail": thumb,
+                })
+        if not items:
+            container = soup.select_one("div.itg")
+            if container:
+                for item in container.find_all("div", class_=re.compile(r"^gl1"), recursive=False):
+                    link = item.select_one("a[href*='/g/']")
+                    if not link:
+                        continue
+                    href = link.get("href", "")
+                    parsed = parse_exhentai_url(href)
+                    if not parsed:
+                        continue
+                    gid, token = parsed
+                    title_elem = item.select_one(".glink")
+                    title = title_elem.get_text(strip=True) if title_elem else ""
+                    cat_elem = item.select_one(".glcat, .gl3")
+                    category = cat_elem.get_text(strip=True) if cat_elem else ""
+                    total_pages = 0
+                    uploaded_at = ""
+                    gl5t = item.select_one(".gl5t")
+                    if gl5t:
+                        text = gl5t.get_text(" ", strip=True)
+                        m = re.search(r"(\d+)\s+pages?", text, re.IGNORECASE)
+                        if m:
+                            total_pages = int(m.group(1))
+                        posted_div = gl5t.select_one("div[id^='posted_']")
+                        if posted_div:
+                            uploaded_at = posted_div.get_text(strip=True)
+                    thumb = ""
+                    img = item.select_one("img[src]")
+                    if img:
+                        src = img.get("src", "")
+                        if src:
+                            thumb = src
+                    items.append({
+                        "source": "exhentai",
+                        "source_id": f"{gid}/{token}",
+                        "title": title,
+                        "category": category,
+                        "total_pages": total_pages,
+                        "uploaded_at": uploaded_at,
+                        "thumbnail": thumb,
+                    })
+        return items
 
     def _parse_next_cursor(self, soup: BeautifulSoup) -> None:
         import re

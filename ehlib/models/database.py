@@ -56,11 +56,33 @@ CREATE TABLE IF NOT EXISTS gallery_tags (
 )
 """
 
+CREATE_SEARCH_CACHE = """
+CREATE TABLE IF NOT EXISTS search_cache (
+    source       TEXT NOT NULL,
+    source_id    TEXT NOT NULL,
+    title        TEXT DEFAULT '',
+    title_jp     TEXT DEFAULT '',
+    artist       TEXT DEFAULT '',
+    category     TEXT DEFAULT '',
+    total_pages  INTEGER DEFAULT 0,
+    uploaded_at  TEXT DEFAULT '',
+    thumbnail    TEXT DEFAULT '',
+    thumb_path   TEXT DEFAULT '',
+    searched_at  TEXT DEFAULT '',
+    crawled_at   TEXT DEFAULT '',
+    PRIMARY KEY (source, source_id)
+)
+"""
+
 CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_galleries_source ON galleries(source, source_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_type_name ON tags(type, name)",
     "CREATE INDEX IF NOT EXISTS idx_gallery_tags_gid ON gallery_tags(gallery_id)",
     "CREATE INDEX IF NOT EXISTS idx_gallery_tags_tid ON gallery_tags(tag_id)",
+    "CREATE INDEX IF NOT EXISTS idx_search_cache_artist ON search_cache(artist)",
+    "CREATE INDEX IF NOT EXISTS idx_search_cache_category ON search_cache(category)",
+    "CREATE INDEX IF NOT EXISTS idx_search_cache_searched ON search_cache(searched_at)",
+    "CREATE INDEX IF NOT EXISTS idx_search_cache_uploaded ON search_cache(uploaded_at)",
 ]
 
 
@@ -76,8 +98,14 @@ class Database:
             await db.execute(CREATE_GALLERIES)
             await db.execute(CREATE_TAGS)
             await db.execute(CREATE_GALLERY_TAGS)
+            await db.execute(CREATE_SEARCH_CACHE)
             for index_sql in CREATE_INDEXES:
                 await db.execute(index_sql)
+            # 兼容旧库：添加可能缺失的列
+            try:
+                await db.execute("ALTER TABLE search_cache ADD COLUMN uploaded_at TEXT DEFAULT ''")
+            except Exception:
+                pass
             await db.commit()
 
     async def gallery_exists(self, source: str, source_id: str) -> bool:
@@ -362,6 +390,169 @@ class Database:
             created_at=row.get("created_at", ""),
             updated_at=row.get("updated_at", ""),
         )
+
+    # ── Search Cache ──────────────────────────────────────────
+
+    async def save_search_results(self, results: list[dict]) -> int:
+        saved = 0
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("PRAGMA synchronous=OFF")
+            for r in results:
+                cursor = await db.execute(
+                    """INSERT OR IGNORE INTO search_cache
+                       (source, source_id, title, title_jp, artist, category,
+                        total_pages, uploaded_at, thumbnail, searched_at, crawled_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        r.get("source", "exhentai"),
+                        r.get("source_id", ""),
+                        r.get("title", ""),
+                        r.get("title_jp", ""),
+                        r.get("artist", ""),
+                        r.get("category", ""),
+                        r.get("total_pages", 0),
+                        r.get("uploaded_at", ""),
+                        r.get("thumbnail", ""),
+                        now,
+                        now,
+                    ),
+                )
+                if cursor.rowcount > 0:
+                    saved += 1
+            # Update searched_at for existing records
+            for r in results:
+                await db.execute(
+                    "UPDATE search_cache SET searched_at=? WHERE source=? AND source_id=?",
+                    (now, r.get("source", "exhentai"), r.get("source_id", "")),
+                )
+            await db.commit()
+        return saved
+
+    async def search_cache_exists(self, source: str, source_id: str) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM search_cache WHERE source=? AND source_id=?",
+                (source, source_id),
+            )
+            return await cursor.fetchone() is not None
+
+    async def get_search_cache(
+        self,
+        source: str | None = None,
+        artist: str | None = None,
+        title: str | None = None,
+        category: str | None = None,
+        categories: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        query = "SELECT sc.*, g.id IS NOT NULL as is_local FROM search_cache sc LEFT JOIN galleries g ON g.source = sc.source AND g.source_id = sc.source_id WHERE 1=1"
+        params: list = []
+        if source:
+            query += " AND sc.source=?"
+            params.append(source)
+        if artist:
+            query += " AND sc.artist LIKE ?"
+            params.append(f"%{artist}%")
+        if title:
+            query += " AND (sc.title LIKE ? OR sc.title_jp LIKE ?)"
+            params.append(f"%{title}%")
+            params.append(f"%{title}%")
+        if category:
+            query += " AND sc.category=?"
+            params.append(category)
+        if categories:
+            query += " AND sc.category IN (" + ",".join("?" * len(categories)) + ")"
+            params.extend(categories)
+        query += " ORDER BY COALESCE(NULLIF(sc.uploaded_at, ''), '0000-00-00') DESC, sc.crawled_at DESC LIMIT ? OFFSET ?"
+        params.append(limit)
+        params.append(offset)
+
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def count_search_cache(
+        self,
+        source: str | None = None,
+        artist: str | None = None,
+        title: str | None = None,
+        category: str | None = None,
+        categories: list[str] | None = None,
+    ) -> int:
+        query = "SELECT COUNT(*) FROM search_cache WHERE 1=1"
+        params: list = []
+        if source:
+            query += " AND source=?"
+            params.append(source)
+        if artist:
+            query += " AND artist LIKE ?"
+            params.append(f"%{artist}%")
+        if title:
+            query += " AND (title LIKE ? OR title_jp LIKE ?)"
+            params.append(f"%{title}%")
+            params.append(f"%{title}%")
+        if category:
+            query += " AND category=?"
+            params.append(category)
+        if categories:
+            query += " AND category IN (" + ",".join("?" * len(categories)) + ")"
+            params.extend(categories)
+
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(query, params)
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def update_thumb_path(self, source: str, source_id: str, thumb_path: str) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "UPDATE search_cache SET thumb_path=? WHERE source=? AND source_id=?",
+                (thumb_path, source, source_id),
+            )
+            await db.commit()
+
+    async def get_search_cache_without_thumb(self, source: str, limit: int = 100) -> list[dict]:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM search_cache WHERE source=? AND thumb_path='' AND thumbnail!='' LIMIT ?",
+                (source, limit),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_cached_artists(self, source: str = "exhentai") -> list[str]:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT DISTINCT artist FROM search_cache WHERE source=? AND artist!='' ORDER BY artist",
+                (source,),
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+    async def get_cached_categories(self, source: str = "exhentai") -> list[str]:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT DISTINCT category FROM search_cache WHERE source=? AND category!='' ORDER BY category",
+                (source,),
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+    async def delete_search_cache(self, source: str, source_id: str) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM search_cache WHERE source=? AND source_id=?",
+                (source, source_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    # ── Legacy: delete_gallery ──────────────────────────────
 
     async def delete_gallery(self, source: str, source_id: str) -> bool:
         async with aiosqlite.connect(self._db_path) as db:

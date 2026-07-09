@@ -13,6 +13,7 @@ from ehlib.sites.exhentai import ExhentaiSite
 from ehlib.storage.file_manager import FileManager
 from ehlib.utils.helpers import parse_nhentai_url, parse_exhentai_url
 from ehlib.utils.logger import setup_logger, get_logger
+from ehlib.utils.progress import write_progress, remove_progress
 
 
 async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -> None:
@@ -54,53 +55,6 @@ async def cmd_batch(args: argparse.Namespace, config: Config, db: Database) -> N
         await downloader.close()
 
 
-async def cmd_search(args: argparse.Namespace, config: Config, _db: Database) -> None:
-    session = SessionManager(config)
-    try:
-        if args.source == "nhentai":
-            site = NhentaiSite(config, session)
-        elif args.source == "exhentai":
-            site = ExhentaiSite(config, session)
-        else:
-            print(json.dumps({"error": f"Unknown source '{args.source}'"}))
-            return
-
-        next_cursor = getattr(args, 'next_cursor', '')
-        prev_cursor = getattr(args, 'prev_cursor', '')
-        range_val = getattr(args, 'range_val', None)
-        categories = None
-        categories_str = getattr(args, 'categories', '')
-        if categories_str:
-            categories = [int(x.strip()) for x in categories_str.split(',') if x.strip().isdigit()]
-        results = await site.search(args.query, args.page, next_cursor, 
-                                     categories=categories,
-                                     prev_cursor=prev_cursor,
-                                     range_val=range_val)
-        galleries = []
-        for g in results:
-            galleries.append({
-                "source": g.source,
-                "source_id": g.source_id,
-                "title": g.title,
-                "title_jp": g.title_jp,
-                "category": g.category,
-                "total_pages": g.total_pages,
-                "uploaded_at": g.uploaded_at,
-            })
-        output = {
-            "galleries": galleries,
-            "page": getattr(site, 'current_page', args.page),
-            "next_cursor": getattr(site, 'next_cursor', ''),
-            "prev_cursor": getattr(site, 'prev_cursor', ''),
-            "has_next": getattr(site, 'has_next', False),
-            "total_pages": getattr(site, 'total_pages', 0),
-            "total_results": getattr(site, 'total_results', 0),
-        }
-        print(json.dumps(output))
-    finally:
-        await session.close()
-
-
 async def cmd_list(args: argparse.Namespace, _config: Config, db: Database) -> None:
     tag_names = None
     if args.tags:
@@ -120,6 +74,94 @@ async def cmd_list(args: argparse.Namespace, _config: Config, db: Database) -> N
     for g in galleries:
         title_jp_part = g.title_jp if g.title_jp else ""
         print(f"[{g.source}/{g.source_id}] {g.title} | {title_jp_part} ({g.total_pages}p) - {g.downloaded_at}")
+
+
+async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> None:
+    """后台爬取任务：搜索并缓存所有结果页"""
+    progress_file = Path(f"data/crawl_progress_{args.source}.json")
+    cancel_file = Path(f"data/crawl_cancel_{args.source}.flag")
+    CRAWL_TASK_ID = f"crawl_{args.source}"
+
+    # 如果已有取消标记则清除
+    if cancel_file.exists():
+        cancel_file.unlink()
+
+    # 恢复进度
+    resume_cursor = ""
+    resume_page = 1
+    reserved_ids = set()
+    if progress_file.exists() and not args.force:
+        try:
+            data = json.loads(progress_file.read_text())
+            resume_cursor = data.get("next_cursor", "")
+            resume_page = data.get("page", 1)
+            reserved_ids = set(data.get("saved_ids", []))
+            print(f"Resuming from page {resume_page}, cursor={resume_cursor}, {len(reserved_ids)} already cached")
+        except Exception:
+            pass
+
+    session = SessionManager(config)
+    try:
+        if args.source == "exhentai":
+            site = ExhentaiSite(config, session)
+        else:
+            site = NhentaiSite(config, session)
+
+        print(f"Starting crawl: {args.source}, query='{args.query}'")
+        write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, 0, "running", f"Page {resume_page}")
+
+        async def on_page(page: int, items: list[dict], next_cursor: str):
+            # 检查取消标记
+            if cancel_file.exists():
+                print("Cancel signal received, stopping crawl.")
+                raise KeyboardInterrupt()
+
+            saved_ids = []
+            for item in items:
+                sid = item.get("source_id", "")
+                if sid and sid not in reserved_ids:
+                    reserved_ids.add(sid)
+                    saved_ids.append(sid)
+            if saved_ids:
+                batch = [it for it in items if it.get("source_id", "") in saved_ids]
+                await db.save_search_results(batch)
+            # 保存进度文件
+            progress_file.write_text(json.dumps({
+                "page": page,
+                "next_cursor": next_cursor,
+                "saved_ids": list(reserved_ids),
+                "query": args.query,
+            }))
+            # 写入进度到统一进度目录，供前端轮询
+            write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, page, "running", f"Page {page}, cached {len(reserved_ids)}")
+            print(f"  Page {page}: {len(items)} items, total cached: {len(reserved_ids)}")
+
+        cats = None
+        if args.categories:
+            cats = list(args.categories)
+        try:
+            await site.crawl_all_pages(
+                query=args.query,
+                categories=cats,
+                resume_cursor=resume_cursor,
+                resume_page=resume_page,
+                on_page=on_page,
+            )
+        except KeyboardInterrupt:
+            print("Crawl cancelled by user.")
+            remove_progress("crawl", CRAWL_TASK_ID)
+            if cancel_file.exists():
+                cancel_file.unlink()
+            return
+
+        print(f"Crawl complete. Total items cached: {len(reserved_ids)}")
+        remove_progress("crawl", CRAWL_TASK_ID)
+        if progress_file.exists():
+            progress_file.unlink()
+        if cancel_file.exists():
+            cancel_file.unlink()
+    finally:
+        await session.close()
 
 
 async def cmd_config(args: argparse.Namespace, config: Config, _db: Database) -> None:
@@ -330,14 +372,11 @@ def main() -> None:
     batch.add_argument("--file", required=True, help="File containing URLs (one per line)")
     batch.add_argument("--force", action="store_true", help="Force re-download even if already complete (clears local data)")
 
-    search = subparsers.add_parser("search", help="Search galleries online")
-    search.add_argument("source", choices=["exhentai", "nhentai"], help="Source site")
-    search.add_argument("--query", required=True, help="Search query")
-    search.add_argument("--page", type=int, default=1, help="Page number (starting from 1)")
-    search.add_argument("--next", dest="next_cursor", default="", help="Next cursor from previous search results")
-    search.add_argument("--prev", dest="prev_cursor", default="", help="Prev cursor for backward navigation")
-    search.add_argument("--range", dest="range_val", type=int, default=None, help="Jump to percentage (0-99)")
-    search.add_argument("--categories", default="", help="Comma-separated category bitmask values (e.g. 2,4,8 for Doujinshi,Manga,Artist CG)")
+    crawl = subparsers.add_parser("crawl", help="Crawl and cache search results")
+    crawl.add_argument("source", choices=["exhentai", "nhentai"], help="Source site")
+    crawl.add_argument("--query", required=True, help="Search query (artist name, tag, etc.)")
+    crawl.add_argument("--force", action="store_true", help="Restart crawl from beginning")
+    crawl.add_argument("--categories", type=int, nargs="*", help="Category bitmask values (e.g. 2 4 8)")
 
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
@@ -386,7 +425,7 @@ def main() -> None:
         commands = {
             "download": cmd_download,
             "batch": cmd_batch,
-            "search": cmd_search,
+            "crawl": cmd_crawl,
             "list": cmd_list,
             "config": cmd_config,
             "retry": cmd_retry,

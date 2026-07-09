@@ -21,7 +21,7 @@ $base = rtrim(dirname($scriptName), '/');
     <ul class="nav flex-column mt-2">
         <li class="nav-item"><a class="nav-link active" href="#" data-page="dashboard"><i class="fas fa-tachometer-alt"></i>仪表盘</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="search"><i class="fas fa-search"></i>在线搜索</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="cache"><i class="fas fa-database"></i>本地缓存</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="fas fa-cog"></i>系统设置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="download"><i class="fas fa-download"></i>下载控制</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="cookies"><i class="fas fa-cookie-bite"></i>Cookie 配置</a></li>
@@ -356,46 +356,56 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
-        <!-- ═══ 在线搜索 ═══ -->
-        <div id="page_search" class="page-section section-hidden">
+        <!-- ═══ 本地缓存索引 ═══ -->
+        <div id="page_cache" class="page-section section-hidden">
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <span>在线搜索 (exhentai 精简模式)</span>
-                    <button class="btn btn-sm btn-success" id="ex_batch_dl_btn2" onclick="batchDownloadSelected()" disabled><i class="fas fa-download me-1"></i>批量下载 <span id="ex_batch_count2">0</span></button>
+                    <span>本地缓存索引</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadCachePage(1)"><i class="fas fa-sync"></i></button>
                 </div>
-                <div class="card-body">
-                    <div class="mb-2">
+                <div class="card-body border-bottom bg-light py-2">
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1">关键词</label>
+                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索标题/作者" onkeydown="if(event.key==='Enter')cacheSearch()">
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-primary w-100" onclick="cacheSearch()" title="筛选"><i class="fas fa-filter"></i></button>
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-info w-100" onclick="startCrawl()" title="使用关键词+分类爬取 ExHentai"><i class="fas fa-cloud-download-alt"></i></button>
+                        </div>
+                        <div class="col-md-1 d-flex align-items-center">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="crawl_force">
+                                <label class="form-check-label small" for="crawl_force">强制</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
                         <span class="small text-muted me-2">分类:</span>
-                        <div id="ex_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
-                            <button class="cat-tag active" data-cat="all" onclick="toggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
-                            <button class="cat-tag" data-cat="2" onclick="toggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
-                            <button class="cat-tag" data-cat="4" onclick="toggleCategory(this)" style="--cat-color:#3498db">Manga</button>
-                            <button class="cat-tag" data-cat="8" onclick="toggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
-                            <button class="cat-tag" data-cat="16" onclick="toggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
-                            <button class="cat-tag" data-cat="512" onclick="toggleCategory(this)" style="--cat-color:#27ae60">Western</button>
-                            <button class="cat-tag" data-cat="256" onclick="toggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
-                            <button class="cat-tag" data-cat="32" onclick="toggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
-                            <button class="cat-tag" data-cat="64" onclick="toggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
-                            <button class="cat-tag" data-cat="128" onclick="toggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
-                            <button class="cat-tag" data-cat="1" onclick="toggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
+                        <div id="cache_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-cat="all" onclick="cacheToggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag" data-cat="Doujinshi" onclick="cacheToggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
+                            <button class="cat-tag" data-cat="Manga" onclick="cacheToggleCategory(this)" style="--cat-color:#3498db">Manga</button>
+                            <button class="cat-tag" data-cat="Artist CG" onclick="cacheToggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
+                            <button class="cat-tag" data-cat="Game CG" onclick="cacheToggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
+                            <button class="cat-tag" data-cat="Western" onclick="cacheToggleCategory(this)" style="--cat-color:#27ae60">Western</button>
+                            <button class="cat-tag" data-cat="Non-H" onclick="cacheToggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
+                            <button class="cat-tag" data-cat="Image Set" onclick="cacheToggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
+                            <button class="cat-tag" data-cat="Cosplay" onclick="cacheToggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
+                            <button class="cat-tag" data-cat="Asian Porn" onclick="cacheToggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
+                            <button class="cat-tag" data-cat="Misc" onclick="cacheToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
                         </div>
                     </div>
-                    <div class="row g-2 align-items-end mb-3">
-                        <div class="col-md-10">
-                            <input type="text" class="form-control" id="ex_search_query" placeholder="artist:shindol / tag:english / 任意关键词" onkeydown="if(event.key==='Enter')doExSearch()">
-                        </div>
-                        <div class="col-md-2 d-flex gap-1">
-                            <button class="btn btn-primary flex-grow-1" onclick="doExSearch()"><i class="fas fa-search me-1"></i>搜索</button>
-                            <button class="btn btn-outline-secondary" onclick="saveCurrentSearch()" title="保存当前搜索"><i class="fas fa-save"></i></button>
-                        </div>
-                    </div>
-                    <div id="ex_saved_searches" class="mb-2 d-flex flex-wrap gap-1"></div>
-                    <div id="ex_search_meta" class="small text-muted mb-2"></div>
-                    <div id="ex_search_results" class="table-responsive">
-                        <div class="text-center text-muted py-4">输入关键词开始搜索</div>
-                    </div>
-                    <div id="ex_search_pagination" class="mt-2"></div>
                 </div>
+                <div class="card-body" id="cache_grid_body">
+                    <div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
+                </div>
+                <div class="card-footer" id="cache_pagination"></div>
             </div>
         </div>
 
@@ -475,6 +485,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/gallery.js"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/search.js?v=3"></script>
+<script src="assets/js/cache.js"></script>
 </body>
 </html>
