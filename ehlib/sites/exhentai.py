@@ -1,5 +1,7 @@
+import httpx
 from asyncio import sleep
 from math import ceil
+from pathlib import Path
 from urllib.parse import urljoin, urlencode
 
 from bs4 import BeautifulSoup
@@ -65,6 +67,35 @@ class ExhentaiSite(SiteBase):
             gallery.page_urls = gallery.page_urls[:total_pages]
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
+
+    async def fetch_metadata_and_thumb(self, source_id: str, thumbs_dir: str, cover_url: str = "") -> tuple[str, str, str]:
+        gid, token = self._parse_gid_token(source_id)
+        url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
+        response = await self._session.fetch(self.name, url)
+        if self._session.is_cloudflare_blocked(response):
+            raise RuntimeError("Cloudflare blocked")
+        if response.status_code == 404:
+            return ("", "", "")
+        response.raise_for_status()
+        gallery = self._parse_html(response.text, source_id)
+        artist = gallery.artist or ""
+        uploaded_at = gallery.uploaded_at or ""
+        # prefer cover_url from search result thumbnail, fallback to gallery page
+        if not cover_url:
+            cover_url = gallery.cover_url
+        thumb_path = ""
+        if cover_url:
+            safe = source_id.replace("/", "_").replace("\\", "_")
+            ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
+            dest = Path(thumbs_dir) / f"{safe}.{ext}"
+            if not dest.exists() or dest.stat().st_size == 0:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                client = await self._session.get_client(self.name)
+                resp = await client.get(cover_url)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+            thumb_path = str(dest.resolve())
+        return artist, thumb_path, uploaded_at
 
     async def search(self, query: str, page: int = 1, next_cursor: str = "", 
                      categories: list[int] | None = None,
@@ -185,10 +216,10 @@ class ExhentaiSite(SiteBase):
                         uploaded_at = date_m.group(1)
                 # cover thumbnail
                 thumb = ""
-                img = row.select_one("img[src]")
+                img = row.select_one(".glthumb img")
                 if img:
-                    src = img.get("src", "")
-                    if src:
+                    src = img.get("data-src", "") or img.get("src", "")
+                    if src and not src.startswith("data:"):
                         thumb = src
                 items.append({
                     "source": "exhentai",
@@ -227,10 +258,10 @@ class ExhentaiSite(SiteBase):
                         if posted_div:
                             uploaded_at = posted_div.get_text(strip=True)
                     thumb = ""
-                    img = item.select_one("img[src]")
+                    img = item.select_one(".glthumb img, .gl5t img")
                     if img:
-                        src = img.get("src", "")
-                        if src:
+                        src = img.get("data-src", "") or img.get("src", "")
+                        if src and not src.startswith("data:"):
                             thumb = src
                     items.append({
                         "source": "exhentai",
@@ -457,6 +488,14 @@ class ExhentaiSite(SiteBase):
         cover_img = soup.select_one("#gd1 img") or soup.select_one("#gdt img")
         if cover_img:
             cover_url = cover_img.get("src", "")
+        if not cover_url or cover_url.startswith("data:"):
+            # fallback: extract from CSS background (new ExHentai layout)
+            cover_div = soup.select_one("#gdt a div[style*=background]")
+            if cover_div:
+                import re
+                m = re.search(r'url\(([^)]+)\)', cover_div.get("style", ""))
+                if m:
+                    cover_url = m.group(1)
 
         uploaded_at = ""
         posted_label = soup.select_one("#gdd td.gdt1")

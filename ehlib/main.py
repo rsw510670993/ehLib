@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import sys
+from asyncio import sleep
 from pathlib import Path
 
 from ehlib.config import get_config, Config
@@ -90,16 +91,19 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
     resume_cursor = ""
     resume_page = 1
     reserved_ids = set()
+    metadata_done = set()
     if progress_file.exists() and not args.force:
         try:
             data = json.loads(progress_file.read_text())
             resume_cursor = data.get("next_cursor", "")
             resume_page = data.get("page", 1)
             reserved_ids = set(data.get("saved_ids", []))
-            print(f"Resuming from page {resume_page}, cursor={resume_cursor}, {len(reserved_ids)} already cached")
+            metadata_done = set(data.get("metadata_ids", []))
+            print(f"Resuming from page {resume_page}, cursor={resume_cursor}, {len(reserved_ids)} cached, {len(metadata_done)} metadata done")
         except Exception:
             pass
 
+    thumbs_dir = f"data/thumbs/{args.source}"
     session = SessionManager(config)
     try:
         if args.source == "exhentai":
@@ -125,16 +129,43 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
             if saved_ids:
                 batch = [it for it in items if it.get("source_id", "") in saved_ids]
                 await db.save_search_results(batch)
-            # 保存进度文件
+
+            # 获取元数据和封面（1分钟间隔）
+            for idx, item in enumerate(items, 1):
+                if cancel_file.exists():
+                    raise KeyboardInterrupt()
+                sid = item.get("source_id", "")
+                if not sid or sid in metadata_done:
+                    continue
+                try:
+                    artist, thumb_path, uploaded_at = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
+                    await db.update_search_cache_metadata(args.source, sid, artist, thumb_path, uploaded_at)
+                    metadata_done.add(sid)
+                    print(f"    Metadata {idx}/{len(items)}: {sid} artist={artist} uploaded={uploaded_at}")
+                except Exception as e:
+                    print(f"    Metadata failed for {sid}: {e}")
+                # save progress after each item
+                progress_file.write_text(json.dumps({
+                    "page": page,
+                    "next_cursor": next_cursor,
+                    "saved_ids": list(reserved_ids),
+                    "metadata_ids": list(metadata_done),
+                    "query": args.query,
+                }))
+                write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", len(items), idx, "running", f"Page {page}, metadata {idx}/{len(items)}")
+                if idx < len(items):
+                    await sleep(60)
+
+            # 保存进度文件（全页完成后）
             progress_file.write_text(json.dumps({
                 "page": page,
                 "next_cursor": next_cursor,
                 "saved_ids": list(reserved_ids),
+                "metadata_ids": list(metadata_done),
                 "query": args.query,
             }))
-            # 写入进度到统一进度目录，供前端轮询
             write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, page, "running", f"Page {page}, cached {len(reserved_ids)}")
-            print(f"  Page {page}: {len(items)} items, total cached: {len(reserved_ids)}")
+            print(f"  Page {page}: {len(items)} items, total cached: {len(reserved_ids)}, metadata done: {len(metadata_done)}")
 
         cats = None
         if args.categories:

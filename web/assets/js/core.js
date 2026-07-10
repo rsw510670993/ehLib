@@ -64,6 +64,53 @@ function confirmDialog(options) {
         modal.show();
     });
 }
+function promptDialog(options) {
+    options = options || {};
+    return new Promise(function(resolve) {
+        var modalEl = document.getElementById('prompt_modal');
+        if (!modalEl || typeof bootstrap === 'undefined') {
+            resolve(prompt(options.message || '请输入：', options.defaultValue || ''));
+            return;
+        }
+        var titleEl = document.getElementById('prompt_modal_title');
+        var msgEl = document.getElementById('prompt_modal_message');
+        var inputEl = document.getElementById('prompt_modal_input');
+        var okBtn = document.getElementById('prompt_modal_ok');
+        var cancelBtn = document.getElementById('prompt_modal_cancel');
+        titleEl.textContent = options.title || '输入';
+        msgEl.textContent = options.message || '';
+        inputEl.value = options.defaultValue || '';
+        okBtn.textContent = options.okText || '确定';
+        cancelBtn.textContent = options.cancelText || '取消';
+
+        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        var settled = false;
+        var cleanup = function() {
+            okBtn.removeEventListener('click', onOk);
+            modalEl.removeEventListener('hidden.bs.modal', onHidden);
+            inputEl.removeEventListener('keydown', onKeydown);
+        };
+        var onOk = function() {
+            settled = true;
+            cleanup();
+            modal.hide();
+            resolve(inputEl.value);
+        };
+        var onHidden = function() {
+            cleanup();
+            if (!settled) resolve(null);
+        };
+        var onKeydown = function(e) {
+            if (e.key === 'Enter') onOk();
+        };
+        okBtn.addEventListener('click', onOk);
+        modalEl.addEventListener('hidden.bs.modal', onHidden, { once: true });
+        inputEl.addEventListener('keydown', onKeydown);
+        modal.show();
+        setTimeout(function() { inputEl.focus(); }, 100);
+    });
+}
+
 function showToast(msg, type = 'success') {
     const c = document.getElementById('toast_container');
     const el = document.createElement('div');

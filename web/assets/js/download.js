@@ -293,14 +293,16 @@ async function checkDownloadProgress() {
     body.innerHTML = tasks.map(function(t) {
         if (isCrawlTask(t)) {
             var title = escapeHtml(t.title || '爬取任务');
-            var page = parseInt(t.current, 10) || 0;
+            var cur = parseInt(t.current, 10) || 0;
+            var total = parseInt(t.total_pages, 10) || 0;
+            var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(cur / total * 100))) : 100;
+            var label = total > 0 ? cur + '/' + total : (cur || '');
             var msg = escapeHtml(t.message || '');
-            var sourceId = escapeAttr(t.source_id || '');
             return '<div class="tray-row">' +
                 '<span class="badge bg-secondary">爬取</span>' +
                 '<span class="tray-title" title="' + title + '">' + title + '</span>' +
-                '<div class="tray-bar"><div class="tray-bar-fill" style="width:100%;background:#0d6efd;animation:none"></div></div>' +
-                '<span class="tray-pct">' + page + '</span>' +
+                '<div class="tray-bar"><div class="tray-bar-fill" style="width:' + pct + '%;background:#0d6efd;animation:none"></div></div>' +
+                '<span class="tray-pct">' + label + '</span>' +
                 '<span class="tray-status">' + msg + '</span>' +
                 '<button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="checkDownloadProgress()" title="手动刷新" style="font-size:.7rem"><i class="fas fa-sync"></i></button>' +
                 '<button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="stopCrawl()" title="终止爬取" style="font-size:.7rem"><i class="fas fa-stop"></i></button>' +

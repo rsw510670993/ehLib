@@ -74,6 +74,17 @@ CREATE TABLE IF NOT EXISTS search_cache (
 )
 """
 
+CREATE_SEARCH_PRESETS = """
+CREATE TABLE IF NOT EXISTS search_presets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    keyword     TEXT DEFAULT '',
+    categories  TEXT DEFAULT '',
+    force_crawl INTEGER DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT ''
+)
+"""
+
 CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_galleries_source ON galleries(source, source_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_type_name ON tags(type, name)",
@@ -99,6 +110,7 @@ class Database:
             await db.execute(CREATE_TAGS)
             await db.execute(CREATE_GALLERY_TAGS)
             await db.execute(CREATE_SEARCH_CACHE)
+            await db.execute(CREATE_SEARCH_PRESETS)
             for index_sql in CREATE_INDEXES:
                 await db.execute(index_sql)
             # 兼容旧库：添加可能缺失的列
@@ -420,11 +432,11 @@ class Database:
                 )
                 if cursor.rowcount > 0:
                     saved += 1
-            # Update searched_at for existing records
+            # Update searched_at + thumbnail for existing records
             for r in results:
                 await db.execute(
-                    "UPDATE search_cache SET searched_at=? WHERE source=? AND source_id=?",
-                    (now, r.get("source", "exhentai"), r.get("source_id", "")),
+                    "UPDATE search_cache SET searched_at=?, thumbnail=? WHERE source=? AND source_id=?",
+                    (now, r.get("thumbnail", ""), r.get("source", "exhentai"), r.get("source_id", "")),
                 )
             await db.commit()
         return saved
@@ -507,23 +519,19 @@ class Database:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
-    async def update_thumb_path(self, source: str, source_id: str, thumb_path: str) -> None:
+    async def update_search_cache_metadata(self, source: str, source_id: str, artist: str, thumb_path: str, uploaded_at: str = "") -> None:
         async with aiosqlite.connect(self._db_path) as db:
-            await db.execute(
-                "UPDATE search_cache SET thumb_path=? WHERE source=? AND source_id=?",
-                (thumb_path, source, source_id),
-            )
+            if uploaded_at:
+                await db.execute(
+                    "UPDATE search_cache SET artist=?, thumb_path=?, uploaded_at=?, crawled_at=? WHERE source=? AND source_id=?",
+                    (artist, thumb_path, uploaded_at, datetime.now().isoformat(), source, source_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE search_cache SET artist=?, thumb_path=?, crawled_at=? WHERE source=? AND source_id=?",
+                    (artist, thumb_path, datetime.now().isoformat(), source, source_id),
+                )
             await db.commit()
-
-    async def get_search_cache_without_thumb(self, source: str, limit: int = 100) -> list[dict]:
-        async with aiosqlite.connect(self._db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM search_cache WHERE source=? AND thumb_path='' AND thumbnail!='' LIMIT ?",
-                (source, limit),
-            )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
 
     async def get_cached_artists(self, source: str = "exhentai") -> list[str]:
         async with aiosqlite.connect(self._db_path) as db:

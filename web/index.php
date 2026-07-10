@@ -7,7 +7,7 @@
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=4">
+    <link rel="stylesheet" href="assets/css/app.css?v=5">
 </head>
 <body>
 
@@ -54,6 +54,25 @@ $base = rtrim(dirname($scriptName), '/');
                     <div class="modal-footer">
                         <button type="button" class="btn btn-outline-secondary" id="confirm_modal_cancel" data-bs-dismiss="modal">取消</button>
                         <button type="button" class="btn btn-danger" id="confirm_modal_ok">确认</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal fade" id="prompt_modal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="prompt_modal_title">输入</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="prompt_modal_message" class="mb-2"></div>
+                        <input type="text" class="form-control form-control-sm" id="prompt_modal_input">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" id="prompt_modal_cancel" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" id="prompt_modal_ok">确定</button>
                     </div>
                 </div>
             </div>
@@ -378,6 +397,9 @@ $base = rtrim(dirname($scriptName), '/');
                         <div class="col-md-1">
                             <button class="btn btn-sm btn-outline-info w-100" onclick="startCrawl()" title="使用关键词+分类爬取 ExHentai"><i class="fas fa-cloud-download-alt"></i></button>
                         </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-success w-100" onclick="saveSearchPreset()" title="保存当前检索条件"><i class="fas fa-bookmark"></i></button>
+                        </div>
                         <div class="col-md-1 d-flex align-items-center">
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" id="crawl_force">
@@ -401,6 +423,7 @@ $base = rtrim(dirname($scriptName), '/');
                             <button class="cat-tag" data-cat="Misc" onclick="cacheToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
                         </div>
                     </div>
+                    <div class="mt-1" id="saved_presets_row"></div>
                 </div>
                 <div class="card-body" id="cache_grid_body">
                     <div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
@@ -485,6 +508,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/gallery.js"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js"></script>
+<script src="assets/js/cache.js?v=2"></script>
 </body>
 </html>

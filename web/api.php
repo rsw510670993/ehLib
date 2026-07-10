@@ -285,10 +285,11 @@ function run_python_background($args, $pid_file = null) {
 
     // Write a shell script
     $script_file = $data_dir . '/bg_' . $tag . '.sh';
+    $log_file = $data_dir . '/bg_' . $tag . '.log';
     $script = '#!/bin/sh' . "\n"
         . 'echo $$ > ' . escapeshellarg($pid_file) . "\n"
         . 'cd ' . escapeshellarg($root) . "\n"
-        . $cmd_str . "\n"
+        . $cmd_str . ' >> ' . escapeshellarg($log_file) . ' 2>&1' . "\n"
         . 'rm -f ' . escapeshellarg($script_file) . "\n";
     file_put_contents($script_file, $script);
     chmod($script_file, 0755);
@@ -577,6 +578,29 @@ try {
             }
             break;
 
+        case 'batch_delete_cache':
+            $ids_raw = $_POST['ids'] ?? $_GET['ids'] ?? '';
+            if (!$ids_raw) error_exit('ids required');
+            $ids = json_decode($ids_raw, true);
+            if (!is_array($ids) || empty($ids)) error_exit('ids must be a non-empty array');
+            $source = 'exhentai';
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->exec("PRAGMA synchronous=OFF");
+                $count = 0;
+                $stmt = $pdo->prepare('DELETE FROM search_cache WHERE source=? AND source_id=?');
+                foreach ($ids as $sid) {
+                    $stmt->execute([$source, $sid]);
+                    $count += $stmt->rowCount();
+                }
+                json_exit(['message' => 'Deleted ' . $count . ' records', 'deleted' => $count]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
         case 'delete_gallery':
             $source = $_POST['source'] ?? $_GET['source'] ?? '';
             $source_id = $_POST['source_id'] ?? $_GET['source_id'] ?? '';
@@ -772,6 +796,32 @@ try {
             }
             break;
 
+        case 'serve_cache_thumb':
+            $source = $_GET['source'] ?? 'exhentai';
+            $source_id = $_GET['source_id'] ?? '';
+            if (!$source_id) error_exit('source_id required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->prepare('SELECT thumb_path FROM search_cache WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $row = $stmt->fetch();
+                if (!$row || empty($row['thumb_path'])) error_exit('Thumb not found');
+                $thumb_path = $row['thumb_path'];
+                if (!is_file($thumb_path)) error_exit('Thumb file not found');
+                $ext = strtolower(pathinfo($thumb_path, PATHINFO_EXTENSION));
+                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
+                header('Content-Type: ' . ($mime[$ext] ?? 'image/webp'));
+                header('Cache-Control: max-age=86400');
+                readfile($thumb_path);
+                exit;
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
         case 'recover_orphans':
             $source = $_POST['source'] ?? '';
             $args = ['recover-orphans'];
@@ -872,13 +922,12 @@ try {
                 $rows = $stmt->fetchAll();
 
                 $results = [];
-                $thumbs_base = $root . '/data/thumbs/' . $source;
                 foreach ($rows as $row) {
                     $thumb_url = '';
                     $thumb_path = $row['thumb_path'] ?? '';
+                    $source_id = $row['source_id'] ?? '';
                     if ($thumb_path && is_file($thumb_path)) {
-                        $rel = str_replace('\\', '/', substr($thumb_path, strlen($root) + 1));
-                        $thumb_url = $rel;
+                        $thumb_url = 'api.php?action=serve_cache_thumb&source=' . urlencode($source) . '&source_id=' . urlencode($source_id);
                     }
                     $results[] = [
                         'source' => $row['source'] ?? '',
@@ -1084,6 +1133,68 @@ try {
                 }
             }
             json_exit(['parsed' => $extracted, 'all' => $result]);
+            break;
+
+        case 'save_search_preset':
+            $name = $_POST['name'] ?? '';
+            $keyword = $_POST['keyword'] ?? '';
+            $categories_raw = $_POST['categories'] ?? '';
+            $force = !empty($_POST['force']);
+            if (!$name) error_exit('名称不能为空');
+            $categories = '';
+            if ($categories_raw !== '') {
+                $parsed = json_decode($categories_raw, true);
+                if (is_array($parsed)) {
+                    $categories = implode(',', $parsed);
+                } else {
+                    $categories = $categories_raw;
+                }
+            }
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec("CREATE TABLE IF NOT EXISTS search_presets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    keyword TEXT DEFAULT '',
+                    categories TEXT DEFAULT '',
+                    force_crawl INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT ''
+                )");
+                $stmt = $pdo->prepare('INSERT OR REPLACE INTO search_presets (name, keyword, categories, force_crawl, created_at) VALUES (?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
+                $stmt->execute([$name, $keyword, $categories, $force ? 1 : 0]);
+                json_exit(['message' => '已保存']);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'list_search_presets':
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->query("SELECT id, name, keyword, categories, force_crawl, created_at FROM search_presets ORDER BY created_at DESC");
+                $presets = $stmt->fetchAll();
+                json_exit(['presets' => $presets]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'delete_search_preset':
+            $id = (int)($_POST['id'] ?? $_GET['id'] ?? 0);
+            if (!$id) error_exit('id required');
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $stmt = $pdo->prepare('DELETE FROM search_presets WHERE id=?');
+                $stmt->execute([$id]);
+                json_exit(['message' => '已删除']);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
             break;
 
         default:

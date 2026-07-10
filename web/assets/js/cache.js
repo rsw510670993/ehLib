@@ -3,6 +3,7 @@ let _cacheResults = [];
 let _cachePage = 1;
 let _cachePerPage = 25;
 let _cacheTotal = 0;
+let _selectedIds = new Set();
 var CAT_COLORS = {
     'Doujinshi': '#e74c3c', 'Manga': '#3498db', 'Artist CG': '#9b59b6',
     'Game CG': '#e67e22', 'Western': '#27ae60', 'Non-H': '#95a5a6',
@@ -15,7 +16,10 @@ var CAT_COLORS = {
 function cacheToggleCategory(el) {
     var allBtn = document.querySelector('#cache_category_tags .cat-tag[data-cat="all"]');
     if (el.dataset.cat === 'all') {
-        document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
+        var allActive = allBtn.classList.contains('active');
+        document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) {
+            t.classList.toggle('active', !allActive);
+        });
     } else {
         el.classList.toggle('active');
         var allTags = document.querySelectorAll('#cache_category_tags .cat-tag[data-cat]:not([data-cat="all"])');
@@ -70,6 +74,7 @@ async function loadCachePage(page) {
     _cacheTotal = data.total || 0;
     renderCacheGrid();
     renderCachePagination();
+    loadSearchPresets();
 }
 
 function renderCacheGrid() {
@@ -79,7 +84,14 @@ function renderCacheGrid() {
         return;
     }
 
-    body.innerHTML = '<div class="gallery-flex-grid" id="cache_grid">' +
+    var toolbar = '<div id="cache_batch_bar" class="d-flex align-items-center gap-2 mb-2 py-1 px-2 bg-light rounded' + (_selectedIds.size === 0 ? ' d-none' : '') + '">' +
+        '<input class="form-check-input mt-0" type="checkbox" onchange="selectAllCache(this.checked)" ' + (_selectedIds.size === _cacheResults.length ? 'checked' : '') + ' title="全选/取消">' +
+        '<span class="small text-muted me-1" id="batch_count">已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项</span>' +
+        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
+        '<button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="clearCacheSelection()">取消选择</button>' +
+        '</div>';
+
+    body.innerHTML = toolbar + '<div class="gallery-flex-grid" id="cache_grid">' +
         _cacheResults.map(function(g) {
             var displayTitle = g.title || '(无标题)';
             var catColor = CAT_COLORS[g.category] || '#6c757d';
@@ -98,6 +110,7 @@ function renderCacheGrid() {
             return '<div>' +
                 '<div class="card h-100 gallery-card">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0">' +
+                '<div class="card-checkbox"><input type="checkbox" class="form-check-input" onchange="toggleCacheSelect(\'' + escapedSid + '\',this.checked)" ' + (_selectedIds.has(source_id) ? 'checked' : '') + '></div>' +
                 thumbHtml +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
@@ -214,6 +227,136 @@ async function cacheDeleteItem(sid) {
     var res = await api('delete_cache', { form: { action: 'delete_cache', source: 'exhentai', source_id: sid } });
     if (res.ok) {
         showToast('缓存已删除', 'success');
+        await loadCachePage(_cachePage);
+    } else {
+        showToast(res.error || '删除失败', 'danger');
+    }
+}
+
+// ─── Saved Search Presets ─────────────────────────────────
+
+async function saveSearchPreset() {
+    var keyword = document.getElementById('cache_keyword').value.trim();
+    var cats = getCacheSelectedCategories();
+    var force = document.getElementById('crawl_force').checked;
+    var name = await promptDialog({ title: '保存检索条件', message: '为当前检索条件命名：', defaultValue: keyword || '未命名' });
+    if (!name) return;
+    var res = await api('save_search_preset', {
+        form: {
+            action: 'save_search_preset',
+            name: name,
+            keyword: keyword,
+            categories: cats ? JSON.stringify(cats) : '',
+            force: force ? '1' : '',
+        }
+    });
+    if (res.ok) {
+        showToast('检索条件已保存', 'success');
+        await loadSearchPresets();
+    } else {
+        showToast(res.error || '保存失败', 'danger');
+    }
+}
+
+async function loadSearchPresets() {
+    var row = document.getElementById('saved_presets_row');
+    if (!row) return;
+    var res = await api('list_search_presets', { params: { action: 'list_search_presets' } });
+    if (!res.ok || !res.presets || res.presets.length === 0) {
+        row.innerHTML = '';
+        return;
+    }
+    var html = '<div class="d-inline-flex flex-wrap gap-1 align-items-center">';
+    res.presets.forEach(function(p) {
+        var cats = p.categories || '';
+        var force = p.force_crawl ? ' (强制)' : '';
+        var detail = p.keyword;
+        if (cats) detail += ' | ' + cats;
+        html += '<span class="saved-search-tag" onclick="applySearchPreset(\'' + escapeAttr(p.name) + '\')" title="' + escapeAttr(detail) + '">' +
+            '<i class="far fa-bookmark me-1" style="font-size:.65rem"></i>' + escapeHtml(p.name) + force +
+            '<span class="saved-search-del" onclick="event.stopPropagation();deleteSearchPreset(' + p.id + ')" title="删除">&times;</span>' +
+            '</span>';
+    });
+    html += '</div>';
+    row.innerHTML = html;
+}
+
+async function applySearchPreset(name) {
+    var res = await api('list_search_presets', { params: { action: 'list_search_presets' } });
+    if (!res.ok || !res.presets) return;
+    var preset = res.presets.find(function(p) { return p.name === name; });
+    if (!preset) { showToast('未找到该预设', 'warning'); return; }
+    document.getElementById('cache_keyword').value = preset.keyword || '';
+    document.getElementById('crawl_force').checked = !!preset.force_crawl;
+    var cats = preset.categories ? preset.categories.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }) : [];
+    document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+    if (cats.length === 0) {
+        document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
+    } else {
+        cats.forEach(function(c) {
+            var btn = document.querySelector('#cache_category_tags .cat-tag[data-cat="' + c + '"]');
+            if (btn) btn.classList.add('active');
+        });
+        var allBtn = document.querySelector('#cache_category_tags .cat-tag[data-cat="all"]');
+        if (allBtn) {
+            var allTags = document.querySelectorAll('#cache_category_tags .cat-tag[data-cat]:not([data-cat="all"])');
+            var activeTags = document.querySelectorAll('#cache_category_tags .cat-tag.active[data-cat]:not([data-cat="all"])');
+            if (activeTags.length === allTags.length) allBtn.classList.add('active');
+        }
+    }
+}
+
+async function deleteSearchPreset(id) {
+    if (!await confirmDialog({ title: '删除预设', message: '确定删除这个检索条件预设吗？' })) return;
+    var res = await api('delete_search_preset', { form: { action: 'delete_search_preset', id: id } });
+    if (res.ok) {
+        showToast('已删除', 'success');
+        await loadSearchPresets();
+    } else {
+        showToast(res.error || '删除失败', 'danger');
+    }
+}
+
+// ─── Batch Delete ────────────────────────────────────────────
+
+function toggleCacheSelect(sid, checked) {
+    if (checked) _selectedIds.add(sid);
+    else _selectedIds.delete(sid);
+    updateBatchBar();
+}
+
+function selectAllCache(checked) {
+    _selectedIds.clear();
+    if (checked) _cacheResults.forEach(function(g) { _selectedIds.add(g.source_id); });
+    updateBatchBar();
+    renderCacheGrid();
+}
+
+function clearCacheSelection() {
+    _selectedIds.clear();
+    updateBatchBar();
+    renderCacheGrid();
+}
+
+function updateBatchBar() {
+    var bar = document.getElementById('cache_batch_bar');
+    if (!bar) return;
+    if (_selectedIds.size > 0) {
+        bar.classList.remove('d-none');
+        document.getElementById('batch_count').textContent = '已选 ' + _selectedIds.size + ' 项';
+    } else {
+        bar.classList.add('d-none');
+    }
+}
+
+async function batchDeleteCache() {
+    if (_selectedIds.size === 0) { showToast('请先选择项目', 'warning'); return; }
+    if (!await confirmDialog({ title: '批量删除', message: '确定删除选中的 ' + _selectedIds.size + ' 条缓存记录吗？', detail: '仅删除缓存索引，不影响已下载的文件。' })) return;
+    var ids = Array.from(_selectedIds);
+    var res = await api('batch_delete_cache', { form: { action: 'batch_delete_cache', ids: JSON.stringify(ids) } });
+    if (res.ok) {
+        showToast('已删除 ' + (res.deleted || ids.length) + ' 条记录', 'success');
+        _selectedIds.clear();
         await loadCachePage(_cachePage);
     } else {
         showToast(res.error || '删除失败', 'danger');
