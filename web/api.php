@@ -287,6 +287,7 @@ function run_python_background($args, $pid_file = null) {
     $script_file = $data_dir . '/bg_' . $tag . '.sh';
     $log_file = $data_dir . '/bg_' . $tag . '.log';
     $script = '#!/bin/sh' . "\n"
+        . 'export TZ=Asia/Shanghai' . "\n"
         . 'echo $$ > ' . escapeshellarg($pid_file) . "\n"
         . 'cd ' . escapeshellarg($root) . "\n"
         . $cmd_str . ' >> ' . escapeshellarg($log_file) . ' 2>&1' . "\n"
