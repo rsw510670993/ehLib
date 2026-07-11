@@ -101,9 +101,6 @@ function renderCacheGrid() {
             var langColor = { 'japanese': '#6b7280', 'chinese': '#dc3545', 'english': '#0d6efd', 'thai': '#198754' };
             var lang = g.language || '';
             var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + ';border-color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
-            var statusText = g.is_local ? '已下载' : '未下载';
-            var statusClass = g.is_local ? 'text-success' : 'text-muted';
-            var statusIcon = g.is_local ? 'fa-check-circle' : 'fa-circle';
             var thumbHtml = g.thumb_url
                 ? '<img src="' + g.thumb_url + '" class="card-img-top" alt="cover" loading="lazy" style="aspect-ratio:3/4;object-fit:cover" onerror="this.style.display=\'none\'">'
                 : '<div class="placeholder-thumb" style="aspect-ratio:3/4;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:2rem"><i class="far fa-image"></i></div>';
@@ -124,7 +121,6 @@ function renderCacheGrid() {
                 '<div class="d-flex justify-content-between align-items-center gap-1" style="margin-top:2px">' +
                 '<span>' + catBadge + '</span>' +
                 '<span>' + langBadge + '</span>' +
-                '<span class="small ' + statusClass + '"><i class="fas ' + statusIcon + ' me-1"></i>' + statusText + '</span>' +
                 '</div>' +
                 '<div class="d-flex justify-content-between align-items-center" style="margin-top:2px">' +
                 '<span class="small text-muted">' + (g.total_pages || 0) + 'p</span>' +
