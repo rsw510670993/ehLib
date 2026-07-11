@@ -290,7 +290,8 @@ function run_python_background($args, $pid_file = null) {
         . 'echo $$ > ' . escapeshellarg($pid_file) . "\n"
         . 'cd ' . escapeshellarg($root) . "\n"
         . $cmd_str . ' >> ' . escapeshellarg($log_file) . ' 2>&1' . "\n"
-        . 'rm -f ' . escapeshellarg($script_file) . "\n";
+        . 'rm -f ' . escapeshellarg($script_file) . "\n"
+        . 'rm -f ' . escapeshellarg($pid_file) . "\n";
     file_put_contents($script_file, $script);
     chmod($script_file, 0755);
 
