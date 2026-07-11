@@ -97,6 +97,11 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
             data = json.loads(progress_file.read_text())
             resume_cursor = data.get("next_cursor", "")
             resume_page = data.get("page", 1)
+            # 无 next_cursor 且 page>1 说明上一轮已爬完，忽略续传文件从头开始
+            if not resume_cursor and resume_page > 1:
+                print("No next_cursor found, ignoring stale progress, fresh start.")
+                progress_file.unlink()
+                raise Exception("fresh start")
             reserved_ids = set(data.get("saved_ids", []))
             metadata_done = set(data.get("metadata_ids", []))
             print(f"Resuming from page {resume_page}, cursor={resume_cursor}, {len(reserved_ids)} cached, {len(metadata_done)} metadata done")
