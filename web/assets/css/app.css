@@ -60,7 +60,7 @@ body { background: #f5f7fa; }
 .gallery-card .card-img-wrapper:hover .delete-overlay { opacity: 1; }
 .gallery-card .card-body { display: flex; flex-direction: column; }
 .gallery-card .card-body .title-clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; height: calc(1.35em * 4); flex-shrink: 0; }
-.lang-badge { font-size: .65rem; font-weight: 500; padding: .1rem .4rem; border-radius: 3px; border: 1px solid; line-height: 1.3; }
+.lang-badge { display: inline-block; padding: .35em .65em; font-size: .65rem; font-weight: 600; line-height: 1; border-radius: .375rem; border: 1px solid; white-space: nowrap; }
 .gallery-flex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .75rem; }
 #cache_grid { grid-template-columns: repeat(5, 1fr); }
 #page_cache > .card { max-width: 1200px; margin: 0 auto; }
