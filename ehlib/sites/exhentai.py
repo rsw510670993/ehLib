@@ -283,14 +283,12 @@ class ExhentaiSite(SiteBase):
         self.prev_cursor = ""
         for a in soup.select("a"):
             href = a.get("href", "")
-            txt = a.get_text(strip=True).lower()
             m = re.search(r"[?&]next=(\d+)", href)
-            if m and "next" in txt:
+            if m:
                 self.next_cursor = m.group(1)
                 self.has_next = True
             m = re.search(r"[?&]prev=(\d+)", href)
-            # "prev=1" link may have text "Last" (Last >>), not "prev"
-            if m and ("prev" in txt or "last" in txt):
+            if m:
                 self.prev_cursor = m.group(1)
 
     def _parse_total_results(self, soup: BeautifulSoup) -> None:
