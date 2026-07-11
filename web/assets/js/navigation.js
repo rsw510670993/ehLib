@@ -29,13 +29,6 @@ document.querySelectorAll('.sidebar .nav-link').forEach(a => {
     a.addEventListener('click', e => { e.preventDefault(); switchPage(a.dataset.page); });
 });
 
-// ─── Clock ───
-function updateClock() {
-    document.getElementById('clock').textContent = new Date().toLocaleString('zh-CN');
-}
-setInterval(updateClock, 1000);
-updateClock();
-
 // ─── Dashboard ───
 async function loadDashboard() {
     const data = await api('get_stats');

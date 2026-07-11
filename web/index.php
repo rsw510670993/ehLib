@@ -32,10 +32,7 @@ $base = rtrim(dirname($scriptName), '/');
 <div class="main">
     <div class="main-header">
         <div><span id="page_title">仪表盘</span> <small class="text-muted ms-2" id="page_subtitle">系统概览</small></div>
-        <div class="d-flex align-items-center gap-2">
-            <span class="badge bg-secondary" id="status_indicator"><i class="fas fa-circle text-success me-1"></i>在线</span>
-            <span class="text-muted small" id="clock"></span>
-        </div>
+        <div></div>
     </div>
 
     <div class="main-content">
