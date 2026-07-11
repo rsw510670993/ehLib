@@ -161,6 +161,9 @@ class ExhentaiSite(SiteBase):
 
             soup = BeautifulSoup(response.text, "html.parser")
             self._parse_next_cursor(soup)
+            self._parse_total_results(soup)
+            if page == 1:
+                logger.info("ExHentai reports: %d total results, %d pages", self.total_results, self.total_pages)
             page_items = self._parse_search_results_flat(soup)
 
             if not page_items:
