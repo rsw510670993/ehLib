@@ -56,6 +56,9 @@ async function loadGalleries(filters) {
         data.galleries.map(function(g) {
             var displayTitle = g.title_jp || g.title;
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
+            var langColor = { 'japanese': '#6b7280', 'chinese': '#dc3545', 'english': '#0d6efd', 'thai': '#198754' };
+            var lang = g.language || '';
+            var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + ';border-color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
             var fallbackImgUrl = imageApiUrl(g.source, g.source_id, 'cover');
             var imgUrl = g.cover_url || fallbackImgUrl;
             var totalPages = parseInt(g.total_pages || g.pages || 0, 10) || 0;
@@ -77,6 +80,7 @@ async function loadGalleries(filters) {
                 '<div class="card-body p-2">' +
                 '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
                 '<div class="d-flex justify-content-between align-items-center gap-1">' +
+                '<span>' + langBadge + '</span>' +
                 '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + g.source + '</span>' +
                 '<span class="small ' + (isComplete ? 'text-muted' : 'text-warning fw-semibold') + '">' + progressText + '</span>' +
                 '</div>' +

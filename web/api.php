@@ -507,6 +507,7 @@ try {
                         'source_id' => $row['source_id'] ?? '',
                         'title' => $row['title'] ?? '',
                         'title_jp' => $row['title_jp'] ?? '',
+                        'language' => $row['language'] ?? '',
                         'pages' => $total_pages,
                         'total_pages' => $total_pages,
                         'downloaded_pages' => $downloaded_pages,
@@ -936,6 +937,7 @@ try {
                         'source_id' => $row['source_id'] ?? '',
                         'title' => $row['title'] ?? '',
                         'category' => $row['category'] ?? '',
+                        'language' => $row['language'] ?? '',
                         'total_pages' => (int)($row['total_pages'] ?? 0),
                         'artist' => $row['artist'] ?? '',
                         'uploaded_at' => $row['uploaded_at'] ?? '',
@@ -977,6 +979,22 @@ try {
                 $stmt->execute([$source]);
                 $categories = $stmt->fetchAll();
                 json_exit(['categories' => $categories]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'cache_languages':
+            $source = $_GET['source'] ?? 'exhentai';
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_COLUMN);
+                $stmt = $pdo->prepare("SELECT DISTINCT language FROM search_cache WHERE source=? AND language!='' ORDER BY language");
+                $stmt->execute([$source]);
+                $languages = $stmt->fetchAll();
+                json_exit(['languages' => $languages]);
             } catch (Exception $e) {
                 error_exit($e->getMessage());
             }

@@ -68,19 +68,20 @@ class ExhentaiSite(SiteBase):
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
 
-    async def fetch_metadata_and_thumb(self, source_id: str, thumbs_dir: str, cover_url: str = "") -> tuple[str, str, str, str, str]:
+    async def fetch_metadata_and_thumb(self, source_id: str, thumbs_dir: str, cover_url: str = "") -> tuple[str, str, str, str, str, str]:
         gid, token = self._parse_gid_token(source_id)
         url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
         response = await self._session.fetch(self.name, url)
         if self._session.is_cloudflare_blocked(response):
             raise RuntimeError("Cloudflare blocked")
         if response.status_code == 404:
-            return ("", "", "", "", "")
+            return ("", "", "", "", "", "")
         response.raise_for_status()
         gallery = self._parse_html(response.text, source_id)
         artist = gallery.artist or ""
         uploaded_at = gallery.uploaded_at or ""
         category = gallery.category or ""
+        language = gallery.language or ""
         # always use gallery page cover URL (search thumbnail may be a placeholder)
         if gallery.cover_url:
             cover_url = gallery.cover_url
@@ -95,7 +96,7 @@ class ExhentaiSite(SiteBase):
             resp.raise_for_status()
             dest.write_bytes(resp.content)
             thumb_path = str(dest.resolve())
-        return artist, thumb_path, uploaded_at, category, cover_url
+        return artist, thumb_path, uploaded_at, category, cover_url, language
 
     async def search(self, query: str, page: int = 1, next_cursor: str = "", 
                      categories: list[int] | None = None,
