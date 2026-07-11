@@ -7,7 +7,7 @@
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=5">
+    <link rel="stylesheet" href="assets/css/app.css?v=8">
 </head>
 <body>
 
@@ -394,11 +394,8 @@ $base = rtrim(dirname($scriptName), '/');
                         <div class="col-md-1">
                             <button class="btn btn-sm btn-outline-success w-100" onclick="saveSearchPreset()" title="保存当前检索条件"><i class="fas fa-bookmark"></i></button>
                         </div>
-                        <div class="col-md-1 d-flex align-items-center">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="crawl_force">
-                                <label class="form-check-label small" for="crawl_force">强制</label>
-                            </div>
+                        <div class="col-md-1 d-flex align-items-center justify-content-center">
+                            <button class="btn btn-sm btn-outline-warning w-100" id="crawl_force" onclick="this.classList.toggle('active')">强制</button>
                         </div>
                     </div>
                     <div class="row g-2 align-items-end mb-2">
@@ -511,9 +508,9 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/navigation.js"></script>
 <script src="assets/js/config.js"></script>
 <script src="assets/js/download.js"></script>
-<script src="assets/js/gallery.js"></script>
+<script src="assets/js/gallery.js?v=2"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=2"></script>
+<script src="assets/js/cache.js?v=8"></script>
 </body>
 </html>

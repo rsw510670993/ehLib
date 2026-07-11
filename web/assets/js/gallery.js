@@ -1,7 +1,7 @@
 // ─── Gallery (Card Grid) ───
 let _galleryFilters = {};
 let _galleryPage = 1;
-let _galleryPerPage = 20;
+let _galleryPerPage = 30;
 let _galleryTotal = 0;
 
 function gotoGalleryPage(page) {
@@ -121,8 +121,8 @@ function renderGalleryPagination() {
 
     html += '<div class="d-flex align-items-center gap-1 text-nowrap"><span class="text-muted small">每页</span>' +
         '<div class="btn-group btn-group-sm" role="group" aria-label="每页显示数量">' +
-        '<button type="button" class="btn ' + (_galleryPerPage === 20 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(20)">20</button>' +
-        '<button type="button" class="btn ' + (_galleryPerPage === 50 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(50)">50</button>' +
+        '<button type="button" class="btn ' + (_galleryPerPage === 30 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(30)">30</button>' +
+        '<button type="button" class="btn ' + (_galleryPerPage === 60 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(60)">60</button>' +
         '</div>' +
         '<span class="text-muted small">共 ' + _galleryTotal + ' 本</span></div>';
 

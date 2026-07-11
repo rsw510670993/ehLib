@@ -68,34 +68,34 @@ class ExhentaiSite(SiteBase):
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
 
-    async def fetch_metadata_and_thumb(self, source_id: str, thumbs_dir: str, cover_url: str = "") -> tuple[str, str, str]:
+    async def fetch_metadata_and_thumb(self, source_id: str, thumbs_dir: str, cover_url: str = "") -> tuple[str, str, str, str, str]:
         gid, token = self._parse_gid_token(source_id)
         url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
         response = await self._session.fetch(self.name, url)
         if self._session.is_cloudflare_blocked(response):
             raise RuntimeError("Cloudflare blocked")
         if response.status_code == 404:
-            return ("", "", "")
+            return ("", "", "", "", "")
         response.raise_for_status()
         gallery = self._parse_html(response.text, source_id)
         artist = gallery.artist or ""
         uploaded_at = gallery.uploaded_at or ""
-        # prefer cover_url from search result thumbnail, fallback to gallery page
-        if not cover_url:
+        category = gallery.category or ""
+        # always use gallery page cover URL (search thumbnail may be a placeholder)
+        if gallery.cover_url:
             cover_url = gallery.cover_url
         thumb_path = ""
         if cover_url:
             safe = source_id.replace("/", "_").replace("\\", "_")
             ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
             dest = Path(thumbs_dir) / f"{safe}.{ext}"
-            if not dest.exists() or dest.stat().st_size == 0:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                client = await self._session.get_client(self.name)
-                resp = await client.get(cover_url)
-                resp.raise_for_status()
-                dest.write_bytes(resp.content)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            client = await self._session.get_client(self.name)
+            resp = await client.get(cover_url)
+            resp.raise_for_status()
+            dest.write_bytes(resp.content)
             thumb_path = str(dest.resolve())
-        return artist, thumb_path, uploaded_at
+        return artist, thumb_path, uploaded_at, category, cover_url
 
     async def search(self, query: str, page: int = 1, next_cursor: str = "", 
                      categories: list[int] | None = None,
@@ -141,7 +141,7 @@ class ExhentaiSite(SiteBase):
         consecutive_empty = 0
 
         while has_next:
-            params = {"f_search": query, "f_sname": "on"}
+            params = {"f_search": query, "f_sname": "on", "s": "2"}
             if categories is not None:
                 params["f_cats"] = str(self._calc_categories_mask(categories))
             if next_cursor:

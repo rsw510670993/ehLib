@@ -438,7 +438,7 @@ try {
             $tag_mode = $_GET['tag_mode'] ?? 'any';
             $artist = $_GET['artist'] ?? '';
             $language = $_GET['language'] ?? '';
-            $per_page = max(1, min(200, (int)($_GET['per_page'] ?? 20)));
+            $per_page = max(1, min(200, (int)($_GET['per_page'] ?? 30)));
             $page = max(1, (int)($_GET['page'] ?? 1));
             $offset = ($page - 1) * $per_page;
             $tag_names = [];

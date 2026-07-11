@@ -138,8 +138,8 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 if not sid or sid in metadata_done:
                     continue
                 try:
-                    artist, thumb_path, uploaded_at = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
-                    await db.update_search_cache_metadata(args.source, sid, artist, thumb_path, uploaded_at)
+                    artist, thumb_path, uploaded_at, category, cover_url = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
+                    await db.update_search_cache_metadata(args.source, sid, artist, thumb_path, uploaded_at, category, cover_url)
                     metadata_done.add(sid)
                     print(f"    Metadata {idx}/{len(items)}: {sid} artist={artist} uploaded={uploaded_at}")
                 except Exception as e:

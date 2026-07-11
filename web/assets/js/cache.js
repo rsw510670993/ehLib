@@ -84,11 +84,13 @@ function renderCacheGrid() {
         return;
     }
 
-    var toolbar = '<div id="cache_batch_bar" class="d-flex align-items-center gap-2 mb-2 py-1 px-2 bg-light rounded' + (_selectedIds.size === 0 ? ' d-none' : '') + '">' +
-        '<input class="form-check-input mt-0" type="checkbox" onchange="selectAllCache(this.checked)" ' + (_selectedIds.size === _cacheResults.length ? 'checked' : '') + ' title="全选/取消">' +
-        '<span class="small text-muted me-1" id="batch_count">已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项</span>' +
-        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
-        '<button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="clearCacheSelection()">取消选择</button>' +
+    var hasSel = _selectedIds.size > 0;
+    var allSel = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
+    var toolbar = '<div id="cache_batch_bar" class="d-flex align-items-center gap-2 mb-2 py-1 px-2 bg-light rounded">' +
+        '<input class="form-check-input mt-0" type="checkbox" onchange="selectAllCache(this.checked)" ' + (allSel ? 'checked' : '') + ' title="全选/取消">' +
+        '<span class="small text-muted me-1" id="batch_count">' + (hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中') + '</span>' +
+        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"' + (hasSel ? '' : ' disabled') + '><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
+        '<button class="btn btn-sm btn-outline-secondary py-0 px-2' + (hasSel ? '' : ' d-none') + '" onclick="clearCacheSelection()">取消选择</button>' +
         '</div>';
 
     body.innerHTML = toolbar + '<div class="gallery-flex-grid" id="cache_grid">' +
@@ -108,19 +110,19 @@ function renderCacheGrid() {
                 ? '<button class="btn btn-sm btn-outline-secondary py-0 px-1" disabled title="已下载"><i class="fas fa-check"></i></button>'
                 : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
             return '<div>' +
-                '<div class="card h-100 gallery-card">' +
-                '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0">' +
-                '<div class="card-checkbox"><input type="checkbox" class="form-check-input" onchange="toggleCacheSelect(\'' + escapedSid + '\',this.checked)" ' + (_selectedIds.has(source_id) ? 'checked' : '') + '></div>' +
+                '<div class="card gallery-card">' +
+                '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0;cursor:pointer" onclick="toggleCacheSelect(\'' + escapedSid + '\',null,event)">' +
+                '<div class="card-checkbox"><input type="checkbox" class="form-check-input" onchange="toggleCacheSelect(\'' + escapedSid + '\',this.checked,event)" ' + (_selectedIds.has(source_id) ? 'checked' : '') + '></div>' +
                 thumbHtml +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
-                '<div class="card-body p-2">' +
+                '<div class="card-body px-2 py-1">' +
                 '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
-                '<div class="d-flex justify-content-between align-items-center gap-1 mt-1">' +
+                '<div class="d-flex justify-content-between align-items-center gap-1" style="margin-top:2px">' +
                 '<span>' + catBadge + '</span>' +
                 '<span class="small ' + statusClass + '"><i class="fas ' + statusIcon + ' me-1"></i>' + statusText + '</span>' +
                 '</div>' +
-                '<div class="d-flex justify-content-between align-items-center mt-1">' +
+                '<div class="d-flex justify-content-between align-items-center" style="margin-top:2px">' +
                 '<span class="small text-muted">' + (g.total_pages || 0) + 'p</span>' +
                 downloadBtn +
                 '</div>' +
@@ -177,7 +179,7 @@ function cacheClearFilter() {
 async function startCrawl() {
     var query = document.getElementById('crawl_keyword').value.trim();
     if (!query) { showToast('请输入爬取关键词', 'warning'); return; }
-    var force = document.getElementById('crawl_force').checked;
+    var force = document.getElementById('crawl_force').classList.contains('active');
     var allBtn = document.querySelector('#cache_category_tags .cat-tag[data-cat="all"]');
     var categories = (allBtn && allBtn.classList.contains('active')) ? 'all' : [];
     if (categories !== 'all') {
@@ -238,7 +240,7 @@ async function cacheDeleteItem(sid) {
 async function saveSearchPreset() {
     var keyword = document.getElementById('crawl_keyword').value.trim();
     var cats = getCacheSelectedCategories();
-    var force = document.getElementById('crawl_force').checked;
+    var force = document.getElementById('crawl_force').classList.contains('active');
     var name = await promptDialog({ title: '保存检索条件', message: '为当前检索条件命名：', defaultValue: keyword || '未命名' });
     if (!name) return;
     var res = await api('save_search_preset', {
@@ -287,7 +289,7 @@ async function applySearchPreset(name) {
     var preset = res.presets.find(function(p) { return p.name === name; });
     if (!preset) { showToast('未找到该预设', 'warning'); return; }
     document.getElementById('crawl_keyword').value = preset.keyword || '';
-    document.getElementById('crawl_force').checked = !!preset.force_crawl;
+    document.getElementById('crawl_force').classList.toggle('active', !!preset.force_crawl);
     var cats = preset.categories ? preset.categories.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }) : [];
     document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
     if (cats.length === 0) {
@@ -319,7 +321,13 @@ async function deleteSearchPreset(id) {
 
 // ─── Batch Delete ────────────────────────────────────────────
 
-function toggleCacheSelect(sid, checked) {
+function toggleCacheSelect(sid, checked, e) {
+    if (e) e.stopPropagation();
+    if (checked === null) {
+        var cb = e.currentTarget.querySelector('.form-check-input');
+        if (cb) { cb.checked = !cb.checked; checked = cb.checked; }
+        else return;
+    }
     if (checked) _selectedIds.add(sid);
     else _selectedIds.delete(sid);
     updateBatchBar();
@@ -341,12 +349,16 @@ function clearCacheSelection() {
 function updateBatchBar() {
     var bar = document.getElementById('cache_batch_bar');
     if (!bar) return;
-    if (_selectedIds.size > 0) {
-        bar.classList.remove('d-none');
-        document.getElementById('batch_count').textContent = '已选 ' + _selectedIds.size + ' 项';
-    } else {
-        bar.classList.add('d-none');
-    }
+    var hasSel = _selectedIds.size > 0;
+    var allSelected = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
+    var countEl = document.getElementById('batch_count');
+    var delBtn = bar.querySelector('.btn-outline-danger');
+    var cancelBtn = bar.querySelector('.btn-outline-secondary');
+    var selectAll = bar.querySelector('.form-check-input');
+    if (countEl) countEl.textContent = hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中';
+    if (delBtn) delBtn.disabled = !hasSel;
+    if (cancelBtn) cancelBtn.classList.toggle('d-none', !hasSel);
+    if (selectAll) selectAll.checked = allSelected;
 }
 
 async function batchDeleteCache() {

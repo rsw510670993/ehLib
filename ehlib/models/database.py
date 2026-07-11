@@ -519,17 +519,17 @@ class Database:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
-    async def update_search_cache_metadata(self, source: str, source_id: str, artist: str, thumb_path: str, uploaded_at: str = "") -> None:
+    async def update_search_cache_metadata(self, source: str, source_id: str, artist: str, thumb_path: str, uploaded_at: str = "", category: str = "", thumbnail: str = "") -> None:
         async with aiosqlite.connect(self._db_path) as db:
             if uploaded_at:
                 await db.execute(
-                    "UPDATE search_cache SET artist=?, thumb_path=?, uploaded_at=?, crawled_at=? WHERE source=? AND source_id=?",
-                    (artist, thumb_path, uploaded_at, datetime.now().isoformat(), source, source_id),
+                    "UPDATE search_cache SET artist=?, thumb_path=?, uploaded_at=?, category=?, thumbnail=?, crawled_at=? WHERE source=? AND source_id=?",
+                    (artist, thumb_path, uploaded_at, category, thumbnail, datetime.now().isoformat(), source, source_id),
                 )
             else:
                 await db.execute(
-                    "UPDATE search_cache SET artist=?, thumb_path=?, crawled_at=? WHERE source=? AND source_id=?",
-                    (artist, thumb_path, datetime.now().isoformat(), source, source_id),
+                    "UPDATE search_cache SET artist=?, thumb_path=?, category=?, thumbnail=?, crawled_at=? WHERE source=? AND source_id=?",
+                    (artist, thumb_path, category, thumbnail, datetime.now().isoformat(), source, source_id),
                 )
             await db.commit()
 
