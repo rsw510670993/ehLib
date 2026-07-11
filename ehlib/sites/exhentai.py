@@ -100,7 +100,7 @@ class ExhentaiSite(SiteBase):
     async def search(self, query: str, page: int = 1, next_cursor: str = "", 
                      categories: list[int] | None = None,
                      prev_cursor: str = "", range_val: int | None = None) -> list[Gallery]:
-        params = {"f_search": query}
+        params = {"f_search": query, "f_sft": "on", "f_sfu": "on", "f_sfl": "on"}
         if categories is not None:
             if categories:
                 params["f_cats"] = str(self._calc_categories_mask(categories))
@@ -141,7 +141,7 @@ class ExhentaiSite(SiteBase):
         consecutive_empty = 0
 
         while has_next:
-            params = {"f_search": query, "f_sname": "on", "s": "2"}
+            params = {"f_search": query, "f_sname": "on", "s": "2", "f_sft": "on", "f_sfu": "on", "f_sfl": "on"}
             if categories is not None:
                 params["f_cats"] = str(self._calc_categories_mask(categories))
             if next_cursor:
