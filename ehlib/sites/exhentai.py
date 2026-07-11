@@ -456,6 +456,7 @@ class ExhentaiSite(SiteBase):
         artist = ""
         group_name = ""
         language = ""
+        language_candidates = []
         category = ""
         tags = []
 
@@ -480,7 +481,12 @@ class ExhentaiSite(SiteBase):
                 elif tag_type == "group":
                     group_name = tag_name
                 elif tag_type == "language":
-                    language = tag_name
+                    language_candidates.append(tag_name)
+
+        # prefer specific language over "translated"
+        if language_candidates:
+            specific = [l for l in language_candidates if l.lower() != "translated"]
+            language = specific[0] if specific else language_candidates[0]
 
         category_elem = soup.select_one("#gdc")
         if category_elem:
