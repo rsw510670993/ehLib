@@ -154,7 +154,8 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 }))
                 write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", len(items), idx, "running", f"Page {page}, metadata {idx}/{len(items)}")
                 if idx < len(items):
-                    await sleep(60)
+                    import random
+                    await sleep(random.randint(5, 10))
 
             # 保存进度文件（全页完成后）
             progress_file.write_text(json.dumps({

@@ -177,8 +177,10 @@ class ExhentaiSite(SiteBase):
             if self.has_next and self.next_cursor:
                 next_cursor = self.next_cursor
                 page += 1
-                logger.info("Crawl page %d complete (%d items), next_cursor=%s, waiting 30min...", page, len(page_items), next_cursor)
-                await sleep(1800)
+                import random
+                delay = random.randint(300, 600)
+                logger.info("Crawl page %d complete (%d items), next_cursor=%s, waiting %ds...", page, len(page_items), next_cursor, delay)
+                await sleep(delay)
             else:
                 has_next = False
 
