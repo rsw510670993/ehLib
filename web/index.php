@@ -385,14 +385,8 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="card-body border-bottom bg-light py-2">
                     <div class="row g-2 align-items-end mb-2">
                         <div class="col-md-5">
-                            <label class="form-label small mb-1">关键词</label>
-                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索标题/作者" onkeydown="if(event.key==='Enter')cacheSearch()">
-                        </div>
-                        <div class="col-md-1">
-                            <button class="btn btn-sm btn-outline-primary w-100" onclick="cacheSearch()" title="筛选"><i class="fas fa-filter"></i></button>
-                        </div>
-                        <div class="col-md-1">
-                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
+                            <label class="form-label small mb-1 text-info"><i class="fas fa-cloud-download-alt me-1"></i>爬取关键词（ExHentai 语法）</label>
+                            <input type="text" class="form-control form-control-sm" id="crawl_keyword" placeholder='例如 artist:"iruma kamiri$" 或 tags' onkeydown="if(event.key==='Enter')startCrawl()">
                         </div>
                         <div class="col-md-1">
                             <button class="btn btn-sm btn-outline-info w-100" onclick="startCrawl()" title="使用关键词+分类爬取 ExHentai"><i class="fas fa-cloud-download-alt"></i></button>
@@ -405,6 +399,18 @@ $base = rtrim(dirname($scriptName), '/');
                                 <input class="form-check-input" type="checkbox" id="crawl_force">
                                 <label class="form-check-label small" for="crawl_force">强制</label>
                             </div>
+                        </div>
+                    </div>
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1 text-muted"><i class="fas fa-filter me-1"></i>本地检索</label>
+                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索标题/作者" onkeydown="if(event.key==='Enter')cacheSearch()">
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-primary w-100" onclick="cacheSearch()" title="筛选"><i class="fas fa-filter"></i></button>
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
                         </div>
                     </div>
                     <div>

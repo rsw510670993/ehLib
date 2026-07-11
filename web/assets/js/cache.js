@@ -175,8 +175,8 @@ function cacheClearFilter() {
 // ─── Crawl action ─────────────────────────────────────────
 
 async function startCrawl() {
-    var query = document.getElementById('cache_keyword').value.trim();
-    if (!query) { showToast('请输入关键词', 'warning'); return; }
+    var query = document.getElementById('crawl_keyword').value.trim();
+    if (!query) { showToast('请输入爬取关键词', 'warning'); return; }
     var force = document.getElementById('crawl_force').checked;
     var allBtn = document.querySelector('#cache_category_tags .cat-tag[data-cat="all"]');
     var categories = (allBtn && allBtn.classList.contains('active')) ? 'all' : [];
@@ -236,7 +236,7 @@ async function cacheDeleteItem(sid) {
 // ─── Saved Search Presets ─────────────────────────────────
 
 async function saveSearchPreset() {
-    var keyword = document.getElementById('cache_keyword').value.trim();
+    var keyword = document.getElementById('crawl_keyword').value.trim();
     var cats = getCacheSelectedCategories();
     var force = document.getElementById('crawl_force').checked;
     var name = await promptDialog({ title: '保存检索条件', message: '为当前检索条件命名：', defaultValue: keyword || '未命名' });
@@ -286,7 +286,7 @@ async function applySearchPreset(name) {
     if (!res.ok || !res.presets) return;
     var preset = res.presets.find(function(p) { return p.name === name; });
     if (!preset) { showToast('未找到该预设', 'warning'); return; }
-    document.getElementById('cache_keyword').value = preset.keyword || '';
+    document.getElementById('crawl_keyword').value = preset.keyword || '';
     document.getElementById('crawl_force').checked = !!preset.force_crawl;
     var cats = preset.categories ? preset.categories.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }) : [];
     document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
