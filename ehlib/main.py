@@ -302,7 +302,10 @@ async def cmd_verify(args: argparse.Namespace, config: Config, db: Database) -> 
                     errors += 1
                     print(f"  ERROR {sid}: {e}")
 
-                write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "running", f"{verified}/{total}, {mismatches}不同, {errors}错")
+                details = f"{verified}/{total}"
+                if mismatches or errors:
+                    details += f"  △{mismatches} ✗{errors}"
+                write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "running", details)
 
             start_idx += BATCH_SIZE
             CHECKPOINT.write_text(json.dumps({
@@ -314,11 +317,14 @@ async def cmd_verify(args: argparse.Namespace, config: Config, db: Database) -> 
             if start_idx < total and not CANCEL.exists():
                 delay = random.randint(60, 300)
                 next_run = time.strftime("%H:%M:%S", time.localtime(time.time() + delay))
-                print(f"Batch done, next at {next_run}, waiting {delay}s...")
-                write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "waiting", f"等待至 {next_run} ({delay}s)")
+                details = f"{verified}/{total}"
+                if mismatches or errors:
+                    details += f"  △{mismatches} ✗{errors}"
+                print(f"Batch done ({details}), next at {next_run}, waiting {delay}s...")
+                write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "waiting", f"等待至 {next_run}  {details}")
                 await sleep(delay)
 
-        print(f"Verify finished: {verified} verified, {mismatches} mismatches, {errors} errors")
+        print(f"Verify finished: {verified}/{total}  △{mismatches} ✗{errors}")
         remove_progress("verify", PROGRESS_ID)
         if CHECKPOINT.exists():
             CHECKPOINT.unlink()
