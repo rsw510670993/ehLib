@@ -919,7 +919,14 @@ try {
                     $params = array_merge($params, $categories);
                 }
                 $cache_lang = $_GET['language'] ?? '';
-                if ($cache_lang) { $where .= ' AND sc.language=?'; $params[] = $cache_lang; }
+                if ($cache_lang) {
+                    $langs = array_filter(array_map('trim', explode(',', $cache_lang)));
+                    if (!empty($langs)) {
+                        $placeholders = implode(',', array_fill(0, count($langs), '?'));
+                        $where .= ' AND sc.language IN (' . $placeholders . ')';
+                        foreach ($langs as $l) $params[] = $l;
+                    }
+                }
 
                 // Count
                 $count_query = "SELECT COUNT(*) FROM search_cache sc $where";
