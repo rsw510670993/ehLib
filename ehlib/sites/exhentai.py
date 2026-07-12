@@ -82,7 +82,7 @@ class ExhentaiSite(SiteBase):
         artist = gallery.artist or ""
         uploaded_at = gallery.uploaded_at or ""
         category = gallery.category or ""
-        language = gallery.language or ""
+        language = (gallery.language or "").lower()
         title_jp = gallery.title_jp or ""
         group_name = gallery.group_name or ""
         tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
@@ -512,7 +512,7 @@ class ExhentaiSite(SiteBase):
         # prefer specific language over "translated"
         if language_candidates:
             specific = [l for l in language_candidates if l.lower() != "translated"]
-            language = specific[0] if specific else language_candidates[0]
+            language = (specific[0] if specific else language_candidates[0]).lower()
 
         category_elem = soup.select_one("#gdc")
         if category_elem:
@@ -550,7 +550,7 @@ class ExhentaiSite(SiteBase):
             for row in soup.select("#gdd tr"):
                 cells = row.select("td")
                 if len(cells) >= 2 and cells[0].get_text(strip=True) == "Language:":
-                    language = cells[1].get_text(" ", strip=True)
+                    language = cells[1].get_text(" ", strip=True).lower()
                     break
 
         gallery = Gallery(
