@@ -22,9 +22,7 @@ $base = rtrim(dirname($scriptName), '/');
         <li class="nav-item"><a class="nav-link active" href="#" data-page="dashboard"><i class="fas fa-tachometer-alt"></i>仪表盘</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="cache"><i class="fas fa-database"></i>本地缓存</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="fas fa-cog"></i>系统设置</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="download"><i class="fas fa-download"></i>下载控制</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="cookies"><i class="fas fa-cookie-bite"></i>Cookie 配置</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="config"><i class="fas fa-cog"></i>站点配置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="export"><i class="fas fa-file-export"></i>数据导出</a></li>
     </ul>
 </div>
@@ -108,9 +106,11 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
-        <!-- ═══ Cookie 配置 ═══ -->
-        <div id="page_cookies" class="page-section section-hidden">
-            <div class="card">
+        <!-- ═══ 站点配置 ═══ -->
+        <div id="page_config" class="page-section section-hidden">
+
+            <!-- Cookie 配置 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>Cookie 配置</span>
                     <button class="btn btn-sm btn-success" onclick="saveCookies()"><i class="fas fa-save me-1"></i>保存</button>
@@ -165,11 +165,9 @@ $base = rtrim(dirname($scriptName), '/');
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ═══ 系统设置 ═══ -->
-        <div id="page_settings" class="page-section section-hidden">
-            <div class="card">
+            <!-- 系统设置 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>系统设置</span>
                     <button class="btn btn-sm btn-success" onclick="saveSettings()"><i class="fas fa-save me-1"></i>保存</button>
@@ -220,11 +218,9 @@ $base = rtrim(dirname($scriptName), '/');
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ═══ 下载控制 ═══ -->
-        <div id="page_download" class="page-section section-hidden">
-            <div class="card">
+            <!-- 单一下载 -->
+            <div class="card mb-3">
                 <div class="card-header">单一下载</div>
                 <div class="card-body">
                     <ul class="nav nav-tabs mb-3" role="tablist">
@@ -286,7 +282,8 @@ $base = rtrim(dirname($scriptName), '/');
                 </div>
             </div>
 
-            <div class="card">
+            <!-- 批量下载 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>批量下载</span>
                     <button class="btn btn-sm btn-primary" id="batch_download_btn" onclick="doBatchDownload()"><i class="fas fa-play me-1"></i>开始批量下载</button>
@@ -307,7 +304,8 @@ $base = rtrim(dirname($scriptName), '/');
                 </div>
             </div>
 
-            <div class="card">
+            <!-- 重新下载 -->
+            <div class="card mb-3">
                 <div class="card-header">重新下载</div>
                 <div class="card-body">
                     <p class="mb-2 text-muted">重新尝试下载之前未完成的画廊（数据库标记为 is_complete=0 的记录）。</p>
@@ -322,6 +320,7 @@ $base = rtrim(dirname($scriptName), '/');
                     <div id="retry_output" class="output-box"></div>
                 </div>
             </div>
+
         </div>
 
         <!-- ═══ 本地图库 ═══ -->
@@ -511,7 +510,7 @@ $base = rtrim(dirname($scriptName), '/');
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
 <script src="assets/js/core.js"></script>
-<script src="assets/js/navigation.js?v=3">
+<script src="assets/js/navigation.js?v=4"></script>
 <script src="assets/js/config.js"></script>
 <script src="assets/js/download.js?v=2"></script>
 <script src="assets/js/gallery.js?v=8"></script>

@@ -8,9 +8,7 @@ function switchPage(name) {
 
     const titles = {
         dashboard: ['仪表盘', '系统概览'],
-        cookies: ['Cookie 配置', '管理站点登录凭据与 Cloudflare 验证'],
-        settings: ['系统设置', '下载路径、并发、User-Agent 等'],
-        download: ['下载控制', '单一下载、批量下载、重试'],
+        config: ['站点配置', 'Cookie、系统设置、下载控制'],
         gallery: ['本地图库', '已下载的画廊列表'],
         cache: ['本地缓存', '检索 exhentai 缓存并下载'],
         export: ['数据导出', '导出元数据为 JSON'],
