@@ -204,6 +204,12 @@ async function startCrawl() {
     }
 }
 
+async function clearCrawlLog() {
+    if (!await confirmDialog({ title: '清理日志', message: '确定清理后台爬取日志吗？' })) return;
+    var res = await api('clear_log', { form: { action: 'clear_log' } });
+    showToast(res.ok ? '日志已清理' : (res.error || '清理失败'), res.ok ? 'success' : 'danger');
+}
+
 // ─── Single download from cache ───────────────────────────
 
 async function cacheDownloadSingle(sid) {

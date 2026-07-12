@@ -394,6 +394,9 @@ $base = rtrim(dirname($scriptName), '/');
                         <div class="col-md-1 d-flex align-items-center justify-content-center">
                             <button class="btn btn-sm btn-outline-warning w-100" id="crawl_force" onclick="this.classList.toggle('active')">强制</button>
                         </div>
+                        <div class="col-md-1 d-flex align-items-center justify-content-center">
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearCrawlLog()" title="清理日志"><i class="fas fa-trash-alt"></i></button>
+                        </div>
                     </div>
                     <div class="row g-2 align-items-end mb-2">
                         <div class="col-md-5">
@@ -508,6 +511,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/gallery.js?v=5"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=12"></script>
+<script src="assets/js/cache.js?v=13"></script>
 </body>
 </html>

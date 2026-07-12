@@ -1220,6 +1220,15 @@ try {
             }
             break;
 
+        case 'clear_log':
+            $data_dir = $root . '/data';
+            $cleared = 0;
+            foreach (glob($data_dir . '/bg_*.log') as $f) {
+                if (is_file($f) && @unlink($f)) $cleared++;
+            }
+            json_exit(['message' => "已清理 $cleared 个日志文件"]);
+            break;
+
         default:
             error_exit('Unknown action: ' . $action);
     }
