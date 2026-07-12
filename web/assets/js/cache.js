@@ -514,7 +514,7 @@ async function stopVerify() {
 }
 
 async function pollVerifyStatus() {
-    var data = await api('verify_status', { form: { action: 'verify_status', source: 'exhentai' } });
+    var data = await api('verify_status&source=exhentai');
     renderVerifyStatus(data);
     if (data && data.running) {
         setTimeout(pollVerifyStatus, 3000);

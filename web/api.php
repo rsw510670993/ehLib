@@ -1092,7 +1092,7 @@ try {
             }
 
             $args = ['verify', $source];
-            $pid = run_python_background($args);
+            $pid = run_python_background($args, $pid_file);
             json_exit(['output' => '校对任务已在后台启动 (PID: ' . $pid . ')'], true);
             break;
 
@@ -1116,7 +1116,7 @@ try {
             break;
 
         case 'verify_status':
-            $source = $_GET['source'] ?? 'exhentai';
+            $source = $_GET['source'] ?? $_POST['source'] ?? 'exhentai';
             $progress_dir = $root . '/data/progress';
             foreach (glob($progress_dir . '/verify__verify_' . $source . '*.json') as $f) {
                 $content = @file_get_contents($f);
