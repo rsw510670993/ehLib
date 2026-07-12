@@ -49,20 +49,51 @@ function resetCacheCategories() {
 
 // ─── Language toggle (local cache) ────────────────────────
 
-let _cacheLanguage = '';
+let _cacheLanguages = new Set();
 
 function cacheToggleLanguage(el) {
-    document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
-    el.classList.add('active');
-    _cacheLanguage = el.dataset.lang === 'all' ? '' : el.dataset.lang;
+    if (el.dataset.lang === 'all') {
+        var allActive = el.classList.contains('active');
+        document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) {
+            t.classList.toggle('active', !allActive);
+        });
+        if (allActive) {
+            _cacheLanguages.clear();
+        } else {
+            document.querySelectorAll('#cache_language_tags .cat-tag[data-lang]:not([data-lang="all"])').forEach(function(t) {
+                _cacheLanguages.add(t.dataset.lang);
+            });
+        }
+    } else {
+        el.classList.toggle('active');
+        if (el.classList.contains('active')) {
+            _cacheLanguages.add(el.dataset.lang);
+        } else {
+            _cacheLanguages.delete(el.dataset.lang);
+        }
+        var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
+        var allTags = document.querySelectorAll('#cache_language_tags .cat-tag[data-lang]:not([data-lang="all"])');
+        var activeTags = document.querySelectorAll('#cache_language_tags .cat-tag.active[data-lang]:not([data-lang="all"])');
+        if (allBtn) allBtn.classList.toggle('active', activeTags.length === allTags.length);
+    }
     cacheSearch();
 }
 
+function getCacheSelectedLanguages() {
+    if (_cacheLanguages.size === 0) return null;
+    return Array.from(_cacheLanguages);
+}
+
 function resetCacheLanguage() {
-    _cacheLanguage = '';
+    _cacheLanguages.clear();
     document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
     var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
-    if (allBtn) allBtn.classList.add('active');
+    if (allBtn) allBtn.classList.remove('active');
+    // 默认选中中文+日语
+    ['japanese', 'chinese'].forEach(function(l) {
+        var btn = document.querySelector('#cache_language_tags .cat-tag[data-lang="' + l + '"]');
+        if (btn) { btn.classList.add('active'); _cacheLanguages.add(l); }
+    });
 }
 
 async function loadCacheLanguages() {
@@ -79,6 +110,7 @@ async function loadCacheLanguages() {
     langs.sort();
     sorted = sorted.concat(langs);
     var container = document.getElementById('cache_language_tags');
+    container.innerHTML = '';
     sorted.forEach(function(l) {
         var btn = document.createElement('button');
         btn.className = 'cat-tag';
@@ -86,8 +118,14 @@ async function loadCacheLanguages() {
         btn.style.setProperty('--cat-color', '#6b7280');
         btn.textContent = l;
         btn.onclick = function() { cacheToggleLanguage(this); };
+        if (l === 'japanese' || l === 'chinese') {
+            btn.classList.add('active');
+            _cacheLanguages.add(l);
+        }
         container.appendChild(btn);
     });
+    var allBtn = container.querySelector('.cat-tag[data-lang="all"]');
+    if (allBtn) allBtn.classList.remove('active');
 }
 
 // ─── Local cache listing ─────────────────────────────────
@@ -104,7 +142,7 @@ async function loadCachePage(page) {
     let params = '?action=cache_search&page=' + _cachePage + '&per_page=' + _cachePerPage;
     if (keyword) params += '&title=' + encodeURIComponent(keyword);
     if (cats) params += '&categories=' + encodeURIComponent(cats.join(','));
-    if (_cacheLanguage) params += '&language=' + encodeURIComponent(_cacheLanguage);
+    if (_cacheLanguages.size > 0) params += '&language=' + encodeURIComponent(getCacheSelectedLanguages().join(','));
 
     const resp = await fetch(API + params);
     const data = await resp.json();

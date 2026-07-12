@@ -470,7 +470,14 @@ try {
                 }
                 if ($source) { $where .= ' AND ' . $prefix . 'source=?'; $params[] = $source; }
                 if ($artist) { $where .= ' AND ' . $prefix . 'artist LIKE ?'; $params[] = '%' . $artist . '%'; }
-                if ($language) { $where .= ' AND ' . $prefix . 'language=?'; $params[] = $language; }
+                if ($language) {
+                    $langs = array_filter(array_map('trim', explode(',', $language)));
+                    if (!empty($langs)) {
+                        $placeholders = implode(',', array_fill(0, count($langs), '?'));
+                        $where .= ' AND ' . $prefix . 'language IN (' . $placeholders . ')';
+                        foreach ($langs as $l) $params[] = $l;
+                    }
+                }
 
                 $group_having = '';
                 if ($has_tags && $tag_mode === 'all') {
