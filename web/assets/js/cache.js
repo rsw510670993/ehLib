@@ -87,16 +87,21 @@ function getCacheSelectedLanguages() {
 function resetCacheLanguage() {
     _cacheLanguages.clear();
     document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
-    var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
-    if (allBtn) allBtn.classList.remove('active');
     // 默认选中中文+日语
     ['japanese', 'chinese'].forEach(function(l) {
         var btn = document.querySelector('#cache_language_tags .cat-tag[data-lang="' + l + '"]');
         if (btn) { btn.classList.add('active'); _cacheLanguages.add(l); }
     });
+    var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
+    if (allBtn) allBtn.classList.remove('active');
 }
 
 async function loadCacheLanguages() {
+    // 默认选中中文+日语，fetch 之前就设置好，loadCachePage 能立刻生效
+    _cacheLanguages.clear();
+    var defaultLangs = ['japanese', 'chinese'];
+    defaultLangs.forEach(function(l) { _cacheLanguages.add(l); });
+
     var resp = await fetch(API + '?action=cache_languages&source=exhentai');
     var data = await resp.json();
     if (!data.ok || !data.languages) return;
@@ -120,7 +125,6 @@ async function loadCacheLanguages() {
         btn.onclick = function() { cacheToggleLanguage(this); };
         if (l === 'japanese' || l === 'chinese') {
             btn.classList.add('active');
-            _cacheLanguages.add(l);
         }
         container.appendChild(btn);
     });

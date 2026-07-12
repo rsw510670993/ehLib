@@ -517,6 +517,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/gallery.js?v=8"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=19"></script>
+<script src="assets/js/cache.js?v=20"></script>
 </body>
 </html>
