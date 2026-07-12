@@ -7,7 +7,7 @@
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=12">
+    <link rel="stylesheet" href="assets/css/app.css?v=13">
 </head>
 <body>
 
@@ -514,9 +514,9 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/navigation.js?v=2">
 <script src="assets/js/config.js"></script>
 <script src="assets/js/download.js"></script>
-<script src="assets/js/gallery.js?v=5"></script>
+<script src="assets/js/gallery.js?v=6"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=14"></script>
+<script src="assets/js/cache.js?v=15"></script>
 </body>
 </html>

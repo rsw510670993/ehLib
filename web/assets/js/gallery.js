@@ -58,7 +58,7 @@ async function loadGalleries(filters) {
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
             var langColor = { 'japanese': '#6b7280', 'chinese': '#dc3545', 'english': '#0d6efd', 'thai': '#198754' };
             var lang = g.language || '';
-            var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + ';border-color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
+            var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
             var fallbackImgUrl = imageApiUrl(g.source, g.source_id, 'cover');
             var imgUrl = g.cover_url || fallbackImgUrl;
             var totalPages = parseInt(g.total_pages || g.pages || 0, 10) || 0;
