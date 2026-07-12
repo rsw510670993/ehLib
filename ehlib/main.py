@@ -278,11 +278,20 @@ async def cmd_verify(args: argparse.Namespace, config: Config, db: Database) -> 
                         for field in ("artist", "uploaded_at", "category", "language", "title_jp", "group_name", "tags"):
                             old_val = row.get(field, "") or ""
                             new_val = new.get(field, "") or ""
-                            if str(old_val) != str(new_val):
+                            if field == "language":
+                                if str(old_val).lower() != str(new_val).lower():
+                                    diff[field] = (old_val, new_val)
+                            elif str(old_val) != str(new_val):
                                 diff[field] = (old_val, new_val)
                         old_pages = row.get("total_pages", 0) or 0
                         if int(old_pages) != int(new.get("total_pages", 0)):
                             diff["total_pages"] = (old_pages, new["total_pages"])
+
+                        # 封面 URL 变化也计为差异
+                        old_cover = row.get("thumbnail", "") or ""
+                        new_cover = new.get("cover_url", "") or ""
+                        if old_cover != new_cover:
+                            diff["cover_url"] = (old_cover, new_cover)
 
                         if diff:
                             mismatches += 1
