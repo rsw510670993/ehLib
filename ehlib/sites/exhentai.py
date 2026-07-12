@@ -1,5 +1,9 @@
+import json
+import httpx
+from asyncio import sleep
 from math import ceil
-from urllib.parse import urljoin
+from pathlib import Path
+from urllib.parse import urljoin, urlencode
 
 from bs4 import BeautifulSoup
 
@@ -65,10 +69,43 @@ class ExhentaiSite(SiteBase):
             gallery.request_stats["gallery_page_requests"] += self._gallery_page_count(total_pages) - 1
         return gallery
 
+    async def fetch_metadata_and_thumb(self, source_id: str, thumbs_dir: str, cover_url: str = "") -> tuple[str, str, str, str, str, str, str, str, str]:
+        gid, token = self._parse_gid_token(source_id)
+        url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
+        response = await self._session.fetch(self.name, url)
+        if self._session.is_cloudflare_blocked(response):
+            raise RuntimeError("Cloudflare blocked")
+        if response.status_code == 404:
+            return ("", "", "", "", "", "", "", "", "")
+        response.raise_for_status()
+        gallery = self._parse_html(response.text, source_id)
+        artist = gallery.artist or ""
+        uploaded_at = gallery.uploaded_at or ""
+        category = gallery.category or ""
+        language = gallery.language or ""
+        title_jp = gallery.title_jp or ""
+        group_name = gallery.group_name or ""
+        tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
+        # always use gallery page cover URL (search thumbnail may be a placeholder)
+        if gallery.cover_url:
+            cover_url = gallery.cover_url
+        thumb_path = ""
+        if cover_url:
+            safe = source_id.replace("/", "_").replace("\\", "_")
+            ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
+            dest = Path(thumbs_dir) / f"{safe}.{ext}"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            client = await self._session.get_client(self.name)
+            resp = await client.get(cover_url)
+            resp.raise_for_status()
+            dest.write_bytes(resp.content)
+            thumb_path = str(dest.resolve())
+        return artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json
+
     async def search(self, query: str, page: int = 1, next_cursor: str = "", 
                      categories: list[int] | None = None,
                      prev_cursor: str = "", range_val: int | None = None) -> list[Gallery]:
-        params = {"f_search": query}
+        params = {"f_search": query, "f_sft": "on", "f_sfu": "on", "f_sfl": "on"}
         if categories is not None:
             if categories:
                 params["f_cats"] = str(self._calc_categories_mask(categories))
@@ -90,6 +127,163 @@ class ExhentaiSite(SiteBase):
         response.raise_for_status()
         return self._parse_search_results(response.text)
 
+    async def crawl_all_pages(
+        self, query: str, page_size: int = 25,
+        categories: list[int] | None = None,
+        resume_cursor: str = "",
+        resume_page: int = 1,
+        on_page: callable = None,
+    ) -> list[dict]:
+        """爬取所有搜索结果页，返回简化后的 dict 列表。
+        resume_cursor: 从哪个 next_cursor 开始续传
+        resume_page: 当前恢复的页码（仅用于回调）
+        on_page: 每爬完一页的回调，接收 (page, items, next_cursor)
+        """
+        all_items: list[dict] = []
+        page = resume_page
+        next_cursor = resume_cursor
+        has_next = True
+        consecutive_empty = 0
+
+        while has_next:
+            params = {"f_search": query, "f_sname": "on", "s": "2", "f_sft": "on", "f_sfu": "on", "f_sfl": "on"}
+            if categories is not None:
+                params["f_cats"] = str(self._calc_categories_mask(categories))
+            if next_cursor:
+                params["next"] = next_cursor
+
+            url = f"{EXHENTAI_BASE}/"
+            response = await self._session.fetch(self.name, url, params=params)
+            if self._session.is_cloudflare_blocked(response):
+                logger.warning("Cloudflare blocked on page %d, waiting 60s...", page)
+                await sleep(60)
+                response = await self._session.fetch(self.name, url, params=params)
+                if self._session.is_cloudflare_blocked(response):
+                    raise RuntimeError("Cloudflare still blocking after retry")
+            if response.status_code == 404:
+                break
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            self._parse_next_cursor(soup)
+            self._parse_total_results(soup)
+            if page == 1:
+                logger.info("ExHentai reports: %d total results, %d pages", self.total_results, self.total_pages)
+            page_items = self._parse_search_results_flat(soup)
+
+            if not page_items:
+                consecutive_empty += 1
+                if consecutive_empty >= 3:
+                    break
+            else:
+                consecutive_empty = 0
+                all_items.extend(page_items)
+
+            if on_page:
+                await on_page(page, page_items, self.next_cursor)
+
+            if self.has_next and self.next_cursor:
+                next_cursor = self.next_cursor
+                page += 1
+                import random
+                delay = random.randint(300, 600)
+                logger.info("Crawl page %d complete (%d items), next_cursor=%s, waiting %ds...", page, len(page_items), next_cursor, delay)
+                await sleep(delay)
+            else:
+                has_next = False
+
+        return all_items
+
+    def _parse_search_results_flat(self, soup: BeautifulSoup) -> list[dict]:
+        """解析搜索结果页，返回简化 dict 列表（不含 Gallery 对象构造）"""
+        import re
+        items: list[dict] = []
+        table = soup.select_one("table.itg.gltm") or soup.select_one("table.itg.gld") or soup.select_one("table.itg")
+        if table:
+            for row in table.select("tr"):
+                link = row.select_one("td a[href*='/g/']") or row.select_one("a[href*='/g/']")
+                if not link:
+                    continue
+                href = link.get("href", "")
+                parsed = parse_exhentai_url(href)
+                if not parsed:
+                    continue
+                gid, token = parsed
+                title_elem = row.select_one(".glink, .gl3m")
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                cat_elem = row.select_one(".glcat")
+                category = cat_elem.get_text(strip=True) if cat_elem else ""
+                total_pages = 0
+                uploaded_at = ""
+                gl2m = row.select_one(".gl2m") or row.select_one(".gl4c")
+                if gl2m:
+                    text = gl2m.get_text(" ", strip=True)
+                    m = re.search(r"(\d+)\s+pages?", text, re.IGNORECASE)
+                    if m:
+                        total_pages = int(m.group(1))
+                    date_m = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", text)
+                    if date_m:
+                        uploaded_at = date_m.group(1)
+                # cover thumbnail
+                thumb = ""
+                img = row.select_one(".glthumb img")
+                if img:
+                    src = img.get("data-src", "") or img.get("src", "")
+                    if src and not src.startswith("data:"):
+                        thumb = src
+                items.append({
+                    "source": "exhentai",
+                    "source_id": f"{gid}/{token}",
+                    "title": title,
+                    "category": category,
+                    "total_pages": total_pages,
+                    "uploaded_at": uploaded_at,
+                    "thumbnail": thumb,
+                })
+        if not items:
+            container = soup.select_one("div.itg")
+            if container:
+                for item in container.find_all("div", class_=re.compile(r"^gl1"), recursive=False):
+                    link = item.select_one("a[href*='/g/']")
+                    if not link:
+                        continue
+                    href = link.get("href", "")
+                    parsed = parse_exhentai_url(href)
+                    if not parsed:
+                        continue
+                    gid, token = parsed
+                    title_elem = item.select_one(".glink")
+                    title = title_elem.get_text(strip=True) if title_elem else ""
+                    cat_elem = item.select_one(".glcat, .gl3")
+                    category = cat_elem.get_text(strip=True) if cat_elem else ""
+                    total_pages = 0
+                    uploaded_at = ""
+                    gl5t = item.select_one(".gl5t")
+                    if gl5t:
+                        text = gl5t.get_text(" ", strip=True)
+                        m = re.search(r"(\d+)\s+pages?", text, re.IGNORECASE)
+                        if m:
+                            total_pages = int(m.group(1))
+                        posted_div = gl5t.select_one("div[id^='posted_']")
+                        if posted_div:
+                            uploaded_at = posted_div.get_text(strip=True)
+                    thumb = ""
+                    img = item.select_one(".glthumb img, .gl5t img")
+                    if img:
+                        src = img.get("data-src", "") or img.get("src", "")
+                        if src and not src.startswith("data:"):
+                            thumb = src
+                    items.append({
+                        "source": "exhentai",
+                        "source_id": f"{gid}/{token}",
+                        "title": title,
+                        "category": category,
+                        "total_pages": total_pages,
+                        "uploaded_at": uploaded_at,
+                        "thumbnail": thumb,
+                    })
+        return items
+
     def _parse_next_cursor(self, soup: BeautifulSoup) -> None:
         import re
         self.next_cursor = ""
@@ -97,14 +291,12 @@ class ExhentaiSite(SiteBase):
         self.prev_cursor = ""
         for a in soup.select("a"):
             href = a.get("href", "")
-            txt = a.get_text(strip=True).lower()
             m = re.search(r"[?&]next=(\d+)", href)
-            if m and "next" in txt:
+            if m:
                 self.next_cursor = m.group(1)
                 self.has_next = True
             m = re.search(r"[?&]prev=(\d+)", href)
-            # "prev=1" link may have text "Last" (Last >>), not "prev"
-            if m and ("prev" in txt or "last" in txt):
+            if m:
                 self.prev_cursor = m.group(1)
 
     def _parse_total_results(self, soup: BeautifulSoup) -> None:
@@ -264,6 +456,7 @@ class ExhentaiSite(SiteBase):
         artist = ""
         group_name = ""
         language = ""
+        language_candidates = []
         category = ""
         tags = []
 
@@ -288,7 +481,12 @@ class ExhentaiSite(SiteBase):
                 elif tag_type == "group":
                     group_name = tag_name
                 elif tag_type == "language":
-                    language = tag_name
+                    language_candidates.append(tag_name)
+
+        # prefer specific language over "translated"
+        if language_candidates:
+            specific = [l for l in language_candidates if l.lower() != "translated"]
+            language = specific[0] if specific else language_candidates[0]
 
         category_elem = soup.select_one("#gdc")
         if category_elem:
@@ -304,6 +502,14 @@ class ExhentaiSite(SiteBase):
         cover_img = soup.select_one("#gd1 img") or soup.select_one("#gdt img")
         if cover_img:
             cover_url = cover_img.get("src", "")
+        if not cover_url or cover_url.startswith("data:"):
+            # fallback: extract from CSS background (new ExHentai layout)
+            cover_div = soup.select_one("#gdt a div[style*=background]")
+            if cover_div:
+                import re
+                m = re.search(r'url\(([^)]+)\)', cover_div.get("style", ""))
+                if m:
+                    cover_url = m.group(1)
 
         uploaded_at = ""
         posted_label = soup.select_one("#gdd td.gdt1")

@@ -1,7 +1,7 @@
 // ─── Gallery (Card Grid) ───
 let _galleryFilters = {};
 let _galleryPage = 1;
-let _galleryPerPage = 20;
+let _galleryPerPage = 30;
 let _galleryTotal = 0;
 
 function gotoGalleryPage(page) {
@@ -56,6 +56,9 @@ async function loadGalleries(filters) {
         data.galleries.map(function(g) {
             var displayTitle = g.title_jp || g.title;
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
+            var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
+            var lang = g.language || '';
+            var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
             var fallbackImgUrl = imageApiUrl(g.source, g.source_id, 'cover');
             var imgUrl = g.cover_url || fallbackImgUrl;
             var totalPages = parseInt(g.total_pages || g.pages || 0, 10) || 0;
@@ -77,6 +80,7 @@ async function loadGalleries(filters) {
                 '<div class="card-body p-2">' +
                 '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
                 '<div class="d-flex justify-content-between align-items-center gap-1">' +
+                langBadge +
                 '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + g.source + '</span>' +
                 '<span class="small ' + (isComplete ? 'text-muted' : 'text-warning fw-semibold') + '">' + progressText + '</span>' +
                 '</div>' +
@@ -121,8 +125,8 @@ function renderGalleryPagination() {
 
     html += '<div class="d-flex align-items-center gap-1 text-nowrap"><span class="text-muted small">每页</span>' +
         '<div class="btn-group btn-group-sm" role="group" aria-label="每页显示数量">' +
-        '<button type="button" class="btn ' + (_galleryPerPage === 20 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(20)">20</button>' +
-        '<button type="button" class="btn ' + (_galleryPerPage === 50 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(50)">50</button>' +
+        '<button type="button" class="btn ' + (_galleryPerPage === 30 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(30)">30</button>' +
+        '<button type="button" class="btn ' + (_galleryPerPage === 60 ? 'btn-primary' : 'btn-outline-secondary') + '" onclick="setGalleryPerPage(60)">60</button>' +
         '</div>' +
         '<span class="text-muted small">共 ' + _galleryTotal + ' 本</span></div>';
 

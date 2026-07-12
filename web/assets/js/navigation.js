@@ -12,7 +12,7 @@ function switchPage(name) {
         settings: ['系统设置', '下载路径、并发、User-Agent 等'],
         download: ['下载控制', '单一下载、批量下载、重试'],
         gallery: ['本地图库', '已下载的画廊列表'],
-        search: ['在线搜索', '搜索 exhentai 并批量下载'],
+        cache: ['本地缓存', '检索 exhentai 缓存并下载'],
         export: ['数据导出', '导出元数据为 JSON'],
     };
     const t = titles[name] || ['页面', ''];
@@ -22,18 +22,12 @@ function switchPage(name) {
     // load data on page switch
     if (name === 'dashboard') loadDashboard();
     if (name === 'gallery') loadGalleries();
+    if (name === 'cache') { loadCachePage(1); loadCacheLanguages(); }
 }
 
 document.querySelectorAll('.sidebar .nav-link').forEach(a => {
     a.addEventListener('click', e => { e.preventDefault(); switchPage(a.dataset.page); });
 });
-
-// ─── Clock ───
-function updateClock() {
-    document.getElementById('clock').textContent = new Date().toLocaleString('zh-CN');
-}
-setInterval(updateClock, 1000);
-updateClock();
 
 // ─── Dashboard ───
 async function loadDashboard() {
@@ -50,6 +44,4 @@ async function loadDashboard() {
 // ─── Auto-load on page enter ───
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
-    loadCookies();
-    loadSettings();
 });
