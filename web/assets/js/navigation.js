@@ -20,7 +20,7 @@ function switchPage(name) {
     // load data on page switch
     if (name === 'dashboard') loadDashboard();
     if (name === 'gallery') loadGalleries();
-    if (name === 'cache') { loadCachePage(1); loadCacheLanguages(); }
+    if (name === 'cache') { loadCacheLanguages(); loadCachePage(1); }
     if (name === 'config') { loadCookies(); loadSettings(); }
 }
 
