@@ -1078,6 +1078,57 @@ try {
             json_exit(['message' => '爬取任务已终止'], true);
             break;
 
+        case 'start_verify':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $data_dir = $root . '/data';
+            $pid_file = $data_dir . '/verify_pid_' . $source . '.txt';
+
+            if (is_file($pid_file)) {
+                $old_pid = trim(file_get_contents($pid_file));
+                if ($old_pid && DIRECTORY_SEPARATOR !== '\\' && is_dir('/proc/' . $old_pid)) {
+                    json_exit(['output' => '校对任务已在后台运行 (PID: ' . $old_pid . ')'], true);
+                    break;
+                }
+            }
+
+            $args = ['verify', $source];
+            $pid = run_python_background($args);
+            json_exit(['output' => '校对任务已在后台启动 (PID: ' . $pid . ')'], true);
+            break;
+
+        case 'stop_verify':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $cancel_file = $root . '/data/verify_cancel_' . $source . '.flag';
+            $pid_file = $root . '/data/verify_pid_' . $source . '.txt';
+            file_put_contents($cancel_file, '1');
+            if (is_file($pid_file)) {
+                $pid = trim(file_get_contents($pid_file));
+                if ($pid) {
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        exec('taskkill /F /PID ' . (int)$pid . ' 2>nul');
+                    } else {
+                        exec('kill -9 ' . (int)$pid . ' 2>/dev/null');
+                    }
+                }
+                @unlink($pid_file);
+            }
+            json_exit(['message' => '校对任务已终止'], true);
+            break;
+
+        case 'verify_status':
+            $source = $_GET['source'] ?? 'exhentai';
+            $progress_dir = $root . '/data/progress';
+            foreach (glob($progress_dir . '/verify__verify_' . $source . '*.json') as $f) {
+                $content = @file_get_contents($f);
+                if ($content === false) continue;
+                $data = @json_decode($content, true);
+                if (!is_array($data)) continue;
+                json_exit(['running' => true, 'progress' => $data]);
+                break 2;
+            }
+            json_exit(['running' => false]);
+            break;
+
         case 'retry':
             $skip = !empty($_POST['skip_existing']);
             $data_dir = $root . '/data';

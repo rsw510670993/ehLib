@@ -101,6 +101,47 @@ class ExhentaiSite(SiteBase):
             thumb_path = str(dest.resolve())
         return artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json
 
+    async def verify_gallery(self, source_id: str, thumbs_dir: str) -> dict:
+        """校对单个画廊：获取最新数据并下载封面，返回新旧数据对比"""
+        gid, token = self._parse_gid_token(source_id)
+        url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
+        response = await self._session.fetch(self.name, url)
+        if self._session.is_cloudflare_blocked(response):
+            raise RuntimeError("Cloudflare blocked")
+        if response.status_code == 404:
+            return {"error": "not_found"}
+        response.raise_for_status()
+        gallery = self._parse_html(response.text, source_id)
+
+        new = {
+            "title": gallery.title or "",
+            "title_jp": gallery.title_jp or "",
+            "artist": gallery.artist or "",
+            "group_name": gallery.group_name or "",
+            "language": (gallery.language or "").lower(),
+            "category": gallery.category or "",
+            "total_pages": gallery.total_pages,
+            "tags_json": json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else "",
+            "uploaded_at": gallery.uploaded_at or "",
+        }
+
+        thumb_path = ""
+        cover_url = gallery.cover_url or ""
+        if cover_url:
+            safe = source_id.replace("/", "_").replace("\\", "_")
+            ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
+            dest = Path(thumbs_dir) / f"{safe}.{ext}"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            client = await self._session.get_client(self.name)
+            resp = await client.get(cover_url)
+            resp.raise_for_status()
+            dest.write_bytes(resp.content)
+            thumb_path = str(dest.resolve())
+
+        new["cover_url"] = cover_url
+        new["thumb_path"] = thumb_path
+        return new
+
     async def search(self, query: str, page: int = 1, next_cursor: str = "", 
                      categories: list[int] | None = None,
                      prev_cursor: str = "", range_val: int | None = None) -> list[Gallery]:

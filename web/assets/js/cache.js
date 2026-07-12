@@ -467,3 +467,56 @@ async function batchDeleteCache() {
         showToast(res.error || '删除失败', 'danger');
     }
 }
+
+// ─── 校对 ───
+
+function renderVerifyStatus(data) {
+    var el = document.getElementById('verify_progress');
+    if (!el) return;
+    if (!data || !data.running || !data.progress) {
+        el.classList.remove('show');
+        el.innerHTML = '';
+        document.getElementById('verify_start_btn')?.classList.remove('d-none');
+        document.getElementById('verify_stop_btn')?.classList.add('d-none');
+        return;
+    }
+    document.getElementById('verify_start_btn')?.classList.add('d-none');
+    document.getElementById('verify_stop_btn')?.classList.remove('d-none');
+    el.classList.add('show');
+
+    var p = data.progress;
+    var total = parseInt(p.total_pages, 10) || 0;
+    var cur = parseInt(p.current, 10) || 0;
+    var pct = total > 0 ? Math.min(100, Math.round(cur / total * 100)) : 0;
+    var msg = escapeHtml(p.message || '');
+    var isWaiting = p.status === 'waiting';
+    var barColor = isWaiting ? '#6c757d' : '#0d6efd';
+    el.innerHTML = '<div class="mb-1 small">' + msg + '</div>' +
+        '<div class="progress" style="height:8px"><div class="progress-bar progress-bar-striped progress-bar-animated" style="width:' + pct + '%;background:' + barColor + '">' + pct + '%</div></div>';
+}
+
+async function startVerify() {
+    var source = 'exhentai';
+    var res = await api('start_verify', { form: { action: 'start_verify', source: source } });
+    if (res.ok) {
+        showToast(res.output || '校对任务已启动', 'success');
+        renderVerifyStatus({ running: true, progress: { total_pages: 0, current: 0, message: '启动中...', status: 'running' } });
+        setTimeout(pollVerifyStatus, 2000);
+    } else {
+        showToast(res.error || res.output || '启动失败', 'danger');
+    }
+}
+
+async function stopVerify() {
+    if (!await confirmDialog({ title: '终止校对', message: '确定终止正在运行的校对任务吗？', okText: '终止', okClass: 'btn-danger' })) return;
+    await api('stop_verify', { form: { action: 'stop_verify', source: 'exhentai' } });
+    renderVerifyStatus(null);
+}
+
+async function pollVerifyStatus() {
+    var data = await api('verify_status', { form: { action: 'verify_status', source: 'exhentai' } });
+    renderVerifyStatus(data);
+    if (data && data.running) {
+        setTimeout(pollVerifyStatus, 3000);
+    }
+}

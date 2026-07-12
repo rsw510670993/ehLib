@@ -438,6 +438,21 @@ $base = rtrim(dirname($scriptName), '/');
                 </div>
                 <div class="card-footer" id="cache_pagination"></div>
             </div>
+
+            <!-- 校对 -->
+            <div class="card mt-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>校对</span>
+                    <div>
+                        <button class="btn btn-sm btn-outline-info" id="verify_start_btn" onclick="startVerify()"><i class="fas fa-check-double me-1"></i>开始校对</button>
+                        <button class="btn btn-sm btn-outline-danger d-none" id="verify_stop_btn" onclick="stopVerify()"><i class="fas fa-stop me-1"></i>终止校对</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-2">对比 ExHentai 与本地缓存的一致性，自动修复元数据并重新下载封面。</p>
+                    <div id="verify_progress" class="output-box"></div>
+                </div>
+            </div>
         </div>
 
         <!-- ═══ 阅读器 ═══ -->
@@ -516,6 +531,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/gallery.js?v=8"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=20"></script>
+<script src="assets/js/cache.js?v=21"></script>
 </body>
 </html>

@@ -561,6 +561,15 @@ class Database:
             await db.commit()
             return cursor.rowcount > 0
 
+    async def get_cached_source_ids(self, source: str = "exhentai") -> list[str]:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT source_id FROM search_cache WHERE source=? ORDER BY source_id",
+                (source,),
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
     # ── Legacy: delete_gallery ──────────────────────────────
 
     async def delete_gallery(self, source: str, source_id: str) -> bool:

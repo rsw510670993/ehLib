@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import random
 import sys
 import time
 from asyncio import sleep
@@ -202,6 +203,127 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
             progress_file.unlink()
         if cancel_file.exists():
             cancel_file.unlink()
+    finally:
+        await session.close()
+
+
+async def cmd_verify(args: argparse.Namespace, config: Config, db: Database) -> None:
+    """校对缓存的画廊：对比元数据、重下封面"""
+    source = args.source
+    CHECKPOINT = Path(f"data/verify_checkpoint_{source}.json")
+    CANCEL = Path(f"data/verify_cancel_{source}.flag")
+    PROGRESS_ID = f"verify_{source}"
+    BATCH_SIZE = 100
+
+    if CANCEL.exists():
+        CANCEL.unlink()
+
+    if CHECKPOINT.exists():
+        cp = json.loads(CHECKPOINT.read_text())
+        source_ids = cp["source_ids"]
+        start_idx = cp["current_index"]
+        total = cp["total"]
+        mismatches = cp.get("mismatches", 0)
+        errors = cp.get("errors", 0)
+        verified = cp.get("verified", 0)
+        print(f"Resuming verify: {verified}/{total} done, {mismatches} mismatches, from index {start_idx}")
+    else:
+        source_ids = await db.get_cached_source_ids(source)
+        total = len(source_ids)
+        start_idx = 0
+        mismatches = 0
+        errors = 0
+        verified = 0
+        print(f"Starting verify: {total} galleries")
+        CHECKPOINT.write_text(json.dumps({
+            "source_ids": source_ids, "current_index": 0,
+            "total": total, "verified": 0, "mismatches": 0, "errors": 0,
+        }))
+
+    if total == 0:
+        print("No galleries to verify.")
+        return
+
+    thumbs_dir = f"data/thumbs/{source}"
+    session = SessionManager(config)
+    try:
+        if source == "exhentai":
+            site = ExhentaiSite(config, session)
+        else:
+            site = NhentaiSite(config, session)
+
+        write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "running", f"{verified}/{total}")
+
+        while start_idx < total:
+            if CANCEL.exists():
+                print("Verify cancelled.")
+                break
+
+            batch = source_ids[start_idx:start_idx + BATCH_SIZE]
+            batch_errors = 0
+
+            for sid in batch:
+                if CANCEL.exists():
+                    break
+                try:
+                    new = await site.verify_gallery(sid, thumbs_dir)
+                    if "error" in new:
+                        print(f"  SKIP {sid}: {new['error']}")
+                        errors += 1
+                        continue
+
+                    row = await db.get_search_cache_row(source, sid)
+                    if row:
+                        diff = {}
+                        for field in ("artist", "uploaded_at", "category", "language", "title_jp", "group_name", "tags"):
+                            old_val = row.get(field, "") or ""
+                            new_val = new.get(field, "") or ""
+                            if str(old_val) != str(new_val):
+                                diff[field] = (old_val, new_val)
+                        old_pages = row.get("total_pages", 0) or 0
+                        if int(old_pages) != int(new.get("total_pages", 0)):
+                            diff["total_pages"] = (old_pages, new["total_pages"])
+
+                        if diff:
+                            mismatches += 1
+                            print(f"  MISMATCH {sid}: {diff}")
+
+                        await db.update_search_cache_metadata(
+                            source, sid,
+                            new["artist"], new["thumb_path"],
+                            new["uploaded_at"], new["category"],
+                            new["cover_url"], new["language"],
+                            new["title_jp"], new["group_name"],
+                            new["tags_json"],
+                        )
+                    verified += 1
+                    print(f"  OK {sid}")
+                except Exception as e:
+                    errors += 1
+                    print(f"  ERROR {sid}: {e}")
+
+                write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "running", f"{verified}/{total}, {mismatches}不同, {errors}错")
+
+            start_idx += BATCH_SIZE
+            CHECKPOINT.write_text(json.dumps({
+                "source_ids": source_ids, "current_index": start_idx,
+                "total": total, "verified": verified, "mismatches": mismatches,
+                "errors": errors, "updated_at": time.time(),
+            }))
+
+            if start_idx < total and not CANCEL.exists():
+                delay = random.randint(60, 300)
+                next_run = time.strftime("%H:%M:%S", time.localtime(time.time() + delay))
+                print(f"Batch done, next at {next_run}, waiting {delay}s...")
+                write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "waiting", f"等待至 {next_run} ({delay}s)")
+                await sleep(delay)
+
+        print(f"Verify finished: {verified} verified, {mismatches} mismatches, {errors} errors")
+        remove_progress("verify", PROGRESS_ID)
+        if CHECKPOINT.exists():
+            CHECKPOINT.unlink()
+        if CANCEL.exists():
+            CANCEL.unlink()
     finally:
         await session.close()
 
@@ -438,6 +560,9 @@ def main() -> None:
 
     count_retry_parser = subparsers.add_parser("count-retry-pages", help="Count total pages across incomplete galleries")
 
+    verify = subparsers.add_parser("verify", help="Verify cached gallery metadata & re-download covers")
+    verify.add_argument("source", choices=["exhentai", "nhentai"], help="Source site")
+
     exp = subparsers.add_parser("export", help="Export metadata to JSON")
     exp.add_argument("--output", default="metadata.json", help="Output file path")
     exp.add_argument("--format", choices=["json"], default="json", help="Export format")
@@ -472,6 +597,7 @@ def main() -> None:
             "config": cmd_config,
             "retry": cmd_retry,
             "count-retry-pages": cmd_count_retry_pages,
+            "verify": cmd_verify,
             "export": cmd_export,
             "migrate-dirs": cmd_migrate_dirs,
             "refresh-metadata": cmd_refresh_metadata,
