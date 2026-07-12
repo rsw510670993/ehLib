@@ -21,6 +21,7 @@ function switchPage(name) {
     if (name === 'dashboard') loadDashboard();
     if (name === 'gallery') loadGalleries();
     if (name === 'cache') { loadCachePage(1); loadCacheLanguages(); }
+    if (name === 'config') { loadCookies(); loadSettings(); }
 }
 
 document.querySelectorAll('.sidebar .nav-link').forEach(a => {
