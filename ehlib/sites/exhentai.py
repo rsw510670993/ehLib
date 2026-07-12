@@ -86,10 +86,9 @@ class ExhentaiSite(SiteBase):
         title_jp = gallery.title_jp or ""
         group_name = gallery.group_name or ""
         tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
-        # always use gallery page cover URL (search thumbnail may be a placeholder)
-        if gallery.cover_url:
-            cover_url = gallery.cover_url
         thumb_path = ""
+        if not cover_url and gallery.cover_url:
+            cover_url = gallery.cover_url
         if cover_url:
             safe = source_id.replace("/", "_").replace("\\", "_")
             ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
@@ -525,15 +524,15 @@ class ExhentaiSite(SiteBase):
         page_urls = self._extract_gallery_page_urls(soup)
 
         cover_url = ""
-        cover_img = soup.select_one("#gd1 img") or soup.select_one("#gdt img")
+        cover_img = soup.select_one("#gd1 img") or soup.select_one("#gdt .gdtl img")
         if cover_img:
-            cover_url = cover_img.get("src", "")
+            cover_url = cover_img.get("data-src", "") or cover_img.get("src", "")
         if not cover_url or cover_url.startswith("data:"):
             # fallback: extract from CSS background (new ExHentai layout)
-            cover_div = soup.select_one("#gdt a div[style*=background]")
-            if cover_div:
+            cover_el = soup.select_one("#gdt a[style*=background]") or soup.select_one("#gdt a div[style*=background]")
+            if cover_el:
                 import re
-                m = re.search(r'url\(([^)]+)\)', cover_div.get("style", ""))
+                m = re.search(r'url\(([^)]+)\)', cover_el.get("style", ""))
                 if m:
                     cover_url = m.group(1)
 
