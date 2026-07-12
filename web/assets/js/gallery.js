@@ -80,7 +80,7 @@ async function loadGalleries(filters) {
                 '<div class="card-body p-2">' +
                 '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
                 '<div class="d-flex justify-content-between align-items-center gap-1">' +
-                '<span>' + langBadge + '</span>' +
+                langBadge +
                 '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + g.source + '</span>' +
                 '<span class="small ' + (isComplete ? 'text-muted' : 'text-warning fw-semibold') + '">' + progressText + '</span>' +
                 '</div>' +

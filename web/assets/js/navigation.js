@@ -44,6 +44,4 @@ async function loadDashboard() {
 // ─── Auto-load on page enter ───
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
-    loadCookies();
-    loadSettings();
 });

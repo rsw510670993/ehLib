@@ -163,8 +163,8 @@ function renderCacheGrid() {
                 '<div class="card-body px-2 py-1">' +
                 '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
                 '<div class="d-flex justify-content-between align-items-center gap-1" style="margin-top:2px">' +
-                '<span>' + catBadge + '</span>' +
-                '<span>' + langBadge + '</span>' +
+                catBadge +
+                langBadge +
                 '</div>' +
                 '<div class="d-flex justify-content-between align-items-center" style="margin-top:2px">' +
                 '<span class="small text-muted">' + (g.total_pages || 0) + 'p</span>' +

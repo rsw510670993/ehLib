@@ -511,12 +511,12 @@ $base = rtrim(dirname($scriptName), '/');
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
 <script src="assets/js/core.js"></script>
-<script src="assets/js/navigation.js?v=2">
+<script src="assets/js/navigation.js?v=3">
 <script src="assets/js/config.js"></script>
 <script src="assets/js/download.js"></script>
-<script src="assets/js/gallery.js?v=6"></script>
+<script src="assets/js/gallery.js?v=7"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=15"></script>
+<script src="assets/js/cache.js?v=16"></script>
 </body>
 </html>
