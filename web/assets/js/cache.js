@@ -47,6 +47,49 @@ function resetCacheCategories() {
     document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
 }
 
+// ─── Language toggle (local cache) ────────────────────────
+
+let _cacheLanguage = '';
+
+function cacheToggleLanguage(el) {
+    document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+    el.classList.add('active');
+    _cacheLanguage = el.dataset.lang === 'all' ? '' : el.dataset.lang;
+    cacheSearch();
+}
+
+function resetCacheLanguage() {
+    _cacheLanguage = '';
+    document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+    var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
+    if (allBtn) allBtn.classList.add('active');
+}
+
+async function loadCacheLanguages() {
+    var resp = await fetch(API + '?action=cache_languages&source=exhentai');
+    var data = await resp.json();
+    if (!data.ok || !data.languages) return;
+    var langs = data.languages.filter(function(l) { return l; });
+    var priority = ['japanese', 'chinese'];
+    var sorted = [];
+    priority.forEach(function(p) {
+        var idx = langs.indexOf(p);
+        if (idx !== -1) { sorted.push(langs[idx]); langs.splice(idx, 1); }
+    });
+    langs.sort();
+    sorted = sorted.concat(langs);
+    var container = document.getElementById('cache_language_tags');
+    sorted.forEach(function(l) {
+        var btn = document.createElement('button');
+        btn.className = 'cat-tag';
+        btn.dataset.lang = l;
+        btn.style.setProperty('--cat-color', '#6b7280');
+        btn.textContent = l;
+        btn.onclick = function() { cacheToggleLanguage(this); };
+        container.appendChild(btn);
+    });
+}
+
 // ─── Local cache listing ─────────────────────────────────
 
 async function loadCachePage(page) {
@@ -61,6 +104,7 @@ async function loadCachePage(page) {
     let params = '?action=cache_search&page=' + _cachePage + '&per_page=' + _cachePerPage;
     if (keyword) params += '&title=' + encodeURIComponent(keyword);
     if (cats) params += '&categories=' + encodeURIComponent(cats.join(','));
+    if (_cacheLanguage) params += '&language=' + encodeURIComponent(_cacheLanguage);
 
     const resp = await fetch(API + params);
     const data = await resp.json();
@@ -168,6 +212,7 @@ function cacheSearch() {
 function cacheClearFilter() {
     document.getElementById('cache_keyword').value = '';
     resetCacheCategories();
+    resetCacheLanguage();
     _cachePage = 1;
     loadCachePage(1);
 }

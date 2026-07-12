@@ -911,6 +911,8 @@ try {
                     $where .= ' AND sc.category IN (' . implode(',', array_fill(0, count($categories), '?')) . ')';
                     $params = array_merge($params, $categories);
                 }
+                $cache_lang = $_GET['language'] ?? '';
+                if ($cache_lang) { $where .= ' AND sc.language=?'; $params[] = $cache_lang; }
 
                 // Count
                 $count_query = "SELECT COUNT(*) FROM search_cache sc $where";

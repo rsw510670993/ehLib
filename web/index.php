@@ -7,7 +7,7 @@
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=11">
+    <link rel="stylesheet" href="assets/css/app.css?v=12">
 </head>
 <body>
 
@@ -426,6 +426,12 @@ $base = rtrim(dirname($scriptName), '/');
                             <button class="cat-tag" data-cat="Misc" onclick="cacheToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
                         </div>
                     </div>
+                    <div class="mt-1">
+                        <span class="small text-muted me-2">语言:</span>
+                        <div id="cache_language_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-lang="all" onclick="cacheToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
+                        </div>
+                    </div>
                     <div class="mt-1" id="saved_presets_row"></div>
                 </div>
                 <div class="card-body" id="cache_grid_body">
@@ -505,12 +511,12 @@ $base = rtrim(dirname($scriptName), '/');
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
 <script src="assets/js/core.js"></script>
-<script src="assets/js/navigation.js"></script>
+<script src="assets/js/navigation.js?v=2">
 <script src="assets/js/config.js"></script>
 <script src="assets/js/download.js"></script>
 <script src="assets/js/gallery.js?v=5"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=13"></script>
+<script src="assets/js/cache.js?v=14"></script>
 </body>
 </html>

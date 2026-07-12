@@ -22,7 +22,7 @@ function switchPage(name) {
     // load data on page switch
     if (name === 'dashboard') loadDashboard();
     if (name === 'gallery') loadGalleries();
-    if (name === 'cache') loadCachePage(1);
+    if (name === 'cache') { loadCachePage(1); loadCacheLanguages(); }
 }
 
 document.querySelectorAll('.sidebar .nav-link').forEach(a => {
