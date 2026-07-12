@@ -307,6 +307,9 @@ async def cmd_verify(args: argparse.Namespace, config: Config, db: Database) -> 
                     details += f"  △{mismatches} ✗{errors}"
                 write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "running", details)
 
+                # 每本间隔 2-5 秒，避免被 ban
+                await sleep(random.uniform(2, 5))
+
             start_idx += BATCH_SIZE
             CHECKPOINT.write_text(json.dumps({
                 "source_ids": source_ids, "current_index": start_idx,
