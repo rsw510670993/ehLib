@@ -513,10 +513,10 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/core.js"></script>
 <script src="assets/js/navigation.js?v=3">
 <script src="assets/js/config.js"></script>
-<script src="assets/js/download.js"></script>
+<script src="assets/js/download.js?v=2"></script>
 <script src="assets/js/gallery.js?v=8"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=17"></script>
+<script src="assets/js/cache.js?v=18"></script>
 </body>
 </html>

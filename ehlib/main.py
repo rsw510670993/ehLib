@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from asyncio import sleep
 from pathlib import Path
 
@@ -135,7 +136,7 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 batch = [it for it in items if it.get("source_id", "") in saved_ids]
                 await db.save_search_results(batch)
 
-            # 获取元数据和封面（1分钟间隔）
+            # 获取元数据和封面
             for idx, item in enumerate(items, 1):
                 if cancel_file.exists():
                     raise KeyboardInterrupt()
@@ -158,9 +159,6 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                     "query": args.query,
                 }))
                 write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", len(items), idx, "running", f"Page {page}, metadata {idx}/{len(items)}")
-                if idx < len(items):
-                    import random
-                    await sleep(random.randint(5, 10))
 
             # 保存进度文件（全页完成后）
             progress_file.write_text(json.dumps({
@@ -173,9 +171,13 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
             write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, page, "running", f"Page {page}, cached {len(reserved_ids)}")
             print(f"  Page {page}: {len(items)} items, total cached: {len(reserved_ids)}, metadata done: {len(metadata_done)}")
 
+        async def on_wait(next_run: str, delay: int):
+            write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, 0, "waiting", f"等待至 {next_run} ({delay}s)")
+
         cats = None
         if args.categories:
             cats = list(args.categories)
+        t_start = time.time()
         try:
             await site.crawl_all_pages(
                 query=args.query,
@@ -183,6 +185,7 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 resume_cursor=resume_cursor,
                 resume_page=resume_page,
                 on_page=on_page,
+                on_wait=on_wait,
             )
         except KeyboardInterrupt:
             print("Crawl cancelled by user.")
@@ -191,7 +194,9 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 cancel_file.unlink()
             return
 
-        print(f"Crawl complete. Total items cached: {len(reserved_ids)}")
+        elapsed = time.time() - t_start
+        elapsed_str = f"{int(elapsed//60)}m{int(elapsed%60)}s"
+        print(f"Crawl complete. Total items cached: {len(reserved_ids)}, time: {elapsed_str}")
         remove_progress("crawl", CRAWL_TASK_ID)
         if progress_file.exists():
             progress_file.unlink()

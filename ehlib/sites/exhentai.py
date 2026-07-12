@@ -133,17 +133,23 @@ class ExhentaiSite(SiteBase):
         resume_cursor: str = "",
         resume_page: int = 1,
         on_page: callable = None,
+        on_wait: callable = None,
     ) -> list[dict]:
         """爬取所有搜索结果页，返回简化后的 dict 列表。
         resume_cursor: 从哪个 next_cursor 开始续传
         resume_page: 当前恢复的页码（仅用于回调）
         on_page: 每爬完一页的回调，接收 (page, items, next_cursor)
         """
+        import time as time_module
         all_items: list[dict] = []
         page = resume_page
         next_cursor = resume_cursor
         has_next = True
         consecutive_empty = 0
+        pages_in_batch = 0
+        total_requests = 0
+        start_time = time_module.time()
+        page_times = []
 
         while has_next:
             params = {"f_search": query, "f_sname": "on", "s": "2", "f_sft": "on", "f_sfu": "on", "f_sfl": "on"}
@@ -153,16 +159,20 @@ class ExhentaiSite(SiteBase):
                 params["next"] = next_cursor
 
             url = f"{EXHENTAI_BASE}/"
+            t0 = time_module.time()
             response = await self._session.fetch(self.name, url, params=params)
+            total_requests += 1
             if self._session.is_cloudflare_blocked(response):
                 logger.warning("Cloudflare blocked on page %d, waiting 60s...", page)
                 await sleep(60)
                 response = await self._session.fetch(self.name, url, params=params)
+                total_requests += 1
                 if self._session.is_cloudflare_blocked(response):
                     raise RuntimeError("Cloudflare still blocking after retry")
             if response.status_code == 404:
                 break
             response.raise_for_status()
+            t1 = time_module.time()
 
             soup = BeautifulSoup(response.text, "html.parser")
             self._parse_next_cursor(soup)
@@ -170,6 +180,7 @@ class ExhentaiSite(SiteBase):
             if page == 1:
                 logger.info("ExHentai reports: %d total results, %d pages", self.total_results, self.total_pages)
             page_items = self._parse_search_results_flat(soup)
+            page_times.append((page, len(page_items), t1 - t0, total_requests))
 
             if not page_items:
                 consecutive_empty += 1
@@ -185,12 +196,27 @@ class ExhentaiSite(SiteBase):
             if self.has_next and self.next_cursor:
                 next_cursor = self.next_cursor
                 page += 1
-                import random
-                delay = random.randint(300, 600)
-                logger.info("Crawl page %d complete (%d items), next_cursor=%s, waiting %ds...", page, len(page_items), next_cursor, delay)
-                await sleep(delay)
+                pages_in_batch += 1
+                if pages_in_batch % 2 == 0:
+                    import random
+                    delay = random.randint(180, 300)
+                    next_run = time_module.strftime("%H:%M:%S", time_module.localtime(time_module.time() + delay))
+                    logger.info("Batch complete (%d pages), next at %s, waiting %ds...", pages_in_batch, next_run, delay)
+                    if on_wait:
+                        await on_wait(next_run, delay)
+                    await sleep(delay)
             else:
                 has_next = False
+
+        elapsed = time_module.time() - start_time
+        elapsed_str = f"{int(elapsed//60)}m{int(elapsed%60)}s"
+        avg_freq = total_requests / elapsed if elapsed > 0 else 0
+        logger.info("=" * 50)
+        logger.info("Crawl finished: %d pages, %d items, %d requests", len(page_times), len(all_items), total_requests)
+        logger.info("Total time: %s, avg frequency: %.2f req/min", elapsed_str, avg_freq * 60)
+        for pt in page_times:
+            logger.info("  Page %d: %d items, %.1fs, request #%d", pt[0], pt[1], pt[2], pt[3])
+        logger.info("=" * 50)
 
         return all_items
 
