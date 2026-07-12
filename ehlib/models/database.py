@@ -570,6 +570,18 @@ class Database:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
+    async def get_search_cache_row(self, source: str, source_id: str) -> dict | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT * FROM search_cache WHERE source=? AND source_id=?",
+                (source, source_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            columns = [d[0] for d in cursor.description]
+            return dict(zip(columns, row))
+
     # ── Legacy: delete_gallery ──────────────────────────────
 
     async def delete_gallery(self, source: str, source_id: str) -> bool:
