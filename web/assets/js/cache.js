@@ -142,7 +142,7 @@ function renderCacheGrid() {
             var displayTitle = g.title || '(无标题)';
             var catColor = CAT_COLORS[g.category] || '#6c757d';
             var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(g.category) + '</span>' : '';
-            var langColor = { 'japanese': '#6b7280', 'chinese': '#dc3545', 'english': '#0d6efd', 'thai': '#198754' };
+            var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
             var lang = g.language || '';
             var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
             var thumbHtml = g.thumb_url
