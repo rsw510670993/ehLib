@@ -497,7 +497,7 @@ try {
                 $total = (int)$count_stmt->fetchColumn();
 
                 // Data query with limit/offset
-                $select_cols = $has_tags ? 'g.*' : '*';
+                $select_cols = $has_tags ? 'DISTINCT g.*' : '*';
                 $order_col = $prefix . 'uploaded_at';
                 $order_id_col = $prefix . 'source_id';
                 $data_query = "SELECT $select_cols FROM $from $joins $where $group_having ORDER BY COALESCE(NULLIF($order_col, '') , '0000-00-00') DESC, CAST(SUBSTR($order_id_col || '/', 1, INSTR($order_id_col || '/', '/') - 1) AS INTEGER) DESC LIMIT $per_page OFFSET $offset";
@@ -957,6 +957,7 @@ try {
                         'language' => $row['language'] ?? '',
                         'group_name' => $row['group_name'] ?? '',
                         'tags' => $row['tags'] ?? '',
+                        'tags_cn' => $row['tags_cn'] ?? '',
                         'total_pages' => (int)($row['total_pages'] ?? 0),
                         'artist' => $row['artist'] ?? '',
                         'uploaded_at' => $row['uploaded_at'] ?? '',
@@ -1112,6 +1113,11 @@ try {
                 }
                 @unlink($pid_file);
             }
+            foreach (glob($root . '/data/progress/verify__verify_' . $source . '*.json') as $f) {
+                @unlink($f);
+            }
+            @unlink($cancel_file);
+            @unlink($root . '/data/verify_checkpoint_' . $source . '.json');
             json_exit(['message' => '校对任务已终止'], true);
             break;
 
@@ -1168,13 +1174,14 @@ try {
             break;
 
         case 'export':
-            $output = $root . '/data/export_' . date('Ymd_His') . '.json';
+            $ts = date('Ymd_His');
+            $output = $root . "/data/export_$ts.json";
+            $zip_file = $root . "/data/export_$ts.zip";
             if (!is_dir($root . '/data')) mkdir($root . '/data', 0755, true);
-            $args = ['export', '--output', $output];
+            $args = ['export-package', '--output', $output, '--zip', $zip_file];
             $result = run_python($args);
-            if ($result['ok'] && is_file($output)) {
-                $content = json_decode(file_get_contents($output), true);
-                json_exit(['galleries' => $content, 'file' => basename($output)]);
+            if ($result['ok'] && is_file($zip_file)) {
+                json_exit(['file' => "data/export_$ts.zip", 'download_url' => "data/export_$ts.zip"]);
             }
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
@@ -1289,11 +1296,75 @@ try {
 
         case 'clear_log':
             $data_dir = $root . '/data';
-            $cleared = 0;
-            foreach (glob($data_dir . '/bg_*.log') as $f) {
-                if (is_file($f) && @unlink($f)) $cleared++;
+            // check for running tasks
+            $running_tasks = [];
+            $pid_patterns = ['*_pid_*.txt', '*.pid'];
+            foreach ($pid_patterns as $pp) {
+                foreach (glob($data_dir . '/' . $pp) as $f) {
+                    $pid = trim(@file_get_contents($f));
+                    if (!$pid) continue;
+                    $task = basename($f);
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        $out = [];
+                        exec('tasklist /FI "PID eq ' . (int)$pid . '" /NH 2>nul', $out);
+                        if (count($out) > 1) $running_tasks[] = $task;
+                    } else {
+                        if (is_dir('/proc/' . $pid)) $running_tasks[] = $task;
+                    }
+                }
             }
-            json_exit(['message' => "已清理 $cleared 个日志文件"]);
+            if (!empty($running_tasks)) {
+                json_exit(['error' => '有任务正在运行，无法清理: ' . implode(', ', $running_tasks)], false);
+                break;
+            }
+            // clean working files (keep ehlib.db and thumbs/)
+            $cleared = 0;
+            $patterns = ['bg_*.log', 'bg_*.sh', '*.pid', '*_pid_*.txt', '*.flag', '*.lock', '*_progress_*.json', 'progress/*.json', 'verify_*.json', 'crawl_*.json', 'retry_*.json', 'download.lock'];
+            foreach ($patterns as $pattern) {
+                foreach (glob($data_dir . '/' . $pattern) as $f) {
+                    if (is_file($f) && @unlink($f)) $cleared++;
+                }
+            }
+            json_exit(['message' => "已清理 $cleared 个工作文件"]);
+            break;
+
+        case 'list_cached':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $q = $_POST['q'] ?? $_GET['q'] ?? '';
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                if ($q !== '') {
+                    $like = '%' . $q . '%';
+                    $stmt = $pdo->prepare("SELECT source_id, COALESCE(NULLIF(title,''), NULLIF(title_jp,'')) AS title, artist FROM search_cache WHERE source=? AND (title LIKE ? OR title_jp LIKE ? OR artist LIKE ? OR source_id LIKE ?) ORDER BY uploaded_at DESC, source_id DESC LIMIT 50");
+                    $stmt->execute([$source, $like, $like, $like, $like]);
+                } else {
+                    $stmt = $pdo->prepare("SELECT source_id, COALESCE(NULLIF(title,''), NULLIF(title_jp,'')) AS title, artist FROM search_cache WHERE source=? ORDER BY uploaded_at DESC, source_id DESC LIMIT 200");
+                    $stmt->execute([$source]);
+                }
+                json_exit(['galleries' => $stmt->fetchAll()]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'verify_single':
+            $source = $_POST['source'] ?? 'exhentai';
+            $sid = $_POST['source_id'] ?? '';
+            if (!$sid) error_exit('source_id required');
+            $result = run_python(['verify-single', $source, $sid], 60);
+            $result_file = $root . '/data/verify_single_result.json';
+            if (is_file($result_file)) {
+                $data = json_decode(file_get_contents($result_file), true);
+                @unlink($result_file);
+                json_exit($data ?: ['error' => 'parse failed']);
+            } else {
+                json_exit([
+                    'error' => ($result['stderr'] ?: $result['stdout'] ?: 'unknown error'),
+                    'exit_code' => $result['exit_code'] ?? -1,
+                ], false);
+            }
             break;
 
         default:

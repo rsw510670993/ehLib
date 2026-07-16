@@ -11,10 +11,14 @@ from ehlib.config import Config
 from ehlib.core.session_manager import SessionManager
 from ehlib.models.schemas import Gallery, Tag
 from ehlib.sites.base import SiteBase
+from ehlib.translate.tag_translator import TagTranslator
 from ehlib.utils.helpers import parse_exhentai_url
 from ehlib.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_translator = TagTranslator()
+_translator_loaded = False
 
 EXHENTAI_BASE = "https://exhentai.org"
 EHENTAI_BASE = "https://e-hentai.org"
@@ -86,8 +90,14 @@ class ExhentaiSite(SiteBase):
         title_jp = gallery.title_jp or ""
         group_name = gallery.group_name or ""
         tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
+        tags_cn_json = ""
+        if tags_json:
+            global _translator_loaded
+            if not _translator_loaded:
+                _translator_loaded = _translator.load()
+            tags_cn_json = _translator.translate_tags(tags_json) if _translator_loaded else ""
         thumb_path = ""
-        if not cover_url and gallery.cover_url:
+        if gallery.cover_url:
             cover_url = gallery.cover_url
         if cover_url:
             safe = source_id.replace("/", "_").replace("\\", "_")
@@ -99,19 +109,28 @@ class ExhentaiSite(SiteBase):
             resp.raise_for_status()
             dest.write_bytes(resp.content)
             thumb_path = str(dest.resolve())
-        return artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json
+        return artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json
 
-    async def verify_gallery(self, source_id: str, thumbs_dir: str) -> dict:
+    async def verify_gallery(self, source_id: str, thumbs_dir: str, old_cover_url: str = "") -> dict:
         """校对单个画廊：获取最新数据并下载封面，返回新旧数据对比"""
         gid, token = self._parse_gid_token(source_id)
         url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
-        response = await self._session.fetch(self.name, url)
+        client = await self._session.get_client(self.name)
+        response = await client.get(url)
         if self._session.is_cloudflare_blocked(response):
             raise RuntimeError("Cloudflare blocked")
         if response.status_code == 404:
             return {"error": "not_found"}
         response.raise_for_status()
         gallery = self._parse_html(response.text, source_id)
+
+        tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
+        tags_cn_json = ""
+        if tags_json:
+            global _translator_loaded
+            if not _translator_loaded:
+                _translator_loaded = _translator.load()
+            tags_cn_json = _translator.translate_tags(tags_json) if _translator_loaded else ""
 
         new = {
             "title": gallery.title or "",
@@ -121,7 +140,8 @@ class ExhentaiSite(SiteBase):
             "language": (gallery.language or "").lower(),
             "category": gallery.category or "",
             "total_pages": gallery.total_pages,
-            "tags_json": json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else "",
+            "tags_json": tags_json,
+            "tags_cn_json": tags_cn_json,
             "uploaded_at": gallery.uploaded_at or "",
         }
 
@@ -131,12 +151,15 @@ class ExhentaiSite(SiteBase):
             safe = source_id.replace("/", "_").replace("\\", "_")
             ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
             dest = Path(thumbs_dir) / f"{safe}.{ext}"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            client = await self._session.get_client(self.name)
-            resp = await client.get(cover_url)
-            resp.raise_for_status()
-            dest.write_bytes(resp.content)
-            thumb_path = str(dest.resolve())
+            if cover_url == old_cover_url and dest.is_file():
+                thumb_path = str(dest.resolve())
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                client = await self._session.get_client(self.name)
+                resp = await client.get(cover_url)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+                thumb_path = str(dest.resolve())
 
         new["cover_url"] = cover_url
         new["thumb_path"] = thumb_path
@@ -178,7 +201,7 @@ class ExhentaiSite(SiteBase):
         """爬取所有搜索结果页，返回简化后的 dict 列表。
         resume_cursor: 从哪个 next_cursor 开始续传
         resume_page: 当前恢复的页码（仅用于回调）
-        on_page: 每爬完一页的回调，接收 (page, items, next_cursor)
+        on_page: 每爬完一页的回调，接收 (page, items, next_cursor)。返回 False 则停止翻页
         """
         import time as time_module
         all_items: list[dict] = []
@@ -231,7 +254,9 @@ class ExhentaiSite(SiteBase):
                 all_items.extend(page_items)
 
             if on_page:
-                await on_page(page, page_items, self.next_cursor)
+                result = await on_page(page, page_items, self.next_cursor)
+                if result is False:
+                    break
 
             if self.has_next and self.next_cursor:
                 next_cursor = self.next_cursor
@@ -527,16 +552,22 @@ class ExhentaiSite(SiteBase):
         tags = []
 
         tag_rows = soup.select("#taglist tr")
+        if not tag_rows:
+            taglist = soup.select_one("#taglist")
+            if taglist:
+                tag_rows = taglist.find_all(["tr", "div", "li", "section"], class_=True) or taglist.find_all("tr")
         for row in tag_rows:
-            td = row.select_one("td.tc")
+            td = row.select_one("td.tc") or row.select_one("td:first-child")
             if not td:
                 continue
             tag_type = td.get_text(strip=True).rstrip(":").lower().replace(" ", "_")
 
+            found_links = False
             for tag_div in row.select("div"):
                 tag_link = tag_div.select_one("a")
                 if not tag_link:
                     continue
+                found_links = True
                 tag_name = tag_link.get_text(strip=True)
                 if not tag_name:
                     continue
@@ -548,6 +579,46 @@ class ExhentaiSite(SiteBase):
                     group_name = tag_name
                 elif tag_type == "language":
                     language_candidates.append(tag_name)
+
+            if not found_links:
+                for tag_link in row.select("a"):
+                    tag_name = tag_link.get_text(strip=True)
+                    if not tag_name or tag_name == tag_type.rstrip(":"):
+                        continue
+                    tags.append(Tag(type=tag_type, name=tag_name))
+
+                    if tag_type == "artist":
+                        artist = tag_name
+                    elif tag_type == "group":
+                        group_name = tag_name
+                    elif tag_type == "language":
+                        language_candidates.append(tag_name)
+
+        # ultimate fallback: scan all links by URL pattern
+        if not tags:
+            TAG_URL_PATTERNS = {
+                "artist": "/artist/", "group": "/group/", "language": "/language/",
+                "parody": "/parody/", "character": "/character/",
+                "female": "/female/", "male": "/male/", "misc": "/misc/",
+                "other": "/other/", "cosplayer": "/cosplayer/",
+            }
+            seen = set()
+            for a in soup.select("a[href]"):
+                href = a.get("href", "")
+                for tag_type, pattern in TAG_URL_PATTERNS.items():
+                    if pattern in href:
+                        tag_name = a.get_text(strip=True)
+                        key = (tag_type, tag_name)
+                        if tag_name and key not in seen:
+                            seen.add(key)
+                            tags.append(Tag(type=tag_type, name=tag_name))
+                            if tag_type == "artist" and not artist:
+                                artist = tag_name
+                            elif tag_type == "group" and not group_name:
+                                group_name = tag_name
+                            elif tag_type == "language":
+                                language_candidates.append(tag_name)
+                        break
 
         # prefer specific language over "translated"
         if language_candidates:
@@ -565,17 +636,25 @@ class ExhentaiSite(SiteBase):
         page_urls = self._extract_gallery_page_urls(soup)
 
         cover_url = ""
-        cover_img = soup.select_one("#gd1 img") or soup.select_one("#gdt .gdtl img")
+        # prefer actual page thumbnails over #gd1 (which may be a preview strip)
+        cover_img = soup.select_one("#gdt .gdtl img") or soup.select_one("#gd1 img")
         if cover_img:
             cover_url = cover_img.get("data-src", "") or cover_img.get("src", "")
         if not cover_url or cover_url.startswith("data:"):
             # fallback: extract from CSS background (new ExHentai layout)
-            cover_el = soup.select_one("#gdt a[style*=background]") or soup.select_one("#gdt a div[style*=background]")
+            cover_el = soup.select_one("#gd1 div[style*=background]")
             if cover_el:
                 import re
                 m = re.search(r'url\(([^)]+)\)', cover_el.get("style", ""))
                 if m:
                     cover_url = m.group(1)
+            if not cover_url or cover_url.startswith("data:"):
+                cover_el = soup.select_one("#gdt a[style*=background]") or soup.select_one("#gdt a div[style*=background]")
+                if cover_el:
+                    import re
+                    m = re.search(r'url\(([^)]+)\)', cover_el.get("style", ""))
+                    if m:
+                        cover_url = m.group(1)
 
         uploaded_at = ""
         posted_label = soup.select_one("#gdd td.gdt1")

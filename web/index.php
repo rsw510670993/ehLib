@@ -22,6 +22,7 @@ $base = rtrim(dirname($scriptName), '/');
         <li class="nav-item"><a class="nav-link active" href="#" data-page="dashboard"><i class="fas fa-tachometer-alt"></i>仪表盘</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="cache"><i class="fas fa-database"></i>本地缓存</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="test-verify"><i class="fas fa-check-double"></i>单本校对</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="config"><i class="fas fa-cog"></i>站点配置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="export"><i class="fas fa-file-export"></i>数据导出</a></li>
     </ul>
@@ -394,7 +395,7 @@ $base = rtrim(dirname($scriptName), '/');
                             <button class="btn btn-sm btn-outline-warning w-100" id="crawl_force" onclick="this.classList.toggle('active')">强制</button>
                         </div>
                         <div class="col-md-1 d-flex align-items-center justify-content-center">
-                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearCrawlLog()" title="清理日志"><i class="fas fa-trash-alt"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearCrawlLog()" title="清理工作文件"><i class="fas fa-trash-alt"></i></button>
                         </div>
                     </div>
                     <div class="row g-2 align-items-end mb-2">
@@ -432,11 +433,30 @@ $base = rtrim(dirname($scriptName), '/');
                         </div>
                     </div>
                     <div class="mt-1" id="saved_presets_row"></div>
+                    <div class="mt-1" id="cache_batch_bar"></div>
                 </div>
                 <div class="card-body" id="cache_grid_body">
                     <div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
                 </div>
                 <div class="card-footer" id="cache_pagination"></div>
+            </div>
+
+            <!-- 作品详情弹窗 -->
+            <div class="modal fade" id="cache_detail_modal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title text-truncate" id="cache_detail_title">作品详情</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body" id="cache_detail_body">
+                            <div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">关闭</button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- 校对 -->
@@ -488,13 +508,35 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
+        <!-- ═══ 单本校对 ═══ -->
+        <div id="page_test-verify" class="page-section section-hidden">
+            <div class="card">
+                <div class="card-header"><i class="fas fa-check-double me-1"></i>单本校对</div>
+                <div class="card-body">
+                    <div class="row g-3 align-items-end">
+                        <div class="col-md-6">
+                            <label class="form-label">搜索画廊</label>
+                            <input type="text" class="form-control" id="tv_search_input" placeholder="输入标题、作者或 ID 检索..." autocomplete="off">
+                            <div id="tv_search_results" class="list-group mt-1" style="max-height:300px;overflow-y:auto;display:none"></div>
+                        </div>
+                        <div class="col-md-2">
+                            <button class="btn btn-primary w-100" id="tv_verify_btn" onclick="tvVerify()" disabled>
+                                <i class="fas fa-play me-1"></i>开始校对
+                            </button>
+                        </div>
+                    </div>
+                    <div id="tv_result" class="output-box mt-3"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ 数据导出 ═══ -->
         <div id="page_export" class="page-section section-hidden">
             <div class="card">
-                <div class="card-header">导出元数据</div>
+                <div class="card-header">导出数据</div>
                 <div class="card-body">
-                    <p class="text-muted">将所有本地画廊的元数据导出为 JSON 格式，包含标题、作者、标签等信息。</p>
-                    <button class="btn btn-primary" onclick="doExport()"><i class="fas fa-file-export me-1"></i>导出 JSON</button>
+                    <p class="text-muted">导出为 ZIP 包，包含元数据 JSON、数据库文件、所有封面图（不含已下载漫画）。</p>
+                    <button class="btn btn-primary" onclick="doExport()"><i class="fas fa-file-export me-1"></i>导出 ZIP</button>
                     <div id="export_output" class="output-box"></div>
                     <div id="export_table_wrapper" style="display:none" class="mt-3">
                         <div class="table-responsive" style="max-height:400px;overflow-y:auto">
@@ -532,5 +574,6 @@ $base = rtrim(dirname($scriptName), '/');
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
 <script src="assets/js/cache.js?v=21"></script>
+<script src="assets/js/test_verify.js"></script>
 </body>
 </html>

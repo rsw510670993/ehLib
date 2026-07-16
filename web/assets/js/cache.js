@@ -54,7 +54,7 @@ let _cacheLanguages = new Set();
 function cacheToggleLanguage(el) {
     if (el.dataset.lang === 'all') {
         var allActive = el.classList.contains('active');
-        document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) {
+        document.querySelectorAll('#cache_language_tags .cat-tag[data-lang]').forEach(function(t) {
             t.classList.toggle('active', !allActive);
         });
         if (allActive) {
@@ -86,7 +86,7 @@ function getCacheSelectedLanguages() {
 
 function resetCacheLanguage() {
     _cacheLanguages.clear();
-    document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+    document.querySelectorAll('#cache_language_tags .cat-tag[data-lang]').forEach(function(t) { t.classList.remove('active'); });
     // 默认选中中文+日语
     ['japanese', 'chinese'].forEach(function(l) {
         var btn = document.querySelector('#cache_language_tags .cat-tag[data-lang="' + l + '"]');
@@ -94,6 +94,12 @@ function resetCacheLanguage() {
     });
     var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
     if (allBtn) allBtn.classList.remove('active');
+}
+
+function toggleLanguageCollapse(btn) {
+    var content = btn.parentElement.querySelector('.language-collapse-content');
+    var collapsed = content.classList.toggle('collapsed');
+    btn.textContent = btn.dataset.label + (collapsed ? ' ▸' : ' ▾');
 }
 
 async function loadCacheLanguages() {
@@ -106,17 +112,30 @@ async function loadCacheLanguages() {
     var data = await resp.json();
     if (!data.ok || !data.languages) return;
     var langs = data.languages.filter(function(l) { return l; });
-    var priority = ['japanese', 'chinese'];
-    var sorted = [];
+    var priority = ['japanese', 'chinese', 'english', 'n/a'];
+    var priorityLangs = [];
+    var otherLangs = [];
     priority.forEach(function(p) {
         var idx = langs.indexOf(p);
-        if (idx !== -1) { sorted.push(langs[idx]); langs.splice(idx, 1); }
+        if (idx !== -1) { priorityLangs.push(langs[idx]); langs.splice(idx, 1); }
     });
     langs.sort();
-    sorted = sorted.concat(langs);
+    otherLangs = langs;
+
     var container = document.getElementById('cache_language_tags');
     container.innerHTML = '';
-    sorted.forEach(function(l) {
+
+    // 全部
+    var allBtn = document.createElement('button');
+    allBtn.className = 'cat-tag active';
+    allBtn.dataset.lang = 'all';
+    allBtn.style.setProperty('--cat-color', '#0d6efd');
+    allBtn.textContent = '全部';
+    allBtn.onclick = function() { cacheToggleLanguage(this); };
+    container.appendChild(allBtn);
+
+    // 常用语种
+    priorityLangs.forEach(function(l) {
         var btn = document.createElement('button');
         btn.className = 'cat-tag';
         btn.dataset.lang = l;
@@ -128,8 +147,33 @@ async function loadCacheLanguages() {
         }
         container.appendChild(btn);
     });
-    var allBtn = container.querySelector('.cat-tag[data-lang="all"]');
-    if (allBtn) allBtn.classList.remove('active');
+
+    // 非常用语种 → 可折叠区域
+    if (otherLangs.length > 0) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'language-collapse-wrapper';
+
+        var toggleBtn = document.createElement('button');
+        toggleBtn.className = 'cat-tag language-collapse-toggle';
+        toggleBtn.dataset.label = '其他语言 (' + otherLangs.length + ')';
+        toggleBtn.textContent = toggleBtn.dataset.label + ' ▸';
+        toggleBtn.onclick = function() { toggleLanguageCollapse(this); };
+        wrapper.appendChild(toggleBtn);
+
+        var content = document.createElement('div');
+        content.className = 'language-collapse-content collapsed';
+        otherLangs.forEach(function(l) {
+            var btn = document.createElement('button');
+            btn.className = 'cat-tag';
+            btn.dataset.lang = l;
+            btn.style.setProperty('--cat-color', '#6b7280');
+            btn.textContent = l;
+            btn.onclick = function() { cacheToggleLanguage(this); };
+            content.appendChild(btn);
+        });
+        wrapper.appendChild(content);
+        container.appendChild(wrapper);
+    }
 }
 
 // ─── Local cache listing ─────────────────────────────────
@@ -163,24 +207,33 @@ async function loadCachePage(page) {
     loadSearchPresets();
 }
 
+function renderCacheBatchBar() {
+    var hasSel = _selectedIds.size > 0;
+    var allSel = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
+    var bar = document.getElementById('cache_batch_bar');
+    if (!bar) return;
+    var dlDisabled = hasSel ? '' : ' disabled';
+    bar.innerHTML =
+        '<div class="d-flex align-items-center gap-2 py-1 px-2 bg-light rounded">' +
+        '<input class="form-check-input mt-0" type="checkbox" onchange="selectAllCache(this.checked)" ' + (allSel ? 'checked' : '') + ' title="全选/取消">' +
+        '<span class="small text-muted me-1" id="batch_count">' + (hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中') + '</span>' +
+        '<button class="btn btn-sm btn-outline-primary py-0 px-2" onclick="cacheBatchDownload()" title="批量下载"' + dlDisabled + '><i class="fas fa-download me-1"></i>批量下载</button>' +
+        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"' + dlDisabled + '><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
+        '<button class="btn btn-sm btn-outline-secondary py-0 px-2' + (hasSel ? '' : ' d-none') + '" onclick="clearCacheSelection()">取消选择</button>' +
+        '</div>';
+}
+
 function renderCacheGrid() {
     const body = document.getElementById('cache_grid_body');
     if (!_cacheResults || _cacheResults.length === 0) {
         body.innerHTML = '<div class="text-center text-muted py-5">暂无缓存数据。点「后台爬取」填充缓存。</div>';
+        renderCacheBatchBar();
         return;
     }
 
-    var hasSel = _selectedIds.size > 0;
-    var allSel = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
-    var toolbar = '<div id="cache_batch_bar" class="d-flex align-items-center gap-2 mb-2 py-1 px-2 bg-light rounded">' +
-        '<input class="form-check-input mt-0" type="checkbox" onchange="selectAllCache(this.checked)" ' + (allSel ? 'checked' : '') + ' title="全选/取消">' +
-        '<span class="small text-muted me-1" id="batch_count">' + (hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中') + '</span>' +
-        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"' + (hasSel ? '' : ' disabled') + '><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
-        '<button class="btn btn-sm btn-outline-secondary py-0 px-2' + (hasSel ? '' : ' d-none') + '" onclick="clearCacheSelection()">取消选择</button>' +
-        '</div>';
-
-    body.innerHTML = toolbar + '<div class="gallery-flex-grid" id="cache_grid">' +
-        _cacheResults.map(function(g) {
+    renderCacheBatchBar();
+    body.innerHTML = '<div class="gallery-flex-grid" id="cache_grid">' +
+        _cacheResults.map(function(g, idx) {
             var displayTitle = g.title || '(无标题)';
             var catColor = CAT_COLORS[g.category] || '#6c757d';
             var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(g.category) + '</span>' : '';
@@ -188,7 +241,7 @@ function renderCacheGrid() {
             var lang = g.language || '';
             var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
             var thumbHtml = g.thumb_url
-                ? '<img src="' + g.thumb_url + '" class="card-img-top" alt="cover" loading="lazy" style="aspect-ratio:3/4;object-fit:cover" onerror="this.style.display=\'none\'">'
+                ? '<img src="' + g.thumb_url + '" class="card-img-top" alt="cover" loading="lazy" style="aspect-ratio:3/4;object-fit:cover" onerror="this.style.display=\'none\'" onload="onCoverLoad(this)">'
                 : '<div class="placeholder-thumb" style="aspect-ratio:3/4;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:2rem"><i class="far fa-image"></i></div>';
             var source_id = g.source_id || '';
             var escapedSid = escapeAttr(source_id);
@@ -203,7 +256,7 @@ function renderCacheGrid() {
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
                 '<div class="card-body px-2 py-1">' +
-                '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
+                '<div class="small title-clamp" style="cursor:pointer;color:var(--bs-link-color)" title="点击查看详情" onclick="showCacheDetail(' + idx + ')">' + escapeHtml(displayTitle) + '</div>' +
                 '<div class="d-flex justify-content-between align-items-center gap-1" style="margin-top:2px">' +
                 catBadge +
                 langBadge +
@@ -242,7 +295,11 @@ function renderCachePagination() {
     }
     html += '<li class="page-item' + (_cachePage >= totalPages ? ' disabled' : '') + '"><a class="page-link" href="#" onclick="event.preventDefault();loadCachePage(' + (_cachePage + 1) + ')">&raquo;</a></li>';
     html += '</ul></nav>';
-    html += '<span class="text-muted small">共 ' + _cacheTotal + ' 条</span></div>';
+    html += '<span class="text-muted small me-2">共 ' + _cacheTotal + ' 条</span>';
+    html += '<div class="input-group input-group-sm" style="width:130px"><span class="input-group-text">跳转</span>' +
+        '<input type="number" class="form-control" id="cache_page_jump" value="' + _cachePage + '" min="1" max="' + totalPages + '" onkeydown="if(event.key===\'Enter\'){var p=parseInt(this.value);if(p>=1&&p<=' + totalPages + ')loadCachePage(p);}">' +
+        '</div>';
+    html += '</div>';
     el.innerHTML = html;
 }
 
@@ -292,9 +349,9 @@ async function startCrawl() {
 }
 
 async function clearCrawlLog() {
-    if (!await confirmDialog({ title: '清理日志', message: '确定清理后台爬取日志吗？' })) return;
+    if (!await confirmDialog({ title: '清理工作文件', message: '确定清理所有工作文件吗？' })) return;
     var res = await api('clear_log', { form: { action: 'clear_log' } });
-    showToast(res.ok ? '日志已清理' : (res.error || '清理失败'), res.ok ? 'success' : 'danger');
+    showToast(res.ok ? '已清理' : (res.error || '清理失败'), res.ok ? 'success' : 'danger');
 }
 
 // ─── Single download from cache ───────────────────────────
@@ -446,10 +503,12 @@ function updateBatchBar() {
     var allSelected = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
     var countEl = document.getElementById('batch_count');
     var delBtn = bar.querySelector('.btn-outline-danger');
+    var dlBtn = bar.querySelector('.btn-outline-primary');
     var cancelBtn = bar.querySelector('.btn-outline-secondary');
     var selectAll = bar.querySelector('.form-check-input');
     if (countEl) countEl.textContent = hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中';
     if (delBtn) delBtn.disabled = !hasSel;
+    if (dlBtn) dlBtn.disabled = !hasSel;
     if (cancelBtn) cancelBtn.classList.toggle('d-none', !hasSel);
     if (selectAll) selectAll.checked = allSelected;
 }
@@ -466,6 +525,23 @@ async function batchDeleteCache() {
     } else {
         showToast(res.error || '删除失败', 'danger');
     }
+}
+
+async function cacheBatchDownload() {
+    if (_selectedIds.size === 0) { showToast('请先选择项目', 'warning'); return; }
+    var urls = [];
+    _cacheResults.forEach(function(g) {
+        if (_selectedIds.has(g.source_id)) {
+            if (g.source === 'exhentai') urls.push('https://exhentai.org/g/' + g.source_id + '/');
+            else if (g.source === 'nhentai') urls.push('https://nhentai.net/g/' + g.source_id + '/');
+        }
+    });
+    if (urls.length === 0) { showToast('无法构建下载链接', 'warning'); return; }
+    if (!await confirmDialog({ title: '批量下载', message: '确定下载选中的 ' + urls.length + ' 个画廊吗？' })) return;
+    document.getElementById('batch_urls').value = urls.join('\n');
+    var tabEl = document.querySelector('[data-bs-target="#download"]');
+    if (tabEl) { var tab = new bootstrap.Tab(tabEl); tab.show(); }
+    doBatchDownload();
 }
 
 // ─── 校对 ───
@@ -501,7 +577,7 @@ async function startVerify() {
     if (res.ok) {
         showToast(res.output || '校对任务已启动', 'success');
         renderVerifyStatus({ running: true, progress: { total_pages: 0, current: 0, message: '启动中...', status: 'running' } });
-        setTimeout(pollVerifyStatus, 2000);
+        setTimeout(pollVerifyStatus, 5000);
     } else {
         showToast(res.error || res.output || '启动失败', 'danger');
     }
@@ -513,10 +589,88 @@ async function stopVerify() {
     renderVerifyStatus(null);
 }
 
+// ─── Detail Popup ─────────────────────────────────────────
+
+function showCacheDetail(idx) {
+    var gallery = _cacheResults[idx];
+    if (!gallery) return;
+
+    var catColor = CAT_COLORS[gallery.category] || '#6c757d';
+    var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
+    var lang = gallery.language || '';
+    var langColorVal = langColor[lang.toLowerCase()] || '#6b7280';
+
+    var titleEl = document.getElementById('cache_detail_title');
+    var bodyEl = document.getElementById('cache_detail_body');
+    if (!bodyEl) return;
+    if (titleEl) titleEl.textContent = gallery.title || '(无标题)';
+
+    var tagsHtml = '';
+    var tagSource = gallery.tags_cn || gallery.tags;
+    if (tagSource) {
+        try {
+            var parsed = JSON.parse(tagSource);
+            if (Array.isArray(parsed)) {
+                var typeLabels = { 'artist':'作者', 'parody':'原作', 'character':'角色', 'group':'社团', 'male':'男性', 'female':'女性', 'language':'语言', 'category':'分类', 'mixed':'混合', 'cosplayer':'Coser', 'other':'其他' };
+                var typeColors = { 'artist':'#e74c3c', 'male':'#3498db', 'female':'#e91e63', 'parody':'#9b59b6', 'character':'#27ae60', 'group':'#f39c12', 'language':'#0dcaf0', 'category':'#95a5a6', 'mixed':'#607d8b', 'cosplayer':'#00bcd4', 'other':'#6b7280' };
+                var grouped = {};
+                parsed.forEach(function(t) {
+                    var type = t.type || 'other';
+                    if (!grouped[type]) grouped[type] = [];
+                    grouped[type].push({ raw: t.name || '', cn: t.name_cn || '' });
+                });
+                var order = ['parody', 'character', 'artist', 'group', 'male', 'female', 'cosplayer', 'mixed', 'language', 'category', 'other'];
+                tagsHtml = order.map(function(type) {
+                    if (!grouped[type] || grouped[type].length === 0) return '';
+                    var color = typeColors[type] || '#6b7280';
+                    var label = typeLabels[type] || type;
+                    var badges = grouped[type].map(function(name) {
+                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem">' + escapeHtml(name.cn || name.raw) + '</span>';
+                    }).join('');
+                    return '<div class="mb-1"><span class="small fw-semibold text-muted me-2" style="min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
+                }).filter(function(s) { return s; }).join('');
+            }
+        } catch(e) {}
+    }
+
+    bodyEl.innerHTML =
+        '<div class="row g-3">' +
+        '<div class="col-md-4">' +
+        (gallery.thumb_url
+            ? '<div style="background:#1a1a1a;border-radius:0.375rem;display:flex;align-items:center;justify-content:center;min-height:200px"><img src="' + gallery.thumb_url + '" class="img-fluid rounded" alt="cover" style="max-width:100%;max-height:400px;object-fit:contain"></div>'
+            : '<div style="aspect-ratio:3/4;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:3rem"><i class="far fa-image"></i></div>') +
+        '</div>' +
+        '<div class="col-md-8">' +
+        '<table class="table table-sm table-borderless mb-0">' +
+        '<tr><td class="text-muted" style="width:80px">标题</td><td>' + escapeHtml(gallery.title || '') + '</td></tr>' +
+        (gallery.title_jp ? '<tr><td class="text-muted">日文标题</td><td>' + escapeHtml(gallery.title_jp) + '</td></tr>' : '') +
+        (gallery.artist ? '<tr><td class="text-muted">作者</td><td>' + escapeHtml(gallery.artist) + '</td></tr>' : '') +
+        (gallery.group_name ? '<tr><td class="text-muted">社团</td><td>' + escapeHtml(gallery.group_name) + '</td></tr>' : '') +
+        '<tr><td class="text-muted">分类</td><td><span class="badge" style="background:' + catColor + '">' + escapeHtml(gallery.category || '') + '</span></td></tr>' +
+        (lang ? '<tr><td class="text-muted">语言</td><td><span style="color:' + langColorVal + '">' + escapeHtml(lang) + '</span></td></tr>' : '') +
+        '<tr><td class="text-muted">页数</td><td>' + (gallery.total_pages || 0) + 'p</td></tr>' +
+        (gallery.uploaded_at ? '<tr><td class="text-muted">上传日期</td><td>' + escapeHtml(gallery.uploaded_at) + '</td></tr>' : '') +
+        '<tr><td class="text-muted">下载状态</td><td>' + (gallery.is_local ? '<span class="text-success"><i class="fas fa-check me-1"></i>已下载</span>' : '<span class="text-muted">未下载</span>') + '</td></tr>' +
+        '</table>' +
+        (tagsHtml ? '<div class="mt-2 pt-2 border-top">' + tagsHtml + '</div>' : '') +
+        '</div>' +
+        '</div>';
+
+    var modalEl = document.getElementById('cache_detail_modal');
+    if (modalEl && typeof bootstrap !== 'undefined') {
+        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+    }
+}
+
 async function pollVerifyStatus() {
     var data = await api('verify_status&source=exhentai');
+    var wasRunning = pollVerifyStatus._running;
+    pollVerifyStatus._running = data && data.running;
     renderVerifyStatus(data);
     if (data && data.running) {
-        setTimeout(pollVerifyStatus, 3000);
+        setTimeout(pollVerifyStatus, 8000);
+    } else if (wasRunning && !data.running) {
+        loadCachePage(_cachePage || 1);
     }
 }

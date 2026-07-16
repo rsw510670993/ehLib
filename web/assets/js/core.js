@@ -14,6 +14,12 @@ function fallbackImageOnError(img) {
     img.style.display = 'none';
 }
 
+function onCoverLoad(img) {
+    if (img.naturalWidth > img.naturalHeight) {
+        img.style.objectFit = 'contain';
+    }
+}
+
 
 function confirmDialog(options) {
     options = options || {};

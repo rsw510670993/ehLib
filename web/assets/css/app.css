@@ -227,6 +227,10 @@ button.cat-tag[data-cat="all"]:not(.active):hover {
 @media (max-width: 768px) {
     .cat-tag { padding: .18rem .5rem; font-size: .72rem; }
 }
+.language-collapse-wrapper { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+.language-collapse-content { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+.language-collapse-content.collapsed { display: none; }
+.language-collapse-toggle { --cat-color: #9ca3af !important; }
 
 /* ─── Saved Search Tags ─── */
 .saved-search-tag {

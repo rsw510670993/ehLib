@@ -73,7 +73,7 @@ async function loadGalleries(filters) {
             return '<div data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
                 '<div class="card h-100 gallery-card' + cardClass + '" onclick="' + clickAction + '">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
-                '<img src="' + imgUrl + '" data-fallback="' + fallbackImgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="fallbackImageOnError(this)">' +
+                '<img src="' + imgUrl + '" data-fallback="' + fallbackImgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="fallbackImageOnError(this)" onload="onCoverLoad(this)">' +
                 statusBadge +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitle) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
