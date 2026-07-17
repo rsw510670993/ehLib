@@ -128,15 +128,15 @@ function public_image_url_from_path($path) {
 function find_gallery_image_path($local_path, $page) {
     $exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     if ($page === 'cover') {
-        foreach ($exts as $ext) {
-            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
-            if (is_file($candidate)) return $candidate;
-        }
         foreach (['001', '1'] as $name) {
             foreach ($exts as $ext) {
                 $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
                 if (is_file($candidate)) return $candidate;
             }
+        }
+        foreach ($exts as $ext) {
+            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
+            if (is_file($candidate)) return $candidate;
         }
         return '';
     }
@@ -211,6 +211,18 @@ function run_python($args, $timeout = 120) {
             @fclose($pipes[2]);
             @proc_close($proc);
             return ['ok' => false, 'error' => 'Command timed out (' . $timeout . 's)'];
+        }
+
+        // 检测下载取消标记
+        if (is_file($root . '/data/download_cancel.flag')) {
+            @proc_terminate($proc, 15);
+            usleep(100000);
+            @proc_terminate($proc, 9);
+            @fclose($pipes[1]);
+            @fclose($pipes[2]);
+            @proc_close($proc);
+            @unlink($root . '/data/download_cancel.flag');
+            return ['ok' => false, 'error' => 'Download cancelled by user'];
         }
 
         $r = [$pipes[1], $pipes[2]];
@@ -629,12 +641,26 @@ try {
 
                 $download_base = resolve_download_path();
                 $local_path = trim((string)($gallery['local_path'] ?? ''));
+                $target_dir = '';
                 if ($local_path !== '') {
                     $normalized_local = normalize_path($local_path);
-                    if (!is_path_within($normalized_local, $download_base)) {
-                        error_exit('Refusing to delete path outside download directory');
+                    if (is_path_within($normalized_local, $download_base)) {
+                        $target_dir = $normalized_local;
                     }
-                    if (file_exists($normalized_local) && !delete_dir_recursive($normalized_local)) {
+                }
+                if ($target_dir === '' || !file_exists($target_dir)) {
+                    // 尝试通过 source/source_id 推导实际路径（处理路径格式不一致的情况）
+                    $expected_subdir = str_replace('/', '_', $source_id);
+                    $candidate = $download_base . DIRECTORY_SEPARATOR . $source . DIRECTORY_SEPARATOR . $expected_subdir;
+                    $normalized_candidate = normalize_path($candidate);
+                    if (is_path_within($normalized_candidate, $download_base) && file_exists($normalized_candidate)) {
+                        $target_dir = $normalized_candidate;
+                        // 更新 DB 中的 local_path 为正确路径
+                        $pdo->prepare('UPDATE galleries SET local_path=? WHERE id=?')->execute([$normalized_candidate, $gallery['id']]);
+                    }
+                }
+                if ($target_dir !== '') {
+                    if (!delete_dir_recursive($target_dir)) {
                         error_exit('Failed to delete local gallery directory');
                     }
                 }
@@ -709,19 +735,16 @@ try {
                 if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
                 $img_path = '';
                 if ($page === 'cover') {
-                    foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                        $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
-                        if (is_file($candidate)) { $img_path = $candidate; break; }
-                    }
-                    if (!$img_path) {
+                    foreach (['001', '1'] as $name) {
                         foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . '001.' . $ext;
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
                             if (is_file($candidate)) { $img_path = $candidate; break; }
                         }
+                        if ($img_path) break;
                     }
                     if (!$img_path) {
                         foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . '1.' . $ext;
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
                             if (is_file($candidate)) { $img_path = $candidate; break; }
                         }
                     }
@@ -886,6 +909,21 @@ try {
             ], $result['ok']);
             break;
 
+        case 'stop_download':
+            $cancel_file = $root . '/data/download_cancel.flag';
+            file_put_contents($cancel_file, '1');
+            // 清理所有下载相关的进度文件
+            $progress_dir = $root . '/data/progress';
+            foreach (glob($progress_dir . '/*.json') as $f) {
+                $content = @file_get_contents($f);
+                $data = @json_decode($content, true);
+                if (is_array($data) && isset($data['status']) && $data['status'] === 'downloading') {
+                    @unlink($f);
+                }
+            }
+            json_exit(['message' => '下载任务已终止'], true);
+            break;
+
         case 'cache_search':
             $source = $_GET['source'] ?? 'exhentai';
             $artist = $_GET['artist'] ?? '';
@@ -908,11 +946,34 @@ try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
+                $search_fields = $_GET['search_fields'] ?? 'all';
                 $params = [];
                 $where = 'WHERE 1=1';
                 if ($source) { $where .= ' AND sc.source=?'; $params[] = $source; }
                 if ($artist) { $where .= ' AND sc.artist LIKE ?'; $params[] = '%' . $artist . '%'; }
-                if ($title) { $where .= ' AND (sc.title LIKE ? OR sc.title_jp LIKE ? OR sc.artist LIKE ?)'; $params[] = '%' . $title . '%'; $params[] = '%' . $title . '%'; $params[] = '%' . $title . '%'; }
+                if ($title) {
+                    $field_list = [];
+                    $scope_list = $search_fields === 'all' ? ['title','artist','tags','tags_cn'] : explode(',', $search_fields);
+                    if (in_array('title', $scope_list)) {
+                        $field_list[] = 'sc.title LIKE ?';
+                        $field_list[] = 'sc.title_jp LIKE ?';
+                        $params[] = '%' . $title . '%';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (in_array('artist', $scope_list)) {
+                        $field_list[] = 'sc.artist LIKE ?';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (in_array('tags', $scope_list)) {
+                        $field_list[] = 'sc.tags LIKE ?';
+                        $params[] = '%' . $title . '%';
+                        $field_list[] = 'sc.tags_cn LIKE ?';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (!empty($field_list)) {
+                        $where .= ' AND (' . implode(' OR ', $field_list) . ')';
+                    }
+                }
                 if ($category) { $where .= ' AND sc.category=?'; $params[] = $category; }
                 if (!empty($categories)) {
                     $where .= ' AND sc.category IN (' . implode(',', array_fill(0, count($categories), '?')) . ')';

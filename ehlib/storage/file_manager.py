@@ -39,9 +39,22 @@ class FileManager:
         page_str = str(page_num).zfill(3)
         return gallery_dir / f"{page_str}{ext}"
 
-    def cover_path(self, gallery_dir: Path, url: str) -> Path:
-        ext = self._extract_ext(url)
+    def cover_path(self, gallery_dir: Path, url: str = "") -> Path:
+        ext = self._extract_ext(url) if url else ".jpg"
         return gallery_dir / f"cover{ext}"
+
+    def first_page_path(self, gallery_dir: Path) -> Path | None:
+        if not gallery_dir.exists():
+            return None
+        for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+            candidate = gallery_dir / f"001{ext}"
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return candidate
+        for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+            candidate = gallery_dir / f"1{ext}"
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return candidate
+        return None
 
     def metadata_path(self, gallery_dir: Path) -> Path:
         return gallery_dir / "metadata.json"

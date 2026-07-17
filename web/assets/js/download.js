@@ -323,6 +323,8 @@ async function checkDownloadProgress() {
             '<div class="tray-bar"><div class="tray-bar-fill" style="width:' + pct + '%"></div></div>' +
             '<span class="tray-pct">' + pct + '%</span>' +
             '<span class="tray-status">' + msg + '</span>' +
+            '<button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="checkDownloadProgress()" title="手动刷新" style="font-size:.7rem"><i class="fas fa-sync"></i></button>' +
+            '<button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="stopDownload()" title="终止下载" style="font-size:.7rem"><i class="fas fa-stop"></i></button>' +
             '</div>';
     }).join('');
     if (_batchActive) renderBatchProgress(tasks);
@@ -374,6 +376,12 @@ function trackDownloadProgress(source, sourceId) {
 async function stopCrawl() {
     if (!await confirmDialog({ title: '终止爬取', message: '确定终止正在运行的后台爬取任务吗？', okText: '终止', okClass: 'btn-danger' })) return;
     await api('stop_crawl', { form: { action: 'stop_crawl', source: 'exhentai' } });
+    checkDownloadProgress();
+}
+
+async function stopDownload() {
+    if (!await confirmDialog({ title: '终止下载', message: '确定终止正在运行的下载任务吗？已下载的文件将被删除。', okText: '终止', okClass: 'btn-danger' })) return;
+    await api('stop_download', { form: { action: 'stop_download' } });
     checkDownloadProgress();
 }
 

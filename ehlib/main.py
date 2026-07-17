@@ -20,6 +20,9 @@ from ehlib.utils.progress import write_progress, remove_progress
 
 
 async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -> None:
+    download_cancel = Path("data/download_cancel.flag")
+    if download_cancel.exists():
+        download_cancel.unlink()
     downloader = Downloader(config, db)
     try:
         if args.url:
@@ -39,11 +42,16 @@ async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -
 
         gallery = await downloader.download(source, identifier, force=args.force)
         print(f"Downloaded: [{gallery.source}] {gallery.title} ({gallery.total_pages} pages)")
+    except KeyboardInterrupt:
+        print("Download cancelled by user.")
     finally:
         await downloader.close()
 
 
 async def cmd_batch(args: argparse.Namespace, config: Config, db: Database) -> None:
+    download_cancel = Path("data/download_cancel.flag")
+    if download_cancel.exists():
+        download_cancel.unlink()
     filepath = Path(args.file)
     if not filepath.exists():
         print(f"Error: File not found: {args.file}")
@@ -54,6 +62,8 @@ async def cmd_batch(args: argparse.Namespace, config: Config, db: Database) -> N
     try:
         results = await downloader.download_batch(urls)
         print(f"Batch complete: {len(results)} galleries downloaded")
+    except KeyboardInterrupt:
+        print("Batch download cancelled by user.")
     finally:
         await downloader.close()
 

@@ -401,13 +401,22 @@ $base = rtrim(dirname($scriptName), '/');
                     <div class="row g-2 align-items-end mb-2">
                         <div class="col-md-5">
                             <label class="form-label small mb-1 text-muted"><i class="fas fa-filter me-1"></i>本地检索</label>
-                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索标题/作者" onkeydown="if(event.key==='Enter')cacheSearch()">
+                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索关键词" onkeydown="if(event.key==='Enter')cacheSearch()">
                         </div>
                         <div class="col-md-1">
                             <button class="btn btn-sm btn-outline-primary w-100" onclick="cacheSearch()" title="筛选"><i class="fas fa-filter"></i></button>
                         </div>
                         <div class="col-md-1">
                             <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <span class="small text-muted me-2">检索范围:</span>
+                        <div id="cache_search_scope" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-scope="all" onclick="toggleSearchScope(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag active" data-scope="title" onclick="toggleSearchScope(this)" style="--cat-color:#e67e22">标题</button>
+                            <button class="cat-tag active" data-scope="artist" onclick="toggleSearchScope(this)" style="--cat-color:#9b59b6">作者</button>
+                            <button class="cat-tag active" data-scope="tags" onclick="toggleSearchScope(this)" style="--cat-color:#27ae60">标签</button>
                         </div>
                     </div>
                     <div>

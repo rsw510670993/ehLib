@@ -189,6 +189,8 @@ async function loadCachePage(page) {
 
     let params = '?action=cache_search&page=' + _cachePage + '&per_page=' + _cachePerPage;
     if (keyword) params += '&title=' + encodeURIComponent(keyword);
+    var scope = getCacheSearchScope();
+    if (scope !== 'all') params += '&search_fields=' + encodeURIComponent(scope);
     if (cats) params += '&categories=' + encodeURIComponent(cats.join(','));
     if (_cacheLanguages.size > 0) params += '&language=' + encodeURIComponent(getCacheSelectedLanguages().join(','));
 
@@ -246,7 +248,7 @@ function renderCacheGrid() {
             var source_id = g.source_id || '';
             var escapedSid = escapeAttr(source_id);
             var downloadBtn = g.is_local
-                ? '<button class="btn btn-sm btn-outline-secondary py-0 px-1" disabled title="已下载"><i class="fas fa-check"></i></button>'
+                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="阅读"><i class="fas fa-book-open"></i></button>'
                 : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
             return '<div>' +
                 '<div class="card gallery-card">' +
@@ -308,10 +310,43 @@ function cacheSearch() {
     loadCachePage(1);
 }
 
+// ─── Search scope toggles ─────────────────────────────
+
+function toggleSearchScope(el) {
+    var allBtn = document.querySelector('#cache_search_scope .cat-tag[data-scope="all"]');
+    if (el.dataset.scope === 'all') {
+        var active = !el.classList.contains('active');
+        document.querySelectorAll('#cache_search_scope .cat-tag').forEach(function(t) {
+            t.classList.toggle('active', active);
+        });
+    } else {
+        el.classList.toggle('active');
+        var scopeBtns = document.querySelectorAll('#cache_search_scope .cat-tag[data-scope]:not([data-scope="all"])');
+        var activeBtns = document.querySelectorAll('#cache_search_scope .cat-tag.active[data-scope]:not([data-scope="all"])');
+        if (allBtn) allBtn.classList.toggle('active', activeBtns.length === scopeBtns.length);
+    }
+    cacheSearch();
+}
+
+function getCacheSearchScope() {
+    var allBtn = document.querySelector('#cache_search_scope .cat-tag[data-scope="all"]');
+    if (allBtn && allBtn.classList.contains('active')) return 'all';
+    var scopes = [];
+    document.querySelectorAll('#cache_search_scope .cat-tag.active[data-scope]').forEach(function(t) {
+        if (t.dataset.scope !== 'all') scopes.push(t.dataset.scope);
+    });
+    return scopes.length > 0 ? scopes.join(',') : 'all';
+}
+
+function resetSearchScope() {
+    document.querySelectorAll('#cache_search_scope .cat-tag').forEach(function(t) { t.classList.add('active'); });
+}
+
 function cacheClearFilter() {
     document.getElementById('cache_keyword').value = '';
     resetCacheCategories();
     resetCacheLanguage();
+    resetSearchScope();
     _cachePage = 1;
     loadCachePage(1);
 }
@@ -616,6 +651,7 @@ function showCacheDetail(idx) {
                 var grouped = {};
                 parsed.forEach(function(t) {
                     var type = t.type || 'other';
+                    if (type === 'category' && gallery.category) return;
                     if (!grouped[type]) grouped[type] = [];
                     grouped[type].push({ raw: t.name || '', cn: t.name_cn || '' });
                 });
@@ -627,7 +663,7 @@ function showCacheDetail(idx) {
                     var badges = grouped[type].map(function(name) {
                         return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem">' + escapeHtml(name.cn || name.raw) + '</span>';
                     }).join('');
-                    return '<div class="mb-1"><span class="small fw-semibold text-muted me-2" style="min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
+                    return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
                 }).filter(function(s) { return s; }).join('');
             }
         } catch(e) {}
@@ -646,7 +682,7 @@ function showCacheDetail(idx) {
         (gallery.title_jp ? '<tr><td class="text-muted">日文标题</td><td>' + escapeHtml(gallery.title_jp) + '</td></tr>' : '') +
         (gallery.artist ? '<tr><td class="text-muted">作者</td><td>' + escapeHtml(gallery.artist) + '</td></tr>' : '') +
         (gallery.group_name ? '<tr><td class="text-muted">社团</td><td>' + escapeHtml(gallery.group_name) + '</td></tr>' : '') +
-        '<tr><td class="text-muted">分类</td><td><span class="badge" style="background:' + catColor + '">' + escapeHtml(gallery.category || '') + '</span></td></tr>' +
+                '<tr><td class="text-muted">分类</td><td><span class="badge" style="background:' + catColor + '">' + escapeHtml(gallery.category || '') + '</span></td></tr>' +
         (lang ? '<tr><td class="text-muted">语言</td><td><span style="color:' + langColorVal + '">' + escapeHtml(lang) + '</span></td></tr>' : '') +
         '<tr><td class="text-muted">页数</td><td>' + (gallery.total_pages || 0) + 'p</td></tr>' +
         (gallery.uploaded_at ? '<tr><td class="text-muted">上传日期</td><td>' + escapeHtml(gallery.uploaded_at) + '</td></tr>' : '') +

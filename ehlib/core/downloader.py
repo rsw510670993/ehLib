@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from ehlib.utils.progress import write_progress, remove_progress
 
 logger = get_logger(__name__)
 
+DOWNLOAD_CANCEL_FILE = Path("data/download_cancel.flag")
+
 
 class Downloader:
     def __init__(self, config: Config, db: Database):
@@ -35,6 +38,7 @@ class Downloader:
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
 
     async def download(self, source: str, identifier: str, force: bool = False, skip_existing: bool = False) -> Gallery:
+        self._check_cancelled()
         identifier = str(identifier)
         site = self._sites.get(source)
         if not site:
@@ -44,6 +48,7 @@ class Downloader:
             raise ValueError("exhentai identifier must be in format 'gid/token'")
 
         gallery = await self._fetch_metadata(site, identifier)
+        self._check_cancelled()
 
         existing = await self._db.get_gallery(source, gallery.source_id)
         if existing:
@@ -72,14 +77,23 @@ class Downloader:
         write_progress(source, gallery.source_id, gallery.title, gallery.total_pages, 0, "downloading")
 
         try:
+            self._check_cancelled()
             if skip_existing:
                 existing = self._file_manager.list_downloaded_pages(gallery_dir)
                 if existing:
                     started = max(existing)
                     write_progress(source, gallery.source_id, gallery.title, gallery.total_pages, started, 'downloading', str(started) + '/' + str(gallery.total_pages) + ' (skip)')
 
-            await self._download_cover(gallery, gallery_dir)
+            self._check_cancelled()
             await self._download_pages(gallery, gallery_dir, skip_existing=skip_existing)
+            self._check_cancelled()
+            await self._create_cover_from_first_page(gallery, gallery_dir)
+        except KeyboardInterrupt:
+            logger.warning("Download cancelled by user, cleaning up %s", gallery_dir)
+            self._file_manager.delete_gallery_dir(gallery_dir)
+            await self._db.delete_gallery(source, gallery.source_id)
+            remove_progress(source, gallery.source_id)
+            raise
         except Exception:
             gallery.file_size = self._file_manager.get_dir_size(gallery_dir)
             gallery.is_complete = False
@@ -106,6 +120,7 @@ class Downloader:
         return gallery
 
     async def download_batch(self, urls: list[str], force: bool = False) -> list[Gallery]:
+        self._check_cancelled()
         jobs = []
         for raw_url in urls:
             url = str(raw_url).strip()
@@ -119,6 +134,8 @@ class Downloader:
         results = await asyncio.gather(*(task for _, task in jobs), return_exceptions=True)
         galleries = []
         for (url, _task), result in zip(jobs, results):
+            if isinstance(result, KeyboardInterrupt):
+                raise
             if isinstance(result, Exception):
                 logger.error("Batch download error for %s", url, exc_info=(type(result), result, result.__traceback__))
             else:
@@ -211,6 +228,12 @@ class Downloader:
                 return f"{gid}/{token}"
         return None
 
+    @staticmethod
+    def _check_cancelled() -> None:
+        if DOWNLOAD_CANCEL_FILE.exists():
+            logger.warning("Cancel signal detected, aborting download")
+            raise KeyboardInterrupt()
+
     def _resolve_url(self, url: str) -> tuple[str | None, str | None]:
         from ehlib.utils.helpers import parse_nhentai_url, parse_exhentai_url
         nh_id = parse_nhentai_url(url)
@@ -266,22 +289,15 @@ class Downloader:
                 except Exception:
                     pass
 
-    async def _download_cover(self, gallery: Gallery, gallery_dir: Path) -> None:
-        if not gallery.cover_url:
+    async def _create_cover_from_first_page(self, gallery: Gallery, gallery_dir: Path) -> None:
+        first_page = self._file_manager.first_page_path(gallery_dir)
+        if not first_page:
+            logger.warning("No first page found to use as cover for %s", gallery.source_id)
             return
-        cover_path = self._file_manager.cover_path(gallery_dir, gallery.cover_url)
+        cover_path = gallery_dir / f"cover{first_page.suffix}"
+        shutil.copy2(first_page, cover_path)
         gallery.cover_path = str(cover_path)
-        if cover_path.exists() and cover_path.stat().st_size > 0:
-            return
-        stats = self._ensure_request_stats(gallery)
-        await self._download_file(
-            gallery.source,
-            gallery.cover_url,
-            cover_path,
-            "cover",
-            stats=stats,
-            stats_key="cover_requests",
-        )
+        logger.info("Cover created from first page for %s", gallery.source_id)
 
     async def _download_pages(self, gallery: Gallery, gallery_dir: Path, skip_existing: bool = False) -> None:
         urls = gallery.page_urls
@@ -317,6 +333,7 @@ class Downloader:
             existing_pages = set(self._file_manager.list_downloaded_pages(gallery_dir))
 
         for i, image_page_url in enumerate(urls):
+            self._check_cancelled()
             page_num = i + 1
             if skip_existing and page_num in existing_pages:
                 continue
@@ -388,6 +405,7 @@ class Downloader:
         skip_existing: bool = False,
     ) -> list[tuple[int, str]]:
         stats = self._ensure_request_stats(gallery)
+        self._check_cancelled()
         tasks = []
         existing_pages: set[int] = set()
         if skip_existing:
