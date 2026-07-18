@@ -398,6 +398,30 @@ $base = rtrim(dirname($scriptName), '/');
                             <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearCrawlLog()" title="清理工作文件"><i class="fas fa-trash-alt"></i></button>
                         </div>
                     </div>
+                    <div class="mb-1">
+                        <span class="small text-info me-2"><i class="fas fa-cloud-download-alt me-1"></i>爬取分类:</span>
+                        <div id="crawl_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-cat="all" onclick="crawlToggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag" data-cat="Doujinshi" onclick="crawlToggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
+                            <button class="cat-tag" data-cat="Manga" onclick="crawlToggleCategory(this)" style="--cat-color:#3498db">Manga</button>
+                            <button class="cat-tag" data-cat="Artist CG" onclick="crawlToggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
+                            <button class="cat-tag" data-cat="Game CG" onclick="crawlToggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
+                            <button class="cat-tag" data-cat="Western" onclick="crawlToggleCategory(this)" style="--cat-color:#27ae60">Western</button>
+                            <button class="cat-tag" data-cat="Non-H" onclick="crawlToggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
+                            <button class="cat-tag" data-cat="Image Set" onclick="crawlToggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
+                            <button class="cat-tag" data-cat="Cosplay" onclick="crawlToggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
+                            <button class="cat-tag" data-cat="Asian Porn" onclick="crawlToggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
+                            <button class="cat-tag" data-cat="Misc" onclick="crawlToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
+                        </div>
+                    </div>
+                    <div class="mb-1">
+                        <span class="small text-info me-2">爬取语言:</span>
+                        <div id="crawl_language_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-lang="all" onclick="crawlToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
+                        </div>
+                    </div>
+                    <div class="mt-1" id="saved_presets_row"></div>
+                    <hr class="my-2">
                     <div class="row g-2 align-items-end mb-2">
                         <div class="col-md-5">
                             <label class="form-label small mb-1 text-muted"><i class="fas fa-filter me-1"></i>本地检索</label>
@@ -441,7 +465,6 @@ $base = rtrim(dirname($scriptName), '/');
                             <button class="cat-tag active" data-lang="all" onclick="cacheToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
                         </div>
                     </div>
-                    <div class="mt-1" id="saved_presets_row"></div>
                     <div class="mt-1" id="cache_batch_bar"></div>
                 </div>
                 <div class="card-body" id="cache_grid_body">

@@ -47,35 +47,184 @@ function resetCacheCategories() {
     document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
 }
 
-// ─── Language toggle (local cache) ────────────────────────
+// ─── Category toggles (crawl) ─────────────────────────────
 
-let _cacheLanguages = new Set();
-
-function cacheToggleLanguage(el) {
-    if (el.dataset.lang === 'all') {
-        var allActive = el.classList.contains('active');
-        document.querySelectorAll('#cache_language_tags .cat-tag[data-lang]').forEach(function(t) {
+function crawlToggleCategory(el) {
+    var allBtn = document.querySelector('#crawl_category_tags .cat-tag[data-cat="all"]');
+    if (el.dataset.cat === 'all') {
+        var allActive = allBtn.classList.contains('active');
+        document.querySelectorAll('#crawl_category_tags .cat-tag').forEach(function(t) {
             t.classList.toggle('active', !allActive);
         });
-        if (allActive) {
-            _cacheLanguages.clear();
-        } else {
-            document.querySelectorAll('#cache_language_tags .cat-tag[data-lang]:not([data-lang="all"])').forEach(function(t) {
-                _cacheLanguages.add(t.dataset.lang);
-            });
-        }
     } else {
         el.classList.toggle('active');
-        if (el.classList.contains('active')) {
-            _cacheLanguages.add(el.dataset.lang);
+        var allTags = document.querySelectorAll('#crawl_category_tags .cat-tag[data-cat]:not([data-cat="all"])');
+        var activeTags = document.querySelectorAll('#crawl_category_tags .cat-tag.active[data-cat]:not([data-cat="all"])');
+        if (activeTags.length === allTags.length) {
+            allBtn.classList.add('active');
         } else {
-            _cacheLanguages.delete(el.dataset.lang);
+            allBtn.classList.remove('active');
         }
-        var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
-        var allTags = document.querySelectorAll('#cache_language_tags .cat-tag[data-lang]:not([data-lang="all"])');
-        var activeTags = document.querySelectorAll('#cache_language_tags .cat-tag.active[data-lang]:not([data-lang="all"])');
-        if (allBtn) allBtn.classList.toggle('active', activeTags.length === allTags.length);
     }
+}
+
+function getCrawlSelectedCategories() {
+    var allBtn = document.querySelector('#crawl_category_tags .cat-tag[data-cat="all"]');
+    if (allBtn && allBtn.classList.contains('active')) return null;
+    var cats = [];
+    document.querySelectorAll('#crawl_category_tags .cat-tag.active[data-cat]').forEach(function(t) {
+        if (t.dataset.cat !== 'all') cats.push(t.dataset.cat);
+    });
+    return cats.length > 0 ? cats : null;
+}
+
+// 将分类列表应用到爬取标签组（书签恢复用）
+function _applyCrawlCategoryTags(cats) {
+    var sel = '#crawl_category_tags';
+    document.querySelectorAll(sel + ' .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+    if (!cats || cats.length === 0) {
+        document.querySelectorAll(sel + ' .cat-tag').forEach(function(t) { t.classList.add('active'); });
+        return;
+    }
+    cats.forEach(function(c) {
+        var btn = document.querySelector(sel + ' .cat-tag[data-cat="' + c + '"]');
+        if (btn) btn.classList.add('active');
+    });
+    var allBtn = document.querySelector(sel + ' .cat-tag[data-cat="all"]');
+    var allTags = document.querySelectorAll(sel + ' .cat-tag[data-cat]:not([data-cat="all"])');
+    var activeTags = document.querySelectorAll(sel + ' .cat-tag.active[data-cat]:not([data-cat="all"])');
+    if (allBtn && activeTags.length === allTags.length) allBtn.classList.add('active');
+}
+
+// ─── Language tags (shared builder) ───────────────────────
+// 常用语种固定显示在折叠栏外（speechless 在外，english 收进折叠栏）
+var LANG_PRIORITY = ['japanese', 'chinese', 'speechless', 'n/a'];
+// 默认选中：中日+speechless
+var LANG_DEFAULTS = ['japanese', 'chinese', 'speechless'];
+
+async function _fetchSiteLanguages() {
+    try {
+        var resp = await fetch(API + '?action=cache_languages&source=exhentai');
+        var data = await resp.json();
+        if (!data.ok || !data.languages) return null;
+        return data.languages.filter(function(l) { return l; });
+    } catch (e) {
+        return null;
+    }
+}
+
+function toggleLanguageCollapse(btn) {
+    var content = btn.parentElement.querySelector('.language-collapse-content');
+    var collapsed = content.classList.toggle('collapsed');
+    btn.textContent = btn.dataset.label + (collapsed ? ' ▸' : ' ▾');
+}
+
+// 渲染一组语言标签：常用语种在折叠栏外，其余进折叠栏；点亮状态以 stateSet 为准
+function _buildLanguageTags(container, langs, stateSet, onToggle) {
+    var work = (langs || []).slice();
+    LANG_PRIORITY.forEach(function(p) {
+        var idx = work.indexOf(p);
+        if (idx !== -1) work.splice(idx, 1);
+    });
+    work.sort();
+    container.innerHTML = '';
+
+    var allBtn = document.createElement('button');
+    allBtn.className = 'cat-tag';
+    allBtn.dataset.lang = 'all';
+    allBtn.style.setProperty('--cat-color', '#0d6efd');
+    allBtn.textContent = '全部';
+    allBtn.onclick = function() { onToggle(this); };
+    container.appendChild(allBtn);
+
+    LANG_PRIORITY.forEach(function(l) {
+        var btn = document.createElement('button');
+        btn.className = 'cat-tag' + (stateSet.has(l) ? ' active' : '');
+        btn.dataset.lang = l;
+        btn.style.setProperty('--cat-color', '#6b7280');
+        btn.textContent = l;
+        btn.onclick = function() { onToggle(this); };
+        container.appendChild(btn);
+    });
+
+    if (work.length > 0) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'language-collapse-wrapper';
+
+        var toggleBtn = document.createElement('button');
+        toggleBtn.className = 'cat-tag language-collapse-toggle';
+        toggleBtn.dataset.label = '其他语言 (' + work.length + ')';
+        toggleBtn.textContent = toggleBtn.dataset.label + ' ▸';
+        toggleBtn.onclick = function() { toggleLanguageCollapse(this); };
+        wrapper.appendChild(toggleBtn);
+
+        var content = document.createElement('div');
+        content.className = 'language-collapse-content collapsed';
+        work.forEach(function(l) {
+            var btn = document.createElement('button');
+            btn.className = 'cat-tag' + (stateSet.has(l) ? ' active' : '');
+            btn.dataset.lang = l;
+            btn.style.setProperty('--cat-color', '#6b7280');
+            btn.textContent = l;
+            btn.onclick = function() { onToggle(this); };
+            content.appendChild(btn);
+        });
+        wrapper.appendChild(content);
+        container.appendChild(wrapper);
+    }
+}
+
+// 同步「全部」按钮点亮状态
+function _syncLanguageAllState(container) {
+    var allBtn = container.querySelector('.cat-tag[data-lang="all"]');
+    if (!allBtn) return;
+    var allTags = container.querySelectorAll('.cat-tag[data-lang]:not([data-lang="all"])');
+    var activeTags = container.querySelectorAll('.cat-tag.active[data-lang]:not([data-lang="all"])');
+    allBtn.classList.toggle('active', allTags.length > 0 && activeTags.length === allTags.length);
+}
+
+function _toggleLanguageTag(el, container, stateSet) {
+    if (el.dataset.lang === 'all') {
+        var allActive = el.classList.contains('active');
+        stateSet.clear();
+        container.querySelectorAll('.cat-tag[data-lang]').forEach(function(t) {
+            t.classList.toggle('active', !allActive);
+            if (!allActive && t.dataset.lang !== 'all') stateSet.add(t.dataset.lang);
+        });
+    } else {
+        el.classList.toggle('active');
+        if (el.classList.contains('active')) stateSet.add(el.dataset.lang);
+        else stateSet.delete(el.dataset.lang);
+        _syncLanguageAllState(container);
+    }
+}
+
+// 重置为默认语种（中日+speechless）并同步 DOM
+function _resetLanguageTags(container, stateSet) {
+    stateSet.clear();
+    LANG_DEFAULTS.forEach(function(l) { stateSet.add(l); });
+    container.querySelectorAll('.cat-tag[data-lang]').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.lang !== 'all' && stateSet.has(t.dataset.lang));
+    });
+    _syncLanguageAllState(container);
+}
+
+// 将给定语种列表应用到标签组（书签恢复用）
+function _applyLanguageTags(container, stateSet, langs) {
+    stateSet.clear();
+    (langs || []).forEach(function(l) { stateSet.add(l); });
+    container.querySelectorAll('.cat-tag[data-lang]').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.lang !== 'all' && stateSet.has(t.dataset.lang));
+    });
+    _syncLanguageAllState(container);
+}
+
+// ─── Language toggle (local cache) ────────────────────────
+
+let _cacheLanguages = new Set(LANG_DEFAULTS);
+
+function cacheToggleLanguage(el) {
+    _toggleLanguageTag(el, document.getElementById('cache_language_tags'), _cacheLanguages);
     cacheSearch();
 }
 
@@ -85,95 +234,33 @@ function getCacheSelectedLanguages() {
 }
 
 function resetCacheLanguage() {
-    _cacheLanguages.clear();
-    document.querySelectorAll('#cache_language_tags .cat-tag[data-lang]').forEach(function(t) { t.classList.remove('active'); });
-    // 默认选中中文+日语
-    ['japanese', 'chinese'].forEach(function(l) {
-        var btn = document.querySelector('#cache_language_tags .cat-tag[data-lang="' + l + '"]');
-        if (btn) { btn.classList.add('active'); _cacheLanguages.add(l); }
-    });
-    var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
-    if (allBtn) allBtn.classList.remove('active');
-}
-
-function toggleLanguageCollapse(btn) {
-    var content = btn.parentElement.querySelector('.language-collapse-content');
-    var collapsed = content.classList.toggle('collapsed');
-    btn.textContent = btn.dataset.label + (collapsed ? ' ▸' : ' ▾');
+    _resetLanguageTags(document.getElementById('cache_language_tags'), _cacheLanguages);
 }
 
 async function loadCacheLanguages() {
-    // 默认选中中文+日语，fetch 之前就设置好，loadCachePage 能立刻生效
-    _cacheLanguages.clear();
-    var defaultLangs = ['japanese', 'chinese'];
-    defaultLangs.forEach(function(l) { _cacheLanguages.add(l); });
+    // 默认中日+speechless 在 fetch 前就设置好，loadCachePage 能立刻生效
+    _cacheLanguages = new Set(LANG_DEFAULTS);
+    var langs = await _fetchSiteLanguages();
+    _buildLanguageTags(document.getElementById('cache_language_tags'), langs, _cacheLanguages, cacheToggleLanguage);
+}
 
-    var resp = await fetch(API + '?action=cache_languages&source=exhentai');
-    var data = await resp.json();
-    if (!data.ok || !data.languages) return;
-    var langs = data.languages.filter(function(l) { return l; });
-    var priority = ['japanese', 'chinese', 'english', 'n/a'];
-    var priorityLangs = [];
-    var otherLangs = [];
-    priority.forEach(function(p) {
-        var idx = langs.indexOf(p);
-        if (idx !== -1) { priorityLangs.push(langs[idx]); langs.splice(idx, 1); }
-    });
-    langs.sort();
-    otherLangs = langs;
+// ─── Language toggle (crawl) ──────────────────────────────
 
-    var container = document.getElementById('cache_language_tags');
-    container.innerHTML = '';
+let _crawlLanguages = new Set(LANG_DEFAULTS);
 
-    // 全部
-    var allBtn = document.createElement('button');
-    allBtn.className = 'cat-tag active';
-    allBtn.dataset.lang = 'all';
-    allBtn.style.setProperty('--cat-color', '#0d6efd');
-    allBtn.textContent = '全部';
-    allBtn.onclick = function() { cacheToggleLanguage(this); };
-    container.appendChild(allBtn);
+function crawlToggleLanguage(el) {
+    _toggleLanguageTag(el, document.getElementById('crawl_language_tags'), _crawlLanguages);
+}
 
-    // 常用语种
-    priorityLangs.forEach(function(l) {
-        var btn = document.createElement('button');
-        btn.className = 'cat-tag';
-        btn.dataset.lang = l;
-        btn.style.setProperty('--cat-color', '#6b7280');
-        btn.textContent = l;
-        btn.onclick = function() { cacheToggleLanguage(this); };
-        if (l === 'japanese' || l === 'chinese') {
-            btn.classList.add('active');
-        }
-        container.appendChild(btn);
-    });
+function getCrawlSelectedLanguages() {
+    if (_crawlLanguages.size === 0) return null;
+    return Array.from(_crawlLanguages);
+}
 
-    // 非常用语种 → 可折叠区域
-    if (otherLangs.length > 0) {
-        var wrapper = document.createElement('div');
-        wrapper.className = 'language-collapse-wrapper';
-
-        var toggleBtn = document.createElement('button');
-        toggleBtn.className = 'cat-tag language-collapse-toggle';
-        toggleBtn.dataset.label = '其他语言 (' + otherLangs.length + ')';
-        toggleBtn.textContent = toggleBtn.dataset.label + ' ▸';
-        toggleBtn.onclick = function() { toggleLanguageCollapse(this); };
-        wrapper.appendChild(toggleBtn);
-
-        var content = document.createElement('div');
-        content.className = 'language-collapse-content collapsed';
-        otherLangs.forEach(function(l) {
-            var btn = document.createElement('button');
-            btn.className = 'cat-tag';
-            btn.dataset.lang = l;
-            btn.style.setProperty('--cat-color', '#6b7280');
-            btn.textContent = l;
-            btn.onclick = function() { cacheToggleLanguage(this); };
-            content.appendChild(btn);
-        });
-        wrapper.appendChild(content);
-        container.appendChild(wrapper);
-    }
+async function loadCrawlLanguages() {
+    _crawlLanguages = new Set(LANG_DEFAULTS);
+    var langs = await _fetchSiteLanguages();
+    _buildLanguageTags(document.getElementById('crawl_language_tags'), langs, _crawlLanguages, crawlToggleLanguage);
 }
 
 // ─── Local cache listing ─────────────────────────────────
@@ -359,16 +446,18 @@ async function startCrawl() {
     var query = document.getElementById('crawl_keyword').value.trim();
     if (!query) { showToast('请输入爬取关键词', 'warning'); return; }
     var force = document.getElementById('crawl_force').classList.contains('active');
-    var allBtn = document.querySelector('#cache_category_tags .cat-tag[data-cat="all"]');
+    var allBtn = document.querySelector('#crawl_category_tags .cat-tag[data-cat="all"]');
     var categories = (allBtn && allBtn.classList.contains('active')) ? 'all' : [];
     if (categories !== 'all') {
-        document.querySelectorAll('#cache_category_tags .cat-tag.active[data-cat]').forEach(function(t) {
+        document.querySelectorAll('#crawl_category_tags .cat-tag.active[data-cat]').forEach(function(t) {
             if (t.dataset.cat !== 'all') categories.push(t.dataset.cat);
         });
         categories = categories.join(',');
     }
     var form = { action: 'crawl', source: 'exhentai', query: query, force: force ? '1' : '' };
     if (categories) form.categories = categories;
+    var langs = getCrawlSelectedLanguages();
+    if (langs && langs.length) form.languages = langs.join(',');
     showToast('正在启动爬取任务...', 'info');
     var res = await api('crawl', { form: form });
     if (res.ok) {
@@ -424,7 +513,8 @@ async function cacheDeleteItem(sid) {
 
 async function saveSearchPreset() {
     var keyword = document.getElementById('crawl_keyword').value.trim();
-    var cats = getCacheSelectedCategories();
+    var cats = getCrawlSelectedCategories();
+    var langs = getCrawlSelectedLanguages();
     var force = document.getElementById('crawl_force').classList.contains('active');
     var name = await promptDialog({ title: '保存检索条件', message: '为当前检索条件命名：', defaultValue: keyword || '未命名' });
     if (!name) return;
@@ -434,6 +524,7 @@ async function saveSearchPreset() {
             name: name,
             keyword: keyword,
             categories: cats ? JSON.stringify(cats) : '',
+            languages: langs ? JSON.stringify(langs) : '',
             force: force ? '1' : '',
         }
     });
@@ -459,6 +550,7 @@ async function loadSearchPresets() {
         var force = p.force_crawl ? ' (强制)' : '';
         var detail = p.keyword;
         if (cats) detail += ' | ' + cats;
+        if (p.languages) detail += ' | ' + p.languages;
         html += '<span class="saved-search-tag" onclick="applySearchPreset(\'' + escapeAttr(p.name) + '\')" title="' + escapeAttr(detail) + '">' +
             '<i class="far fa-bookmark me-1" style="font-size:.65rem"></i>' + escapeHtml(p.name) + force +
             '<span class="saved-search-del" onclick="event.stopPropagation();deleteSearchPreset(' + p.id + ')" title="删除">&times;</span>' +
@@ -473,24 +565,19 @@ async function applySearchPreset(name) {
     if (!res.ok || !res.presets) return;
     var preset = res.presets.find(function(p) { return p.name === name; });
     if (!preset) { showToast('未找到该预设', 'warning'); return; }
+    // 书签只恢复爬取侧控件，不影响本地浏览筛选
     document.getElementById('crawl_keyword').value = preset.keyword || '';
     document.getElementById('crawl_force').classList.toggle('active', !!preset.force_crawl);
     var cats = preset.categories ? preset.categories.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }) : [];
-    document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
-    if (cats.length === 0) {
-        document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
+    _applyCrawlCategoryTags(cats);
+    // 旧预设无 languages 字段时用默认（中日+speechless），空串表示不限制
+    var presetLangs;
+    if (preset.languages === null || preset.languages === undefined) {
+        presetLangs = LANG_DEFAULTS.slice();
     } else {
-        cats.forEach(function(c) {
-            var btn = document.querySelector('#cache_category_tags .cat-tag[data-cat="' + c + '"]');
-            if (btn) btn.classList.add('active');
-        });
-        var allBtn = document.querySelector('#cache_category_tags .cat-tag[data-cat="all"]');
-        if (allBtn) {
-            var allTags = document.querySelectorAll('#cache_category_tags .cat-tag[data-cat]:not([data-cat="all"])');
-            var activeTags = document.querySelectorAll('#cache_category_tags .cat-tag.active[data-cat]:not([data-cat="all"])');
-            if (activeTags.length === allTags.length) allBtn.classList.add('active');
-        }
+        presetLangs = preset.languages.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
     }
+    _applyLanguageTags(document.getElementById('crawl_language_tags'), _crawlLanguages, presetLangs);
 }
 
 async function deleteSearchPreset(id) {

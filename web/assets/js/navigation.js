@@ -21,7 +21,7 @@ function switchPage(name) {
     // load data on page switch
     if (name === 'dashboard') loadDashboard();
     if (name === 'gallery') loadGalleries();
-    if (name === 'cache') { loadCacheLanguages(); loadCachePage(1); pollVerifyStatus(); }
+    if (name === 'cache') { loadCacheLanguages(); loadCrawlLanguages(); loadCachePage(1); pollVerifyStatus(); }
     if (name === 'config') { loadCookies(); loadSettings(); }
     if (name === 'test-verify') { tvLoadList(); }
 }
