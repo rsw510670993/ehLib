@@ -81,6 +81,25 @@ function is_path_within($child, $parent) {
 }
 
 
+
+function count_downloaded_pages($local_path) {
+    $local_path = trim((string)$local_path);
+    if ($local_path === '') return 0;
+    $dir = normalize_path($local_path);
+    if (!is_dir($dir)) return 0;
+    $count = 0;
+    $items = scandir($dir);
+    if ($items === false) return 0;
+    foreach ($items as $item) {
+        $path = $dir . DIRECTORY_SEPARATOR . $item;
+        if (!is_file($path)) continue;
+        $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) continue;
+        $name = pathinfo($item, PATHINFO_FILENAME);
+        if (ctype_digit($name)) $count++;
+    }
+    return $count;
+}
 function public_gallery_image_url($source, $source_id, $file) {
     if ($source === '' || $source_id === '' || $file === '') return '';
     $public_source_id = str_replace('/', '_', $source_id);
@@ -109,15 +128,15 @@ function public_image_url_from_path($path) {
 function find_gallery_image_path($local_path, $page) {
     $exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     if ($page === 'cover') {
-        foreach ($exts as $ext) {
-            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
-            if (is_file($candidate)) return $candidate;
-        }
         foreach (['001', '1'] as $name) {
             foreach ($exts as $ext) {
                 $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
                 if (is_file($candidate)) return $candidate;
             }
+        }
+        foreach ($exts as $ext) {
+            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
+            if (is_file($candidate)) return $candidate;
         }
         return '';
     }
@@ -194,6 +213,18 @@ function run_python($args, $timeout = 120) {
             return ['ok' => false, 'error' => 'Command timed out (' . $timeout . 's)'];
         }
 
+        // 检测下载取消标记
+        if (is_file($root . '/data/download_cancel.flag')) {
+            @proc_terminate($proc, 15);
+            usleep(100000);
+            @proc_terminate($proc, 9);
+            @fclose($pipes[1]);
+            @fclose($pipes[2]);
+            @proc_close($proc);
+            @unlink($root . '/data/download_cancel.flag');
+            return ['ok' => false, 'error' => 'Download cancelled by user'];
+        }
+
         $r = [$pipes[1], $pipes[2]];
         $w = null;
         $e = null;
@@ -247,6 +278,41 @@ function run_python($args, $timeout = 120) {
         'stderr' => trim($stderr),
         'exit_code' => $exit_code,
     ];
+}
+
+function run_python_background($args, $pid_file = null) {
+    global $root, $python;
+    $data_dir = $root . '/data';
+    if (!is_dir($data_dir)) mkdir($data_dir, 0755, true);
+    if ($pid_file === null) $pid_file = $data_dir . '/retry.pid';
+    $tag = basename($pid_file, '.txt');
+
+    $cmd_parts = [$python];
+    $cmd_parts[] = '-m';
+    $cmd_parts[] = 'ehlib';
+    foreach ($args as $a) {
+        $cmd_parts[] = $a;
+    }
+    $cmd_str = implode(' ', array_map('escapeshellarg', $cmd_parts));
+
+    // Write a shell script
+    $script_file = $data_dir . '/bg_' . $tag . '.sh';
+    $log_file = $data_dir . '/bg_' . $tag . '.log';
+    $script = '#!/bin/sh' . "\n"
+        . 'export TZ=Asia/Shanghai' . "\n"
+        . 'echo $$ > ' . escapeshellarg($pid_file) . "\n"
+        . 'cd ' . escapeshellarg($root) . "\n"
+        . $cmd_str . ' >> ' . escapeshellarg($log_file) . ' 2>&1' . "\n"
+        . 'rm -f ' . escapeshellarg($script_file) . "\n"
+        . 'rm -f ' . escapeshellarg($pid_file) . "\n";
+    file_put_contents($script_file, $script);
+    chmod($script_file, 0755);
+
+    exec('nohup ' . escapeshellarg($script_file) . ' > /dev/null 2>&1 &');
+
+    usleep(500000);
+    $pid = is_file($pid_file) ? trim(file_get_contents($pid_file)) : 'unknown';
+    return $pid;
 }
 
 function run_python_locked($args, $timeout = 120) {
@@ -386,35 +452,95 @@ try {
             $tag_mode = $_GET['tag_mode'] ?? 'any';
             $artist = $_GET['artist'] ?? '';
             $language = $_GET['language'] ?? '';
-            $limit = (int)($_GET['limit'] ?? 50);
-            $args = ['list'];
-            if ($source) { $args[] = '--source'; $args[] = $source; }
-            if ($tag_name) { $args[] = '--tag'; $args[] = $tag_name; }
-            if ($tags_raw) { $args[] = '--tags'; $args[] = $tags_raw; }
-            if ($tag_mode !== 'any') { $args[] = '--tag-mode'; $args[] = $tag_mode; }
-            if ($artist) { $args[] = '--artist'; $args[] = $artist; }
-            if ($language) { $args[] = '--language'; $args[] = $language; }
-            if ($limit !== 50) { $args[] = '--limit'; $args[] = (string)$limit; }
-            $result = run_python($args);
-            if (!$result['ok']) error_exit($result['stderr'] ?: 'Command failed');
-            $lines = array_filter(explode("\n", $result['stdout']));
-            $galleries = [];
-            foreach ($lines as $line) {
-                if (preg_match('/^\[(.+?)\/(.+?)\]\s+(.+?)\s+\|\s*(.*?)\s*\((\d+)p\)\s+-\s+(.*)$/', $line, $m)) {
-                    $galleries[] = [
-                        'source' => $m[1],
-                        'source_id' => $m[2],
-                        'title' => $m[3],
-                        'title_jp' => $m[4],
-                        'pages' => (int)$m[5],
-                        'downloaded_at' => $m[6],
-                        'cover_url' => public_cover_url($m[1], $m[2]),
-                    ];
+            $per_page = max(1, min(200, (int)($_GET['per_page'] ?? 30)));
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $offset = ($page - 1) * $per_page;
+            $tag_names = [];
+            if ($tags_raw !== '') {
+                foreach (explode(',', $tags_raw) as $tag) {
+                    $tag = trim($tag);
+                    if ($tag !== '') $tag_names[] = $tag;
                 }
             }
-            json_exit(['galleries' => $galleries]);
-            break;
+            if ($tag_name !== '' && !$tag_names) $tag_names[] = $tag_name;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $params = [];
+                $has_tags = !empty($tag_names);
+                $from = $has_tags ? 'galleries g' : 'galleries';
+                $joins = '';
+                $prefix = $has_tags ? 'g.' : '';
+                $where = 'WHERE 1=1';
 
+                if ($has_tags) {
+                    $joins = ' JOIN gallery_tags gt ON g.id = gt.gallery_id JOIN tags t ON gt.tag_id = t.id';
+                    $where = 'WHERE (' . implode(' OR ', array_fill(0, count($tag_names), 't.name LIKE ?')) . ')';
+                    foreach ($tag_names as $tag) $params[] = '%' . $tag . '%';
+                }
+                if ($source) { $where .= ' AND ' . $prefix . 'source=?'; $params[] = $source; }
+                if ($artist) { $where .= ' AND ' . $prefix . 'artist LIKE ?'; $params[] = '%' . $artist . '%'; }
+                if ($language) {
+                    $langs = array_filter(array_map('trim', explode(',', $language)));
+                    if (!empty($langs)) {
+                        $placeholders = implode(',', array_fill(0, count($langs), '?'));
+                        $where .= ' AND ' . $prefix . 'language IN (' . $placeholders . ')';
+                        foreach ($langs as $l) $params[] = $l;
+                    }
+                }
+
+                $group_having = '';
+                if ($has_tags && $tag_mode === 'all') {
+                    $group_having = ' GROUP BY g.id HAVING COUNT(DISTINCT t.id) = ' . count($tag_names);
+                }
+
+                // Count query
+                if ($has_tags && $tag_mode === 'all') {
+                    $count_query = "SELECT COUNT(*) FROM (SELECT g.id FROM $from $joins $where $group_having) AS cnt";
+                } elseif ($has_tags) {
+                    $count_query = "SELECT COUNT(DISTINCT g.id) FROM $from $joins $where";
+                } else {
+                    $count_query = "SELECT COUNT(*) FROM $from $where";
+                }
+                $count_stmt = $pdo->prepare($count_query);
+                $count_stmt->execute($params);
+                $total = (int)$count_stmt->fetchColumn();
+
+                // Data query with limit/offset
+                $select_cols = $has_tags ? 'DISTINCT g.*' : '*';
+                $order_col = $prefix . 'uploaded_at';
+                $order_id_col = $prefix . 'source_id';
+                $data_query = "SELECT $select_cols FROM $from $joins $where $group_having ORDER BY COALESCE(NULLIF($order_col, '') , '0000-00-00') DESC, CAST(SUBSTR($order_id_col || '/', 1, INSTR($order_id_col || '/', '/') - 1) AS INTEGER) DESC LIMIT $per_page OFFSET $offset";
+                $stmt = $pdo->prepare($data_query);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll();
+                $galleries = [];
+                foreach ($rows as $row) {
+                    $total_pages = (int)($row['total_pages'] ?? 0);
+                    $downloaded_pages = count_downloaded_pages($row['local_path'] ?? '');
+                    $is_complete = (int)($row['is_complete'] ?? 0) === 1;
+                    $galleries[] = [
+                        'source' => $row['source'] ?? '',
+                        'source_id' => $row['source_id'] ?? '',
+                        'title' => $row['title'] ?? '',
+                        'title_jp' => $row['title_jp'] ?? '',
+                        'language' => $row['language'] ?? '',
+                        'pages' => $total_pages,
+                        'total_pages' => $total_pages,
+                        'downloaded_pages' => $downloaded_pages,
+                        'is_complete' => $is_complete,
+                        'downloaded_at' => $row['downloaded_at'] ?? '',
+                        'uploaded_at' => $row['uploaded_at'] ?? '',
+                        'cover_url' => public_cover_url($row['source'] ?? '', $row['source_id'] ?? ''),
+                    ];
+                }
+                json_exit(['galleries' => $galleries, 'total' => $total, 'page' => $page, 'per_page' => $per_page]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
         case 'get_gallery_detail':
             $source = $_GET['source'] ?? '';
             $source_id = $_GET['source_id'] ?? '';
@@ -457,6 +583,46 @@ try {
             ], $ok);
             break;
 
+        case 'delete_cache':
+            $source = $_POST['source'] ?? $_GET['source'] ?? '';
+            $source_id = $_POST['source_id'] ?? $_GET['source_id'] ?? '';
+            if (!$source || !$source_id) error_exit('source and source_id required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $stmt = $pdo->prepare('DELETE FROM search_cache WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $deleted = $stmt->rowCount();
+                json_exit(['message' => 'Deleted ' . $deleted . ' cache record(s)']);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'batch_delete_cache':
+            $ids_raw = $_POST['ids'] ?? $_GET['ids'] ?? '';
+            if (!$ids_raw) error_exit('ids required');
+            $ids = json_decode($ids_raw, true);
+            if (!is_array($ids) || empty($ids)) error_exit('ids must be a non-empty array');
+            $source = 'exhentai';
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->exec("PRAGMA synchronous=OFF");
+                $count = 0;
+                $stmt = $pdo->prepare('DELETE FROM search_cache WHERE source=? AND source_id=?');
+                foreach ($ids as $sid) {
+                    $stmt->execute([$source, $sid]);
+                    $count += $stmt->rowCount();
+                }
+                json_exit(['message' => 'Deleted ' . $count . ' records', 'deleted' => $count]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
         case 'delete_gallery':
             $source = $_POST['source'] ?? $_GET['source'] ?? '';
             $source_id = $_POST['source_id'] ?? $_GET['source_id'] ?? '';
@@ -475,12 +641,26 @@ try {
 
                 $download_base = resolve_download_path();
                 $local_path = trim((string)($gallery['local_path'] ?? ''));
+                $target_dir = '';
                 if ($local_path !== '') {
                     $normalized_local = normalize_path($local_path);
-                    if (!is_path_within($normalized_local, $download_base)) {
-                        error_exit('Refusing to delete path outside download directory');
+                    if (is_path_within($normalized_local, $download_base)) {
+                        $target_dir = $normalized_local;
                     }
-                    if (file_exists($normalized_local) && !delete_dir_recursive($normalized_local)) {
+                }
+                if ($target_dir === '' || !file_exists($target_dir)) {
+                    // 尝试通过 source/source_id 推导实际路径（处理路径格式不一致的情况）
+                    $expected_subdir = str_replace('/', '_', $source_id);
+                    $candidate = $download_base . DIRECTORY_SEPARATOR . $source . DIRECTORY_SEPARATOR . $expected_subdir;
+                    $normalized_candidate = normalize_path($candidate);
+                    if (is_path_within($normalized_candidate, $download_base) && file_exists($normalized_candidate)) {
+                        $target_dir = $normalized_candidate;
+                        // 更新 DB 中的 local_path 为正确路径
+                        $pdo->prepare('UPDATE galleries SET local_path=? WHERE id=?')->execute([$normalized_candidate, $gallery['id']]);
+                    }
+                }
+                if ($target_dir !== '') {
+                    if (!delete_dir_recursive($target_dir)) {
                         error_exit('Failed to delete local gallery directory');
                     }
                 }
@@ -520,14 +700,18 @@ try {
                 if (!is_array($data)) continue;
                 $mtime = $data['updated_at'] ?? 0;
                 $age = $now - $mtime;
-                if ($age > 300) {
+                $source = $data['source'] ?? '';
+                $stale = ($source === 'crawl') ? 7200 : 300;
+                if ($age > $stale) {
                     @unlink($f);
                     continue;
                 }
                 $tasks[] = $data;
             }
             usort($tasks, function ($a, $b) {
-                return ($b['updated_at'] ?? 0) - ($a['updated_at'] ?? 0);
+                $cmp = strcmp($a['source'] ?? '', $b['source'] ?? '');
+                if ($cmp !== 0) return $cmp;
+                return strcmp($a['source_id'] ?? '', $b['source_id'] ?? '');
             });
             json_exit(['tasks' => $tasks]);
             break;
@@ -551,19 +735,16 @@ try {
                 if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
                 $img_path = '';
                 if ($page === 'cover') {
-                    foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                        $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
-                        if (is_file($candidate)) { $img_path = $candidate; break; }
-                    }
-                    if (!$img_path) {
+                    foreach (['001', '1'] as $name) {
                         foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . '001.' . $ext;
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
                             if (is_file($candidate)) { $img_path = $candidate; break; }
                         }
+                        if ($img_path) break;
                     }
                     if (!$img_path) {
                         foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . '1.' . $ext;
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
                             if (is_file($candidate)) { $img_path = $candidate; break; }
                         }
                     }
@@ -648,6 +829,32 @@ try {
             }
             break;
 
+        case 'serve_cache_thumb':
+            $source = $_GET['source'] ?? 'exhentai';
+            $source_id = $_GET['source_id'] ?? '';
+            if (!$source_id) error_exit('source_id required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->prepare('SELECT thumb_path FROM search_cache WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $row = $stmt->fetch();
+                if (!$row || empty($row['thumb_path'])) error_exit('Thumb not found');
+                $thumb_path = $row['thumb_path'];
+                if (!is_file($thumb_path)) error_exit('Thumb file not found');
+                $ext = strtolower(pathinfo($thumb_path, PATHINFO_EXTENSION));
+                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
+                header('Content-Type: ' . ($mime[$ext] ?? 'image/webp'));
+                header('Cache-Control: max-age=86400');
+                readfile($thumb_path);
+                exit;
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
         case 'recover_orphans':
             $source = $_POST['source'] ?? '';
             $args = ['recover-orphans'];
@@ -702,34 +909,345 @@ try {
             ], $result['ok']);
             break;
 
+        case 'stop_download':
+            $cancel_file = $root . '/data/download_cancel.flag';
+            file_put_contents($cancel_file, '1');
+            // 清理所有下载相关的进度文件
+            $progress_dir = $root . '/data/progress';
+            foreach (glob($progress_dir . '/*.json') as $f) {
+                $content = @file_get_contents($f);
+                $data = @json_decode($content, true);
+                if (is_array($data) && isset($data['status']) && $data['status'] === 'downloading') {
+                    @unlink($f);
+                }
+            }
+            json_exit(['message' => '下载任务已终止'], true);
+            break;
+
+        case 'cache_search':
+            $source = $_GET['source'] ?? 'exhentai';
+            $artist = $_GET['artist'] ?? '';
+            $title = $_GET['title'] ?? '';
+            $category = $_GET['category'] ?? '';
+            $categories_raw = $_GET['categories'] ?? '';
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $per_page = max(1, min(200, (int)($_GET['per_page'] ?? 25)));
+            $offset = ($page - 1) * $per_page;
+            $categories = [];
+            if ($categories_raw !== '') {
+                foreach (explode(',', $categories_raw) as $c) {
+                    $c = trim($c);
+                    if ($c !== '') $categories[] = $c;
+                }
+            }
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+
+                $search_fields = $_GET['search_fields'] ?? 'all';
+                $params = [];
+                $where = 'WHERE 1=1';
+                if ($source) { $where .= ' AND sc.source=?'; $params[] = $source; }
+                if ($artist) { $where .= ' AND sc.artist LIKE ?'; $params[] = '%' . $artist . '%'; }
+                if ($title) {
+                    $field_list = [];
+                    $scope_list = $search_fields === 'all' ? ['title','artist','tags','tags_cn'] : explode(',', $search_fields);
+                    if (in_array('title', $scope_list)) {
+                        $field_list[] = 'sc.title LIKE ?';
+                        $field_list[] = 'sc.title_jp LIKE ?';
+                        $params[] = '%' . $title . '%';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (in_array('artist', $scope_list)) {
+                        $field_list[] = 'sc.artist LIKE ?';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (in_array('tags', $scope_list)) {
+                        $field_list[] = 'sc.tags LIKE ?';
+                        $params[] = '%' . $title . '%';
+                        $field_list[] = 'sc.tags_cn LIKE ?';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (!empty($field_list)) {
+                        $where .= ' AND (' . implode(' OR ', $field_list) . ')';
+                    }
+                }
+                if ($category) { $where .= ' AND sc.category=?'; $params[] = $category; }
+                if (!empty($categories)) {
+                    $where .= ' AND sc.category IN (' . implode(',', array_fill(0, count($categories), '?')) . ')';
+                    $params = array_merge($params, $categories);
+                }
+                $cache_lang = $_GET['language'] ?? '';
+                if ($cache_lang) {
+                    $langs = array_filter(array_map('trim', explode(',', $cache_lang)));
+                    if (!empty($langs)) {
+                        $placeholders = implode(',', array_fill(0, count($langs), '?'));
+                        $where .= ' AND sc.language IN (' . $placeholders . ')';
+                        foreach ($langs as $l) $params[] = $l;
+                    }
+                }
+
+                // Count
+                $count_query = "SELECT COUNT(*) FROM search_cache sc $where";
+                $count_stmt = $pdo->prepare($count_query);
+                $count_stmt->execute($params);
+                $total = (int)$count_stmt->fetchColumn();
+
+                // Data
+                $data_query = "SELECT sc.*, CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local FROM search_cache sc LEFT JOIN galleries g ON g.source = sc.source AND g.source_id = sc.source_id $where ORDER BY COALESCE(NULLIF(sc.uploaded_at, ''), '0000-00-00') DESC, sc.crawled_at DESC LIMIT $per_page OFFSET $offset";
+                $stmt = $pdo->prepare($data_query);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll();
+
+                $results = [];
+                foreach ($rows as $row) {
+                    $thumb_url = '';
+                    $thumb_path = $row['thumb_path'] ?? '';
+                    $source_id = $row['source_id'] ?? '';
+                    if ($thumb_path && is_file($thumb_path)) {
+                        $thumb_url = 'api.php?action=serve_cache_thumb&source=' . urlencode($source) . '&source_id=' . urlencode($source_id);
+                    }
+                    $results[] = [
+                        'source' => $row['source'] ?? '',
+                        'source_id' => $row['source_id'] ?? '',
+                        'title' => $row['title'] ?? '',
+                        'title_jp' => $row['title_jp'] ?? '',
+                        'category' => $row['category'] ?? '',
+                        'language' => $row['language'] ?? '',
+                        'group_name' => $row['group_name'] ?? '',
+                        'tags' => $row['tags'] ?? '',
+                        'tags_cn' => $row['tags_cn'] ?? '',
+                        'total_pages' => (int)($row['total_pages'] ?? 0),
+                        'artist' => $row['artist'] ?? '',
+                        'uploaded_at' => $row['uploaded_at'] ?? '',
+                        'is_local' => (int)($row['is_local'] ?? 0) === 1,
+                        'thumb_url' => $thumb_url,
+                        'searched_at' => $row['searched_at'] ?? '',
+                    ];
+                }
+                json_exit(['results' => $results, 'total' => $total, 'page' => $page, 'per_page' => $per_page]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'cache_artists':
+            $source = $_GET['source'] ?? 'exhentai';
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_COLUMN);
+                $stmt = $pdo->prepare("SELECT DISTINCT artist FROM search_cache WHERE source=? AND artist!='' ORDER BY artist");
+                $stmt->execute([$source]);
+                $artists = $stmt->fetchAll();
+                json_exit(['artists' => $artists]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'cache_categories':
+            $source = $_GET['source'] ?? 'exhentai';
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_COLUMN);
+                $stmt = $pdo->prepare("SELECT DISTINCT category FROM search_cache WHERE source=? AND category!='' ORDER BY category");
+                $stmt->execute([$source]);
+                $categories = $stmt->fetchAll();
+                json_exit(['categories' => $categories]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'cache_languages':
+            $source = $_GET['source'] ?? 'exhentai';
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_COLUMN);
+                $stmt = $pdo->prepare("SELECT DISTINCT language FROM search_cache WHERE source=? AND language!='' ORDER BY language");
+                $stmt->execute([$source]);
+                $languages = $stmt->fetchAll();
+                json_exit(['languages' => $languages]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'crawl':
+            $source = $_POST['source'] ?? 'exhentai';
+            $query = $_POST['query'] ?? '';
+            $force = !empty($_POST['force']);
+            $categories = $_POST['categories'] ?? '';
+            $languages = $_POST['languages'] ?? '';
+            if (!$query) error_exit('Query required');
+            // 检查是否已有爬取进程在运行
+            $pid_file = $root . '/data/crawl_pid_' . $source . '.txt';
+            if (is_file($pid_file)) {
+                $old_pid = trim(file_get_contents($pid_file));
+                if ($old_pid && is_dir('/proc/' . $old_pid)) {
+                    error_exit('已有爬取任务在运行 (PID: ' . $old_pid . ')，请先终止或等待完成');
+                }
+            }
+            $args = ['crawl', $source, '--query', $query];
+            if ($force) $args[] = '--force';
+            if ($languages !== '') {
+                $args[] = '--languages';
+                $args[] = $languages;
+            }
+            // convert category names to ExHentai bitmask
+            $cat_map = ['Misc'=>1,'Doujinshi'=>2,'Manga'=>4,'Artist CG'=>8,'Game CG'=>16,'Image Set'=>32,'Cosplay'=>64,'Asian Porn'=>128,'Non-H'=>256,'Western'=>512];
+            if ($categories !== '') {
+                $args[] = '--categories';
+                if ($categories === 'all') {
+                    $args[] = (string)array_sum(array_values($cat_map));
+                } else {
+                    foreach (explode(',', $categories) as $c) {
+                        $c = trim($c);
+                        if (isset($cat_map[$c])) $args[] = (string)$cat_map[$c];
+                    }
+                }
+            }
+            $pid = run_python_background($args, $pid_file);
+            json_exit(['output' => '爬取任务已在后台启动 (PID: ' . $pid . ')'], true);
+            break;
+
+        case 'stop_crawl':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $pid_file = $root . '/data/crawl_pid_' . $source . '.txt';
+            $cancel_file = $root . '/data/crawl_cancel_' . $source . '.flag';
+            // 先写取消标记（Python 端会检测）
+            file_put_contents($cancel_file, '1');
+            // 再杀进程
+            if (is_file($pid_file)) {
+                $pid = trim(file_get_contents($pid_file));
+                if ($pid) {
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        exec('taskkill /F /PID ' . (int)$pid . ' 2>nul');
+                    } else {
+                        exec('kill -9 ' . (int)$pid . ' 2>/dev/null');
+                    }
+                }
+                @unlink($pid_file);
+            }
+            // 清理进度文件
+            $progress_dir = $root . '/data/progress';
+            foreach (glob($progress_dir . '/crawl__crawl_' . $source . '*.json') as $f) {
+                @unlink($f);
+            }
+            json_exit(['message' => '爬取任务已终止'], true);
+            break;
+
+        case 'start_verify':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $data_dir = $root . '/data';
+            $pid_file = $data_dir . '/verify_pid_' . $source . '.txt';
+
+            if (is_file($pid_file)) {
+                $old_pid = trim(file_get_contents($pid_file));
+                if ($old_pid && DIRECTORY_SEPARATOR !== '\\' && is_dir('/proc/' . $old_pid)) {
+                    json_exit(['output' => '校对任务已在后台运行 (PID: ' . $old_pid . ')'], true);
+                    break;
+                }
+            }
+
+            $args = ['verify', $source];
+            $pid = run_python_background($args, $pid_file);
+            json_exit(['output' => '校对任务已在后台启动 (PID: ' . $pid . ')'], true);
+            break;
+
+        case 'stop_verify':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $cancel_file = $root . '/data/verify_cancel_' . $source . '.flag';
+            $pid_file = $root . '/data/verify_pid_' . $source . '.txt';
+            file_put_contents($cancel_file, '1');
+            if (is_file($pid_file)) {
+                $pid = trim(file_get_contents($pid_file));
+                if ($pid) {
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        exec('taskkill /F /PID ' . (int)$pid . ' 2>nul');
+                    } else {
+                        exec('kill -9 ' . (int)$pid . ' 2>/dev/null');
+                    }
+                }
+                @unlink($pid_file);
+            }
+            foreach (glob($root . '/data/progress/verify__verify_' . $source . '*.json') as $f) {
+                @unlink($f);
+            }
+            @unlink($cancel_file);
+            @unlink($root . '/data/verify_checkpoint_' . $source . '.json');
+            json_exit(['message' => '校对任务已终止'], true);
+            break;
+
+        case 'verify_status':
+            $source = $_GET['source'] ?? $_POST['source'] ?? 'exhentai';
+            $progress_dir = $root . '/data/progress';
+            foreach (glob($progress_dir . '/verify__verify_' . $source . '*.json') as $f) {
+                $content = @file_get_contents($f);
+                if ($content === false) continue;
+                $data = @json_decode($content, true);
+                if (!is_array($data)) continue;
+                json_exit(['running' => true, 'progress' => $data]);
+                break 2;
+            }
+            json_exit(['running' => false]);
+            break;
+
         case 'retry':
             $skip = !empty($_POST['skip_existing']);
-            // First count total pages that need retry, then calculate dynamic timeout
-            $count_result = run_python(['count-retry-pages'], 30);
-            $total_pages = 0;
-            if ($count_result['ok'] && is_numeric(trim($count_result['stdout']))) {
-                $total_pages = intval(trim($count_result['stdout']));
+            $data_dir = $root . '/data';
+            $pid_file = $data_dir . '/retry.pid';
+
+            // Check if a background retry is already running
+            if (is_file($pid_file)) {
+                $old_pid = trim(file_get_contents($pid_file));
+                if ($old_pid && is_dir('/proc/' . $old_pid)) {
+                    json_exit(['output' => '重试任务已在后台运行 (PID: ' . $old_pid . ')'], true);
+                    break;
+                }
             }
-            // 6 seconds per page estimate: delay_between_requests(1.5s) + avg_request(2s) + retry_overhead
-            // Minimum 600s (10 min), max 7200s (2 hours)
-            $dl_timeout = max(600, min(7200, $total_pages * 6));
+
             $args = ['retry'];
             if ($skip) $args[] = '--skip-existing';
-            $result = run_python_locked($args, $dl_timeout);
-            json_exit([
-                'output' => $result['stdout'] ?: $result['stderr'],
-                'exit_code' => $result['exit_code'],
-            ], $result['ok']);
+            $pid = run_python_background($args);
+            json_exit(['output' => '重试任务已在后台启动 (PID: ' . $pid . ')'], true);
+            break;
+
+        case 'retry_status':
+            $pid_file = $root . '/data/retry.pid';
+            if (!is_file($pid_file)) {
+                json_exit(['running' => false]);
+                break;
+            }
+            $pid = trim(file_get_contents($pid_file));
+            $running = $pid && is_dir('/proc/' . $pid);
+            if (!$running) {
+                @unlink($pid_file);
+                // Clean up stale progress files
+                foreach (glob($root . '/data/*.progress') as $f) {
+                    if (time() - filemtime($f) > 3600) @unlink($f);
+                }
+            }
+            json_exit(['running' => $running]);
             break;
 
         case 'export':
-            $output = $root . '/data/export_' . date('Ymd_His') . '.json';
+            $ts = date('Ymd_His');
+            $output = $root . "/data/export_$ts.json";
+            $zip_file = $root . "/data/export_$ts.zip";
             if (!is_dir($root . '/data')) mkdir($root . '/data', 0755, true);
-            $args = ['export', '--output', $output];
+            $args = ['export-package', '--output', $output, '--zip', $zip_file];
             $result = run_python($args);
-            if ($result['ok'] && is_file($output)) {
-                $content = json_decode(file_get_contents($output), true);
-                json_exit(['galleries' => $content, 'file' => basename($output)]);
+            if ($result['ok'] && is_file($zip_file)) {
+                json_exit(['file' => "data/export_$ts.zip", 'download_url' => "data/export_$ts.zip"]);
             }
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
@@ -778,6 +1296,154 @@ try {
                 }
             }
             json_exit(['parsed' => $extracted, 'all' => $result]);
+            break;
+
+        case 'save_search_preset':
+            $name = $_POST['name'] ?? '';
+            $keyword = $_POST['keyword'] ?? '';
+            $categories_raw = $_POST['categories'] ?? '';
+            $languages_raw = $_POST['languages'] ?? '';
+            $force = !empty($_POST['force']);
+            if (!$name) error_exit('名称不能为空');
+            $categories = '';
+            if ($categories_raw !== '') {
+                $parsed = json_decode($categories_raw, true);
+                if (is_array($parsed)) {
+                    $categories = implode(',', $parsed);
+                } else {
+                    $categories = $categories_raw;
+                }
+            }
+            $languages = '';
+            if ($languages_raw !== '') {
+                $parsed = json_decode($languages_raw, true);
+                if (is_array($parsed)) {
+                    $languages = implode(',', $parsed);
+                } else {
+                    $languages = $languages_raw;
+                }
+            }
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec("CREATE TABLE IF NOT EXISTS search_presets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    keyword TEXT DEFAULT '',
+                    categories TEXT DEFAULT '',
+                    languages TEXT DEFAULT NULL,
+                    force_crawl INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT ''
+                )");
+                try { $pdo->exec("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL"); } catch (Exception $e) {}
+                $stmt = $pdo->prepare('INSERT OR REPLACE INTO search_presets (name, keyword, categories, languages, force_crawl, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
+                $stmt->execute([$name, $keyword, $categories, $languages, $force ? 1 : 0]);
+                json_exit(['message' => '已保存']);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'list_search_presets':
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                try { $pdo->exec("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL"); } catch (Exception $e) {}
+                $stmt = $pdo->query("SELECT id, name, keyword, categories, languages, force_crawl, created_at FROM search_presets ORDER BY created_at DESC");
+                $presets = $stmt->fetchAll();
+                json_exit(['presets' => $presets]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'delete_search_preset':
+            $id = (int)($_POST['id'] ?? $_GET['id'] ?? 0);
+            if (!$id) error_exit('id required');
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $stmt = $pdo->prepare('DELETE FROM search_presets WHERE id=?');
+                $stmt->execute([$id]);
+                json_exit(['message' => '已删除']);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'clear_log':
+            $data_dir = $root . '/data';
+            // check for running tasks
+            $running_tasks = [];
+            $pid_patterns = ['*_pid_*.txt', '*.pid'];
+            foreach ($pid_patterns as $pp) {
+                foreach (glob($data_dir . '/' . $pp) as $f) {
+                    $pid = trim(@file_get_contents($f));
+                    if (!$pid) continue;
+                    $task = basename($f);
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        $out = [];
+                        exec('tasklist /FI "PID eq ' . (int)$pid . '" /NH 2>nul', $out);
+                        if (count($out) > 1) $running_tasks[] = $task;
+                    } else {
+                        if (is_dir('/proc/' . $pid)) $running_tasks[] = $task;
+                    }
+                }
+            }
+            if (!empty($running_tasks)) {
+                json_exit(['error' => '有任务正在运行，无法清理: ' . implode(', ', $running_tasks)], false);
+                break;
+            }
+            // clean working files (keep ehlib.db and thumbs/)
+            $cleared = 0;
+            $patterns = ['bg_*.log', 'bg_*.sh', '*.pid', '*_pid_*.txt', '*.flag', '*.lock', '*_progress_*.json', 'progress/*.json', 'verify_*.json', 'crawl_*.json', 'retry_*.json', 'download.lock'];
+            foreach ($patterns as $pattern) {
+                foreach (glob($data_dir . '/' . $pattern) as $f) {
+                    if (is_file($f) && @unlink($f)) $cleared++;
+                }
+            }
+            json_exit(['message' => "已清理 $cleared 个工作文件"]);
+            break;
+
+        case 'list_cached':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $q = $_POST['q'] ?? $_GET['q'] ?? '';
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                if ($q !== '') {
+                    $like = '%' . $q . '%';
+                    $stmt = $pdo->prepare("SELECT source_id, COALESCE(NULLIF(title,''), NULLIF(title_jp,'')) AS title, artist FROM search_cache WHERE source=? AND (title LIKE ? OR title_jp LIKE ? OR artist LIKE ? OR source_id LIKE ?) ORDER BY uploaded_at DESC, source_id DESC LIMIT 50");
+                    $stmt->execute([$source, $like, $like, $like, $like]);
+                } else {
+                    $stmt = $pdo->prepare("SELECT source_id, COALESCE(NULLIF(title,''), NULLIF(title_jp,'')) AS title, artist FROM search_cache WHERE source=? ORDER BY uploaded_at DESC, source_id DESC LIMIT 200");
+                    $stmt->execute([$source]);
+                }
+                json_exit(['galleries' => $stmt->fetchAll()]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'verify_single':
+            $source = $_POST['source'] ?? 'exhentai';
+            $sid = $_POST['source_id'] ?? '';
+            if (!$sid) error_exit('source_id required');
+            $result = run_python(['verify-single', $source, $sid], 60);
+            $result_file = $root . '/data/verify_single_result.json';
+            if (is_file($result_file)) {
+                $data = json_decode(file_get_contents($result_file), true);
+                @unlink($result_file);
+                json_exit($data ?: ['error' => 'parse failed']);
+            } else {
+                json_exit([
+                    'error' => ($result['stderr'] ?: $result['stdout'] ?: 'unknown error'),
+                    'exit_code' => $result['exit_code'] ?? -1,
+                ], false);
+            }
             break;
 
         default:

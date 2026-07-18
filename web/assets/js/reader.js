@@ -14,6 +14,8 @@ function readerToggleDetails() {
 
 function readerSearchTag(type, name) {
     closeReader();
+    addTagToCrawlKeyword(type, name);
+    showToast('已加入爬取关键词: ' + type + ':' + name, 'info');
     document.getElementById('gallery_tag_filter').value = name;
     document.getElementById('gallery_tag_mode').value = 'any';
     loadGalleries({ tags: name, tag_mode: 'any' });

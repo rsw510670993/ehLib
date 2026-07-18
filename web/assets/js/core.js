@@ -14,6 +14,109 @@ function fallbackImageOnError(img) {
     img.style.display = 'none';
 }
 
+function onCoverLoad(img) {
+    if (img.naturalWidth > img.naturalHeight) {
+        img.style.objectFit = 'contain';
+    }
+}
+
+
+function confirmDialog(options) {
+    options = options || {};
+    return new Promise(function(resolve) {
+        var modalEl = document.getElementById('confirm_modal');
+        if (!modalEl || typeof bootstrap === 'undefined') {
+            resolve(window.confirm(options.message || '确定要继续吗？'));
+            return;
+        }
+        var titleEl = document.getElementById('confirm_modal_title');
+        var bodyEl = document.getElementById('confirm_modal_body');
+        var okBtn = document.getElementById('confirm_modal_ok');
+        var cancelBtn = document.getElementById('confirm_modal_cancel');
+        titleEl.textContent = options.title || '确认操作';
+        bodyEl.innerHTML = '';
+        var message = document.createElement('div');
+        message.className = 'confirm-message';
+        message.textContent = options.message || '确定要继续吗？';
+        bodyEl.appendChild(message);
+        if (options.detail) {
+            var detail = document.createElement('div');
+            detail.className = 'confirm-detail';
+            detail.textContent = options.detail;
+            bodyEl.appendChild(detail);
+        }
+        okBtn.textContent = options.okText || '确认';
+        cancelBtn.textContent = options.cancelText || '取消';
+        okBtn.className = 'btn ' + (options.okClass || 'btn-danger');
+
+        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        var settled = false;
+        var cleanup = function() {
+            okBtn.removeEventListener('click', onOk);
+            modalEl.removeEventListener('hidden.bs.modal', onHidden);
+        };
+        var onOk = function() {
+            settled = true;
+            cleanup();
+            modal.hide();
+            resolve(true);
+        };
+        var onHidden = function() {
+            cleanup();
+            if (!settled) resolve(false);
+        };
+        okBtn.addEventListener('click', onOk);
+        modalEl.addEventListener('hidden.bs.modal', onHidden, { once: true });
+        modal.show();
+    });
+}
+function promptDialog(options) {
+    options = options || {};
+    return new Promise(function(resolve) {
+        var modalEl = document.getElementById('prompt_modal');
+        if (!modalEl || typeof bootstrap === 'undefined') {
+            resolve(prompt(options.message || '请输入：', options.defaultValue || ''));
+            return;
+        }
+        var titleEl = document.getElementById('prompt_modal_title');
+        var msgEl = document.getElementById('prompt_modal_message');
+        var inputEl = document.getElementById('prompt_modal_input');
+        var okBtn = document.getElementById('prompt_modal_ok');
+        var cancelBtn = document.getElementById('prompt_modal_cancel');
+        titleEl.textContent = options.title || '输入';
+        msgEl.textContent = options.message || '';
+        inputEl.value = options.defaultValue || '';
+        okBtn.textContent = options.okText || '确定';
+        cancelBtn.textContent = options.cancelText || '取消';
+
+        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        var settled = false;
+        var cleanup = function() {
+            okBtn.removeEventListener('click', onOk);
+            modalEl.removeEventListener('hidden.bs.modal', onHidden);
+            inputEl.removeEventListener('keydown', onKeydown);
+        };
+        var onOk = function() {
+            settled = true;
+            cleanup();
+            modal.hide();
+            resolve(inputEl.value);
+        };
+        var onHidden = function() {
+            cleanup();
+            if (!settled) resolve(null);
+        };
+        var onKeydown = function(e) {
+            if (e.key === 'Enter') onOk();
+        };
+        okBtn.addEventListener('click', onOk);
+        modalEl.addEventListener('hidden.bs.modal', onHidden, { once: true });
+        inputEl.addEventListener('keydown', onKeydown);
+        modal.show();
+        setTimeout(function() { inputEl.focus(); }, 100);
+    });
+}
+
 function showToast(msg, type = 'success') {
     const c = document.getElementById('toast_container');
     const el = document.createElement('div');
@@ -90,4 +193,23 @@ function escapeHtml(s) {
 function escapeAttr(s) {
     if (!s) return '';
     return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// 将 tag 转为 ExHentai 检索语法: type:"name$"
+function tagToExhentaiSyntax(type, name) {
+    if (!type || !name) return '';
+    return type + ':"' + name + '$"';
+}
+
+// 将 tag 追加到爬取关键词输入框 (去重)
+function addTagToCrawlKeyword(type, name) {
+    var syntax = tagToExhentaiSyntax(type, name);
+    if (!syntax) return;
+    var input = document.getElementById('crawl_keyword');
+    if (!input) return;
+    var current = input.value.trim();
+    // 已包含该 tag 则不重复添加
+    if (current.indexOf(syntax) !== -1) return;
+    input.value = current ? current + ' ' + syntax : syntax;
+    input.focus();
 }

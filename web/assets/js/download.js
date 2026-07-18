@@ -11,7 +11,7 @@ async function doDownload() {
     const url = document.getElementById('dl_url').value.trim();
     if (!url) { showToast('请输入 URL', 'warning'); return; }
     const force = document.getElementById('dl_force_url').checked;
-    if (force && !confirm('⚠ 强制重新下载将清空本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
+    if (force && !await confirmDialog({ title: '确认强制重新下载', message: '强制重新下载将清空本地图片文件并覆盖数据库记录。', detail: '这个操作不可撤销，确定要继续吗？', okText: '强制下载' })) return;
     clearOutput('dl_output');
     document.getElementById('dl_output').classList.add('show');
     document.getElementById('dl_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>下载中，请稍候...';
@@ -33,7 +33,7 @@ async function doDownloadById() {
     const gid = document.getElementById('dl_gid').value.trim();
     const token = document.getElementById('dl_token').value.trim();
     const force = document.getElementById('dl_force_id').checked;
-    if (force && !confirm('⚠ 强制重新下载将清空本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
+    if (force && !await confirmDialog({ title: '确认强制重新下载', message: '强制重新下载将清空本地图片文件并覆盖数据库记录。', detail: '这个操作不可撤销，确定要继续吗？', okText: '强制下载' })) return;
 
     clearOutput('dl_output');
     document.getElementById('dl_output').classList.add('show');
@@ -63,7 +63,7 @@ async function doBatchDownload() {
     const urls = document.getElementById('batch_urls').value.trim();
     if (!urls) { showToast('请输入 URL', 'warning'); return; }
     const force = document.getElementById('batch_force').checked;
-    if (force && !confirm('⚠ 强制重新下载将清空所有本地图片文件并覆盖数据库记录，确定要执行吗？')) return;
+    if (force && !await confirmDialog({ title: '确认批量强制重新下载', message: '强制重新下载将清空所有匹配画廊的本地图片文件并覆盖数据库记录。', detail: '这个操作不可撤销，确定要继续吗？', okText: '强制批量下载' })) return;
     if (!setButtonBusy('batch_download_btn', true, '<i class="fas fa-spinner fa-spin me-1"></i>批量下载中')) return;
     clearOutput('batch_output');
     document.getElementById('batch_output').classList.add('show');
@@ -99,22 +99,24 @@ async function doRetry() {
     document.getElementById('retry_output').classList.add('show');
 
     _retryActive = true;
-    renderRetryProgress([], '重试中...');
+    renderRetryProgress([], '正在启动后台重试任务...');
     startProgressPoller();
     try {
         const skip = document.getElementById('retry_skip_existing').checked;
         const res = await api('retry', { form: { skip_existing: skip ? '1' : '0' } });
         if (res.ok) {
-            showOutput('retry_output', res.output || '重试完成', false);
+            showOutput('retry_output', res.output || '重试任务已在后台启动', false);
+            // Keep _retryActive = true so the poller tracks background progress
         } else {
-            showOutput('retry_output', res.error || res.output || '重试失败（API 返回错误）', true);
+            showOutput('retry_output', res.error || res.output || '重试失败', true);
+            _retryActive = false;
         }
     } catch (err) {
         showOutput('retry_output', '重试失败: ' + (err.message || err), true);
-    } finally {
         _retryActive = false;
+    } finally {
         setButtonBusy('retry_btn', false);
-        if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
+        if (!_retryActive && !_activeProgressKey && !_batchActive) stopProgressPoller();
     }
 }
 // ─── Download Progress ───
@@ -122,6 +124,9 @@ let _progressPoller = null;
 let _activeProgressKey = null;
 let _batchActive = false;
 let _retryActive = false;
+let _crawlActive = false;
+let _crawlEverSeen = false;
+let _trayManualCollapsed = false;
 
 function startProgressPoller() {
     if (_progressPoller) return;
@@ -228,25 +233,107 @@ function renderRetryProgress(tasks, emptyText) {
     }).join('\n');
     el.innerHTML = '<span class="info">' + lines.replace(/\n/g, '<br>') + '</span>';
 }
+function isCrawlTask(t) {
+    return t.source === 'crawl' || String(t.source_id || '').startsWith('crawl');
+}
+
 async function checkDownloadProgress() {
     const data = await api('get_download_progress');
     const tasks = (data && data.tasks) || [];
 
     const card = document.getElementById('active_downloads_card');
     const body = document.getElementById('active_downloads_body');
+    const label = document.getElementById('tray_status_label');
+    const btn = document.getElementById('tray_toggle_btn');
+
     if (tasks.length === 0) {
-        card.style.display = 'none';
         body.innerHTML = '';
+        var statusText = '(空闲)';
+        if (_batchActive) statusText = '(等待中...)';
+        else if (_crawlActive) statusText = '(爬取等待中...)';
+        else if (_retryActive) statusText = '(重试等待中...)';
+        if (label) label.textContent = statusText;
+        card.classList.add('collapsed');
+        _trayManualCollapsed = false;
         if (_batchActive) renderBatchProgress([], '等待下载任务启动...');
-        if (_retryActive) renderRetryProgress([], '重试中...');
+        if (_retryActive) {
+            api('retry_status').then(function(status) {
+                if (status && status.running) {
+                    renderRetryProgress([], '后台重试进行中...');
+                } else {
+                    _retryActive = false;
+                    renderRetryProgress([], '重试已完成');
+                    setTimeout(function() {
+                        var el = document.getElementById('retry_output');
+                        if (el) { el.classList.remove('show'); el.innerHTML = ''; }
+                    }, 5000);
+                    if (!_activeProgressKey && !_batchActive) stopProgressPoller();
+                }
+            });
+            return;
+        }
+        if (_crawlActive && _crawlEverSeen) {
+            _crawlActive = false;
+            _crawlEverSeen = false;
+            statusText = '(爬取已完成)';
+            if (label) label.textContent = statusText;
+        } else if (_crawlActive) {
+            return;
+        }
         if (!_activeProgressKey && !_batchActive && !_retryActive) stopProgressPoller();
         return;
     }
 
-    card.style.display = '';
-    body.innerHTML = renderProgressTaskRows(tasks);
+    var hasCrawl = tasks.some(isCrawlTask);
+    if (hasCrawl) _crawlEverSeen = true;
+    _crawlActive = hasCrawl;
+
+    if (label) label.textContent = '(' + tasks.length + ' 个任务)';
+    if (!_trayManualCollapsed) card.classList.remove('collapsed');
+    body.innerHTML = tasks.map(function(t) {
+        if (isCrawlTask(t)) {
+            var title = escapeHtml(t.title || '爬取任务');
+            var cur = parseInt(t.current, 10) || 0;
+            var total = parseInt(t.total_pages, 10) || 0;
+            var isWaiting = t.status === 'waiting';
+            var pct = isWaiting ? 100 : (total > 0 ? Math.max(0, Math.min(100, Math.round(cur / total * 100))) : 100);
+            var label = isWaiting ? '-' : (total > 0 ? cur + '/' + total : (cur || ''));
+            var msg = escapeHtml(t.message || '');
+            var barColor = isWaiting ? '#6c757d' : '#0d6efd';
+            var barAnim = isWaiting ? '' : ';animation:none';
+            return '<div class="tray-row">' +
+                '<span class="badge bg-secondary">爬取</span>' +
+                '<span class="tray-title" title="' + title + '">' + title + '</span>' +
+                '<div class="tray-bar"><div class="tray-bar-fill" style="width:' + pct + '%;background:' + barColor + barAnim + '"></div></div>' +
+                '<span class="tray-pct">' + label + '</span>' +
+                '<span class="tray-status">' + msg + '</span>' +
+                '<button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="checkDownloadProgress()" title="手动刷新" style="font-size:.7rem"><i class="fas fa-sync"></i></button>' +
+                '<button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="stopCrawl()" title="终止爬取" style="font-size:.7rem"><i class="fas fa-stop"></i></button>' +
+                '</div>';
+        }
+        var total = parseInt(t.total_pages, 10) || 0;
+        var current = parseInt(t.current, 10) || 0;
+        var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(current / total * 100))) : 0;
+        var title = escapeHtml(t.title || t.source_id || '');
+        var srcClass = t.source === 'exhentai' ? 'badge-ex' : 'badge-nh';
+        var msg = escapeHtml(t.message || (current + '/' + total));
+        return '<div class="tray-row">' +
+            '<span class="badge ' + srcClass + '">' + escapeHtml(t.source || '') + '</span>' +
+            '<span class="tray-title" title="' + title + '">' + title + '</span>' +
+            '<div class="tray-bar"><div class="tray-bar-fill" style="width:' + pct + '%"></div></div>' +
+            '<span class="tray-pct">' + pct + '%</span>' +
+            '<span class="tray-status">' + msg + '</span>' +
+            '<button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="checkDownloadProgress()" title="手动刷新" style="font-size:.7rem"><i class="fas fa-sync"></i></button>' +
+            '<button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="stopDownload()" title="终止下载" style="font-size:.7rem"><i class="fas fa-stop"></i></button>' +
+            '</div>';
+    }).join('');
     if (_batchActive) renderBatchProgress(tasks);
     if (_retryActive) renderRetryProgress(tasks);
+
+    // crawl shown, stop auto polling (user refreshes manually via sync button)
+    if (_crawlActive && !_activeProgressKey && !_batchActive && !_retryActive) {
+        stopProgressPoller();
+    }
 
     if (_activeProgressKey) {
         var active = tasks.find(function(t) { return progressTaskKey(t) === _activeProgressKey; });
@@ -264,6 +351,16 @@ async function checkDownloadProgress() {
         }
     }
 }
+function toggleDownloadsTray() {
+    var card = document.getElementById('active_downloads_card');
+    if (!card) return;
+    var isCollapsed = card.classList.toggle('collapsed');
+    _trayManualCollapsed = isCollapsed;
+    var btn = document.getElementById('tray_toggle_btn');
+    if (btn) {
+        btn.innerHTML = isCollapsed ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
+    }
+}
 function trackDownloadProgress(source, sourceId) {
     _activeProgressKey = source + '__' + sourceId.replace(/\//g, '_');
     var el = document.getElementById('dl_progress');
@@ -276,9 +373,20 @@ function trackDownloadProgress(source, sourceId) {
     startProgressPoller();
 }
 
+async function stopCrawl() {
+    if (!await confirmDialog({ title: '终止爬取', message: '确定终止正在运行的后台爬取任务吗？', okText: '终止', okClass: 'btn-danger' })) return;
+    await api('stop_crawl', { form: { action: 'stop_crawl', source: 'exhentai' } });
+    checkDownloadProgress();
+}
+
+async function stopDownload() {
+    if (!await confirmDialog({ title: '终止下载', message: '确定终止正在运行的下载任务吗？已下载的文件将被删除。', okText: '终止', okClass: 'btn-danger' })) return;
+    await api('stop_download', { form: { action: 'stop_download' } });
+    checkDownloadProgress();
+}
+
 function clearDownloadProgress() {
     _activeProgressKey = null;
-    if (!_batchActive && !_retryActive) stopProgressPoller();
     var el = document.getElementById('dl_progress');
     var bar = document.getElementById('dl_progress_bar');
     if (el && bar) {

@@ -34,11 +34,13 @@ class SessionManager:
     async def get_client(self, source: str) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             cookies = self._load_cookies(source)
+            ua = self._config.request.get("user_agent", "") or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
             headers = {
-                "User-Agent": self._config.request.get("user_agent", ""),
+                "User-Agent": ua,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9,ja;q=0.8",
                 "Accept-Encoding": "gzip, deflate",
+                "Referer": "https://exhentai.org/",
             }
             self._client = httpx.AsyncClient(
                 cookies=cookies,

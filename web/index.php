@@ -7,7 +7,7 @@
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css">
+    <link rel="stylesheet" href="assets/css/app.css?v=15">
 </head>
 <body>
 
@@ -20,10 +20,10 @@ $base = rtrim(dirname($scriptName), '/');
     <div class="brand"><i class="fas fa-book-open me-2"></i>ehLib</div>
     <ul class="nav flex-column mt-2">
         <li class="nav-item"><a class="nav-link active" href="#" data-page="dashboard"><i class="fas fa-tachometer-alt"></i>仪表盘</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="cookies"><i class="fas fa-cookie-bite"></i>Cookie 配置</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="fas fa-cog"></i>系统设置</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="download"><i class="fas fa-download"></i>下载控制</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="cache"><i class="fas fa-database"></i>本地缓存</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="test-verify"><i class="fas fa-check-double"></i>单本校对</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="config"><i class="fas fa-cog"></i>站点配置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="export"><i class="fas fa-file-export"></i>数据导出</a></li>
     </ul>
 </div>
@@ -31,16 +31,48 @@ $base = rtrim(dirname($scriptName), '/');
 <div class="main">
     <div class="main-header">
         <div><span id="page_title">仪表盘</span> <small class="text-muted ms-2" id="page_subtitle">系统概览</small></div>
-        <div class="d-flex align-items-center gap-2">
-            <span class="badge bg-secondary" id="status_indicator"><i class="fas fa-circle text-success me-1"></i>在线</span>
-            <span class="text-muted small" id="clock"></span>
-        </div>
+        <div></div>
     </div>
 
     <div class="main-content">
 
         <!-- ═══ Toast ═══ -->
         <div class="toast-container" id="toast_container"></div>
+
+        <div class="modal fade" id="confirm_modal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="confirm_modal_title">确认操作</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body" id="confirm_modal_body"></div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" id="confirm_modal_cancel" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-danger" id="confirm_modal_ok">确认</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal fade" id="prompt_modal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="prompt_modal_title">输入</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="prompt_modal_message" class="mb-2"></div>
+                        <input type="text" class="form-control form-control-sm" id="prompt_modal_input">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" id="prompt_modal_cancel" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" id="prompt_modal_ok">确定</button>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- ═══ Dashboard ═══ -->
         <div id="page_dashboard" class="page-section">
@@ -49,15 +81,6 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_db">-</div><div class="stat-label">数据库状态</div></div></div>
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_venv">-</div><div class="stat-label">虚拟环境</div></div></div>
                 <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_config">-</div><div class="stat-label">配置文件</div></div></div>
-            </div>
-            <div id="active_downloads_card" class="mb-3" style="display:none">
-                <div class="card border-primary">
-                    <div class="card-header bg-primary text-white py-2">
-                        <i class="fas fa-download me-1"></i>活跃下载
-                    </div>
-                    <div class="card-body py-2" id="active_downloads_body">
-                    </div>
-                </div>
             </div>
             <div class="card">
                 <div class="card-header">快捷操作</div>
@@ -84,9 +107,11 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
-        <!-- ═══ Cookie 配置 ═══ -->
-        <div id="page_cookies" class="page-section section-hidden">
-            <div class="card">
+        <!-- ═══ 站点配置 ═══ -->
+        <div id="page_config" class="page-section section-hidden">
+
+            <!-- Cookie 配置 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>Cookie 配置</span>
                     <button class="btn btn-sm btn-success" onclick="saveCookies()"><i class="fas fa-save me-1"></i>保存</button>
@@ -141,11 +166,9 @@ $base = rtrim(dirname($scriptName), '/');
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ═══ 系统设置 ═══ -->
-        <div id="page_settings" class="page-section section-hidden">
-            <div class="card">
+            <!-- 系统设置 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>系统设置</span>
                     <button class="btn btn-sm btn-success" onclick="saveSettings()"><i class="fas fa-save me-1"></i>保存</button>
@@ -196,11 +219,9 @@ $base = rtrim(dirname($scriptName), '/');
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ═══ 下载控制 ═══ -->
-        <div id="page_download" class="page-section section-hidden">
-            <div class="card">
+            <!-- 单一下载 -->
+            <div class="card mb-3">
                 <div class="card-header">单一下载</div>
                 <div class="card-body">
                     <ul class="nav nav-tabs mb-3" role="tablist">
@@ -262,7 +283,8 @@ $base = rtrim(dirname($scriptName), '/');
                 </div>
             </div>
 
-            <div class="card">
+            <!-- 批量下载 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>批量下载</span>
                     <button class="btn btn-sm btn-primary" id="batch_download_btn" onclick="doBatchDownload()"><i class="fas fa-play me-1"></i>开始批量下载</button>
@@ -283,21 +305,23 @@ $base = rtrim(dirname($scriptName), '/');
                 </div>
             </div>
 
-            <div class="card">
+            <!-- 重新下载 -->
+            <div class="card mb-3">
                 <div class="card-header">重新下载</div>
                 <div class="card-body">
                     <p class="mb-2 text-muted">重新尝试下载之前未完成的画廊（数据库标记为 is_complete=0 的记录）。</p>
-                    <button class="btn btn-warning me-2" id="retry_btn" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
-                    <button class="btn btn-outline-warning" onclick="recoverOrphans()" title="扫描下载目录恢复到数据库"><i class="fas fa-ambulance me-1"></i>恢复孤儿目录</button>
-                    <div class="mb-2">
-                        <label class="form-check-label" style="cursor:pointer">
-                            <input type="checkbox" id="retry_skip_existing" class="form-check-input" checked> 跳过已下载图片
+                    <div class="d-flex align-items-center gap-3 mb-2">
+                        <label class="form-check-label d-flex align-items-center gap-1" style="cursor:pointer">
+                            <input type="checkbox" id="retry_skip_existing" class="form-check-input mt-0" checked> 跳过已下载图片
                         </label>
+                        <button class="btn btn-warning" id="retry_btn" onclick="doRetry()"><i class="fas fa-redo me-1"></i>重试未完成下载</button>
+                        <button class="btn btn-outline-warning" onclick="recoverOrphans()" title="扫描下载目录恢复到数据库"><i class="fas fa-ambulance me-1"></i>恢复孤儿目录</button>
                     </div>
                     <div id="retry_progress_list" class="mt-2 mb-2" style="display:none"></div>
                     <div id="retry_output" class="output-box"></div>
                 </div>
             </div>
+
         </div>
 
         <!-- ═══ 本地图库 ═══ -->
@@ -344,6 +368,142 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="card-body" id="gallery_grid_body">
                     <div class="text-center text-muted py-5"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
                 </div>
+                <div class="card-footer" id="gallery_pagination"></div>
+            </div>
+        </div>
+
+        <!-- ═══ 本地缓存索引 ═══ -->
+        <div id="page_cache" class="page-section section-hidden">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span>本地缓存索引</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadCachePage(1)"><i class="fas fa-sync"></i></button>
+                </div>
+                <div class="card-body border-bottom bg-light py-2">
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1 text-info"><i class="fas fa-cloud-download-alt me-1"></i>爬取关键词（ExHentai 语法）</label>
+                            <input type="text" class="form-control form-control-sm" id="crawl_keyword" placeholder='例如 artist:"iruma kamiri$" 或 tags' onkeydown="if(event.key==='Enter')startCrawl()">
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-info w-100" onclick="startCrawl()" title="使用关键词+分类爬取 ExHentai"><i class="fas fa-cloud-download-alt"></i></button>
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-success w-100" onclick="saveSearchPreset()" title="保存当前检索条件"><i class="fas fa-bookmark"></i></button>
+                        </div>
+                        <div class="col-md-1 d-flex align-items-center justify-content-center">
+                            <button class="btn btn-sm btn-outline-warning w-100" id="crawl_force" onclick="this.classList.toggle('active')">强制</button>
+                        </div>
+                        <div class="col-md-1 d-flex align-items-center justify-content-center">
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearCrawlLog()" title="清理工作文件"><i class="fas fa-trash-alt"></i></button>
+                        </div>
+                    </div>
+                    <div class="mb-1">
+                        <span class="small text-info me-2"><i class="fas fa-cloud-download-alt me-1"></i>爬取分类:</span>
+                        <div id="crawl_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-cat="all" onclick="crawlToggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag" data-cat="Doujinshi" onclick="crawlToggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
+                            <button class="cat-tag" data-cat="Manga" onclick="crawlToggleCategory(this)" style="--cat-color:#3498db">Manga</button>
+                            <button class="cat-tag" data-cat="Artist CG" onclick="crawlToggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
+                            <button class="cat-tag" data-cat="Game CG" onclick="crawlToggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
+                            <button class="cat-tag" data-cat="Western" onclick="crawlToggleCategory(this)" style="--cat-color:#27ae60">Western</button>
+                            <button class="cat-tag" data-cat="Non-H" onclick="crawlToggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
+                            <button class="cat-tag" data-cat="Image Set" onclick="crawlToggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
+                            <button class="cat-tag" data-cat="Cosplay" onclick="crawlToggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
+                            <button class="cat-tag" data-cat="Asian Porn" onclick="crawlToggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
+                            <button class="cat-tag" data-cat="Misc" onclick="crawlToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
+                        </div>
+                    </div>
+                    <div class="mb-1">
+                        <span class="small text-info me-2">爬取语言:</span>
+                        <div id="crawl_language_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-lang="all" onclick="crawlToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
+                        </div>
+                    </div>
+                    <div class="mt-1" id="saved_presets_row"></div>
+                    <hr class="my-2">
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1 text-muted"><i class="fas fa-filter me-1"></i>本地检索</label>
+                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索关键词" onkeydown="if(event.key==='Enter')cacheSearch()">
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-primary w-100" onclick="cacheSearch()" title="筛选"><i class="fas fa-filter"></i></button>
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <span class="small text-muted me-2">检索范围:</span>
+                        <div id="cache_search_scope" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-scope="all" onclick="toggleSearchScope(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag active" data-scope="title" onclick="toggleSearchScope(this)" style="--cat-color:#e67e22">标题</button>
+                            <button class="cat-tag active" data-scope="artist" onclick="toggleSearchScope(this)" style="--cat-color:#9b59b6">作者</button>
+                            <button class="cat-tag active" data-scope="tags" onclick="toggleSearchScope(this)" style="--cat-color:#27ae60">标签</button>
+                        </div>
+                    </div>
+                    <div>
+                        <span class="small text-muted me-2">分类:</span>
+                        <div id="cache_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-cat="all" onclick="cacheToggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag" data-cat="Doujinshi" onclick="cacheToggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
+                            <button class="cat-tag" data-cat="Manga" onclick="cacheToggleCategory(this)" style="--cat-color:#3498db">Manga</button>
+                            <button class="cat-tag" data-cat="Artist CG" onclick="cacheToggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
+                            <button class="cat-tag" data-cat="Game CG" onclick="cacheToggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
+                            <button class="cat-tag" data-cat="Western" onclick="cacheToggleCategory(this)" style="--cat-color:#27ae60">Western</button>
+                            <button class="cat-tag" data-cat="Non-H" onclick="cacheToggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
+                            <button class="cat-tag" data-cat="Image Set" onclick="cacheToggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
+                            <button class="cat-tag" data-cat="Cosplay" onclick="cacheToggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
+                            <button class="cat-tag" data-cat="Asian Porn" onclick="cacheToggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
+                            <button class="cat-tag" data-cat="Misc" onclick="cacheToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
+                        </div>
+                    </div>
+                    <div class="mt-1">
+                        <span class="small text-muted me-2">语言:</span>
+                        <div id="cache_language_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-lang="all" onclick="cacheToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
+                        </div>
+                    </div>
+                    <div class="mt-1" id="cache_batch_bar"></div>
+                </div>
+                <div class="card-body" id="cache_grid_body">
+                    <div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
+                </div>
+                <div class="card-footer" id="cache_pagination"></div>
+            </div>
+
+            <!-- 作品详情弹窗 -->
+            <div class="modal fade" id="cache_detail_modal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title text-truncate" id="cache_detail_title">作品详情</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body" id="cache_detail_body">
+                            <div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">关闭</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 校对 -->
+            <div class="card mt-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>校对</span>
+                    <div>
+                        <button class="btn btn-sm btn-outline-info" id="verify_start_btn" onclick="startVerify()"><i class="fas fa-check-double me-1"></i>开始校对</button>
+                        <button class="btn btn-sm btn-outline-danger d-none" id="verify_stop_btn" onclick="stopVerify()"><i class="fas fa-stop me-1"></i>终止校对</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-2">对比 ExHentai 与本地缓存的一致性，自动修复元数据并重新下载封面。</p>
+                    <div id="verify_progress" class="output-box"></div>
+                </div>
             </div>
         </div>
 
@@ -380,13 +540,35 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
+        <!-- ═══ 单本校对 ═══ -->
+        <div id="page_test-verify" class="page-section section-hidden">
+            <div class="card">
+                <div class="card-header"><i class="fas fa-check-double me-1"></i>单本校对</div>
+                <div class="card-body">
+                    <div class="row g-3 align-items-end">
+                        <div class="col-md-6">
+                            <label class="form-label">搜索画廊</label>
+                            <input type="text" class="form-control" id="tv_search_input" placeholder="输入标题、作者或 ID 检索..." autocomplete="off">
+                            <div id="tv_search_results" class="list-group mt-1" style="max-height:300px;overflow-y:auto;display:none"></div>
+                        </div>
+                        <div class="col-md-2">
+                            <button class="btn btn-primary w-100" id="tv_verify_btn" onclick="tvVerify()" disabled>
+                                <i class="fas fa-play me-1"></i>开始校对
+                            </button>
+                        </div>
+                    </div>
+                    <div id="tv_result" class="output-box mt-3"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ 数据导出 ═══ -->
         <div id="page_export" class="page-section section-hidden">
             <div class="card">
-                <div class="card-header">导出元数据</div>
+                <div class="card-header">导出数据</div>
                 <div class="card-body">
-                    <p class="text-muted">将所有本地画廊的元数据导出为 JSON 格式，包含标题、作者、标签等信息。</p>
-                    <button class="btn btn-primary" onclick="doExport()"><i class="fas fa-file-export me-1"></i>导出 JSON</button>
+                    <p class="text-muted">导出为 ZIP 包，包含元数据 JSON、数据库文件、所有封面图（不含已下载漫画）。</p>
+                    <button class="btn btn-primary" onclick="doExport()"><i class="fas fa-file-export me-1"></i>导出 ZIP</button>
                     <div id="export_output" class="output-box"></div>
                     <div id="export_table_wrapper" style="display:none" class="mt-3">
                         <div class="table-responsive" style="max-height:400px;overflow-y:auto">
@@ -404,15 +586,26 @@ $base = rtrim(dirname($scriptName), '/');
         </div>
 
     </div>
+
+    <!-- ═══ Persistent Downloads Progress Tray ═══ -->
+    <div id="active_downloads_card" class="downloads-tray collapsed">
+        <div class="downloads-tray-header" onclick="toggleDownloadsTray()">
+            <span><i class="fas fa-download me-1"></i>下载进度 <span class="small text-muted" id="tray_status_label">(空闲)</span></span>
+            <button class="downloads-tray-toggle" id="tray_toggle_btn" onclick="event.stopPropagation();toggleDownloadsTray()"><i class="fas fa-chevron-up"></i></button>
+        </div>
+        <div class="downloads-tray-body" id="active_downloads_body"></div>
+    </div>
 </div>
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
 <script src="assets/js/core.js"></script>
-<script src="assets/js/navigation.js"></script>
+<script src="assets/js/navigation.js?v=4"></script>
 <script src="assets/js/config.js"></script>
-<script src="assets/js/download.js"></script>
-<script src="assets/js/gallery.js"></script>
+<script src="assets/js/download.js?v=2"></script>
+<script src="assets/js/gallery.js?v=8"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
+<script src="assets/js/cache.js?v=21"></script>
+<script src="assets/js/test_verify.js"></script>
 </body>
 </html>

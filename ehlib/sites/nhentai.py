@@ -140,6 +140,9 @@ class NhentaiSite(SiteBase):
             page_urls=page_urls,
         )
 
+    async def search(self, query: str, page: int = 1) -> list[Gallery]:
+        raise NotImplementedError("nhentai search not yet implemented")
+
     def _parse_gallery_list_item(self, item: dict) -> Gallery:
         gallery_id = str(item.get("id", 0))
         title = item.get("english_title") or item.get("japanese_title") or ""

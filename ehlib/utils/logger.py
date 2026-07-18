@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -7,6 +8,7 @@ LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def setup_logger(name: str = "ehlib", log_file: str | None = None, level: int = logging.INFO) -> logging.Logger:
+    logging.Formatter.converter = time.localtime
     logger = logging.getLogger(name)
     logger.setLevel(level)
     logger.handlers.clear()
