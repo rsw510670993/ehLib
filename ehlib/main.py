@@ -19,6 +19,25 @@ from ehlib.utils.logger import setup_logger, get_logger
 from ehlib.utils.progress import write_progress, remove_progress
 
 
+def _is_updated_on_site(existing, item: dict) -> bool:
+    """站点上的上传日期与本地已下载作品不一致时视为已被更新（不能作为中断点）。
+    任一侧日期缺失时回退为旧行为（仅按 is_complete 判断）。"""
+    site_date = " ".join(str(item.get("uploaded_at", "") or "").split())
+    local_date = " ".join((existing.uploaded_at or "").split())
+    return bool(site_date and local_date and site_date != local_date)
+
+
+def _parse_languages(languages) -> set:
+    """解析逗号分隔/列表形式的语种筛选条件，返回小写集合。空集合表示不过滤。
+    注意：E-Hentai 的 language: 标签搜索不可靠（japanese 不过滤、~ 语义异常），
+    语种筛选在元数据抓取后按画廊 Language 属性执行。"""
+    if isinstance(languages, str):
+        parts = languages.split(",")
+    else:
+        parts = list(languages or [])
+    return {str(l).strip().lower() for l in parts if str(l).strip()}
+
+
 async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -> None:
     download_cancel = Path("data/download_cancel.flag")
     if download_cancel.exists():
@@ -128,7 +147,8 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
         else:
             site = NhentaiSite(config, session)
 
-        print(f"Starting crawl: {args.source}, query='{args.query}'")
+        lang_filter = _parse_languages(getattr(args, "languages", "") or "")
+        print(f"Starting crawl: {args.source}, query='{args.query}'" + (f", languages={sorted(lang_filter)}" if lang_filter else ""))
         write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, 0, "running", f"Page {resume_page}")
 
         async def on_page(page: int, items: list[dict], next_cursor: str):
@@ -156,6 +176,18 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                     continue
                 try:
                     artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
+                    # 语种后置过滤：Language 属性不在选中集合内则从缓存剔除
+                    # （保留在 reserved_ids 中，避免断点续传时重新入库）
+                    if lang_filter and language and language not in lang_filter:
+                        await db.delete_search_cache(args.source, sid)
+                        if thumb_path:
+                            try:
+                                Path(thumb_path).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                        metadata_done.add(sid)
+                        print(f"    Filtered out (language={language}): {sid}")
+                        continue
                     await db.update_search_cache_metadata(args.source, sid, artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json)
                     metadata_done.add(sid)
                     print(f"    Metadata {idx}/{len(items)}: {sid} artist={artist} uploaded={uploaded_at}")
@@ -171,7 +203,7 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 }))
                 write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", len(items), idx, "running", f"Page {page}, metadata {idx}/{len(items)}")
 
-            # 更新模式：遇到已下载作品则停止翻页（但仍更新当前页元数据）
+            # 更新模式：遇到已下载且上传日期一致的作品则停止翻页（但仍更新当前页元数据）
             if args.update:
                 for item in items:
                     sid = item.get("source_id", "")
@@ -180,6 +212,9 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                     try:
                         existing = await db.get_gallery(args.source, sid)
                         if existing and existing.is_complete:
+                            if _is_updated_on_site(existing, item):
+                                print(f"  Gallery updated on site, not a stop point: {sid} (local={existing.uploaded_at}, site={item.get('uploaded_at', '')})")
+                                continue
                             print(f"  Already-downloaded gallery found: {sid}, stopping further pages")
                             progress_file.write_text(json.dumps({
                                 "page": page,
@@ -260,6 +295,7 @@ async def cmd_update_artists(args: argparse.Namespace, config: Config, db: Datab
         name = preset.get("name", "")
         keyword = preset.get("keyword", "").strip()
         categories_str = preset.get("categories", "").strip()
+        languages = (preset.get("languages") or "").strip()
         force = preset.get("force_crawl", 0)
 
         if not keyword:
@@ -275,11 +311,14 @@ async def cmd_update_artists(args: argparse.Namespace, config: Config, db: Datab
                 continue
 
         mode = "force" if force else "update"
+        lang_filter = _parse_languages(languages)
         print(f"\n[{idx}/{len(presets)}] {name} ({mode})")
         print(f"    query: {keyword}")
+        if lang_filter:
+            print(f"    languages: {sorted(lang_filter)}")
         if cats:
             print(f"    categories: {cats}")
-        logger.info("Preset '%s': query=%s, cats=%s, mode=%s", name, keyword, cats, mode)
+        logger.info("Preset '%s': query=%s, cats=%s, langs=%s, mode=%s", name, keyword, cats, sorted(lang_filter), mode)
 
         progress_file = Path(f"data/update_{source}_{idx}.json")
         cancel_file = Path(f"data/crawl_cancel_{source}.flag")
@@ -322,6 +361,17 @@ async def cmd_update_artists(args: argparse.Namespace, config: Config, db: Datab
                         continue
                     try:
                         item_artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
+                        # 语种后置过滤：Language 属性不在选中集合内则从缓存剔除
+                        if lang_filter and language and language not in lang_filter:
+                            await db.delete_search_cache(source, sid)
+                            if thumb_path:
+                                try:
+                                    Path(thumb_path).unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            metadata_done.add(sid)
+                            print(f"    Filtered out (language={language}): {sid}")
+                            continue
                         await db.update_search_cache_metadata(source, sid, item_artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json)
                         metadata_done.add(sid)
                     except Exception as e:
@@ -335,6 +385,10 @@ async def cmd_update_artists(args: argparse.Namespace, config: Config, db: Datab
                         try:
                             existing = await db.get_gallery(source, sid)
                             if existing and existing.is_complete:
+                                if _is_updated_on_site(existing, item):
+                                    print(f"  Updated on site, not a stop point: {sid} (local={existing.uploaded_at}, site={item.get('uploaded_at', '')})")
+                                    logger.info("Preset '%s' gallery %s updated on site, continue", name, sid)
+                                    continue
                                 print(f"  Up-to-date (already downloaded: {sid})")
                                 logger.info("Preset '%s' up-to-date at %s", name, sid)
                                 return False
@@ -865,6 +919,7 @@ def main() -> None:
     crawl.add_argument("--query", required=True, help="Search query (artist name, tag, etc.)")
     crawl.add_argument("--force", action="store_true", help="Restart crawl from beginning")
     crawl.add_argument("--categories", type=int, nargs="*", help="Category bitmask values (e.g. 2 4 8)")
+    crawl.add_argument("--languages", type=str, default="", help="Comma-separated languages to keep (e.g. chinese,japanese,speechless); filtered by gallery Language attribute after metadata fetch")
     crawl.add_argument("--update", action="store_true", help="Stop when encountering already-downloaded galleries (update mode)")
 
     lst = subparsers.add_parser("list", help="List local galleries")

@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS search_presets (
     name        TEXT NOT NULL UNIQUE,
     keyword     TEXT DEFAULT '',
     categories  TEXT DEFAULT '',
+    languages   TEXT DEFAULT NULL,
     force_crawl INTEGER DEFAULT 0,
     created_at  TEXT NOT NULL DEFAULT ''
 )
@@ -119,6 +120,15 @@ class Database:
                     await db.execute(f"ALTER TABLE search_cache ADD COLUMN {col}")
                 except Exception:
                     pass
+            # 兼容旧库：search_presets 增加 languages 列，既存预设补默认语种（中日+speechless）
+            try:
+                await db.execute("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL")
+            except Exception:
+                pass
+            try:
+                await db.execute("UPDATE search_presets SET languages='chinese,japanese,speechless' WHERE languages IS NULL")
+            except Exception:
+                pass
             await db.commit()
 
     async def gallery_exists(self, source: str, source_id: str) -> bool:
@@ -556,7 +566,7 @@ class Database:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT id, name, keyword, categories, force_crawl FROM search_presets ORDER BY name"
+                "SELECT id, name, keyword, categories, languages, force_crawl FROM search_presets ORDER BY name"
             )
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]

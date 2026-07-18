@@ -1086,6 +1086,7 @@ try {
             $query = $_POST['query'] ?? '';
             $force = !empty($_POST['force']);
             $categories = $_POST['categories'] ?? '';
+            $languages = $_POST['languages'] ?? '';
             if (!$query) error_exit('Query required');
             // 检查是否已有爬取进程在运行
             $pid_file = $root . '/data/crawl_pid_' . $source . '.txt';
@@ -1097,6 +1098,10 @@ try {
             }
             $args = ['crawl', $source, '--query', $query];
             if ($force) $args[] = '--force';
+            if ($languages !== '') {
+                $args[] = '--languages';
+                $args[] = $languages;
+            }
             // convert category names to ExHentai bitmask
             $cat_map = ['Misc'=>1,'Doujinshi'=>2,'Manga'=>4,'Artist CG'=>8,'Game CG'=>16,'Image Set'=>32,'Cosplay'=>64,'Asian Porn'=>128,'Non-H'=>256,'Western'=>512];
             if ($categories !== '') {
@@ -1297,6 +1302,7 @@ try {
             $name = $_POST['name'] ?? '';
             $keyword = $_POST['keyword'] ?? '';
             $categories_raw = $_POST['categories'] ?? '';
+            $languages_raw = $_POST['languages'] ?? '';
             $force = !empty($_POST['force']);
             if (!$name) error_exit('名称不能为空');
             $categories = '';
@@ -1308,6 +1314,15 @@ try {
                     $categories = $categories_raw;
                 }
             }
+            $languages = '';
+            if ($languages_raw !== '') {
+                $parsed = json_decode($languages_raw, true);
+                if (is_array($parsed)) {
+                    $languages = implode(',', $parsed);
+                } else {
+                    $languages = $languages_raw;
+                }
+            }
             $db_path = $root . '/data/ehlib.db';
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
@@ -1317,11 +1332,13 @@ try {
                     name TEXT NOT NULL UNIQUE,
                     keyword TEXT DEFAULT '',
                     categories TEXT DEFAULT '',
+                    languages TEXT DEFAULT NULL,
                     force_crawl INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT ''
                 )");
-                $stmt = $pdo->prepare('INSERT OR REPLACE INTO search_presets (name, keyword, categories, force_crawl, created_at) VALUES (?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
-                $stmt->execute([$name, $keyword, $categories, $force ? 1 : 0]);
+                try { $pdo->exec("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL"); } catch (Exception $e) {}
+                $stmt = $pdo->prepare('INSERT OR REPLACE INTO search_presets (name, keyword, categories, languages, force_crawl, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
+                $stmt->execute([$name, $keyword, $categories, $languages, $force ? 1 : 0]);
                 json_exit(['message' => '已保存']);
             } catch (Exception $e) {
                 error_exit($e->getMessage());
@@ -1333,7 +1350,8 @@ try {
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-                $stmt = $pdo->query("SELECT id, name, keyword, categories, force_crawl, created_at FROM search_presets ORDER BY created_at DESC");
+                try { $pdo->exec("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL"); } catch (Exception $e) {}
+                $stmt = $pdo->query("SELECT id, name, keyword, categories, languages, force_crawl, created_at FROM search_presets ORDER BY created_at DESC");
                 $presets = $stmt->fetchAll();
                 json_exit(['presets' => $presets]);
             } catch (Exception $e) {
