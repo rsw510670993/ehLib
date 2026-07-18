@@ -653,15 +653,15 @@ function showCacheDetail(idx) {
                     var type = t.type || 'other';
                     if (type === 'category' && gallery.category) return;
                     if (!grouped[type]) grouped[type] = [];
-                    grouped[type].push({ raw: t.name || '', cn: t.name_cn || '' });
+                    grouped[type].push({ type: type, raw: t.name || '', cn: t.name_cn || '' });
                 });
                 var order = ['parody', 'character', 'artist', 'group', 'male', 'female', 'cosplayer', 'mixed', 'language', 'category', 'other'];
                 tagsHtml = order.map(function(type) {
                     if (!grouped[type] || grouped[type].length === 0) return '';
                     var color = typeColors[type] || '#6b7280';
                     var label = typeLabels[type] || type;
-                    var badges = grouped[type].map(function(name) {
-                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem">' + escapeHtml(name.cn || name.raw) + '</span>';
+                    var badges = grouped[type].map(function(tag) {
+                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="点击加入爬取关键词" onclick="addTagToCrawlKeyword(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\')">' + escapeHtml(tag.cn || tag.raw) + '</span>';
                     }).join('');
                     return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
                 }).filter(function(s) { return s; }).join('');
