@@ -14,6 +14,12 @@ function fallbackImageOnError(img) {
     img.style.display = 'none';
 }
 
+function onCoverLoad(img) {
+    if (img.naturalWidth > img.naturalHeight) {
+        img.style.objectFit = 'contain';
+    }
+}
+
 
 function confirmDialog(options) {
     options = options || {};
@@ -187,4 +193,23 @@ function escapeHtml(s) {
 function escapeAttr(s) {
     if (!s) return '';
     return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// 将 tag 转为 ExHentai 检索语法: type:"name$"
+function tagToExhentaiSyntax(type, name) {
+    if (!type || !name) return '';
+    return type + ':"' + name + '$"';
+}
+
+// 将 tag 追加到爬取关键词输入框 (去重)
+function addTagToCrawlKeyword(type, name) {
+    var syntax = tagToExhentaiSyntax(type, name);
+    if (!syntax) return;
+    var input = document.getElementById('crawl_keyword');
+    if (!input) return;
+    var current = input.value.trim();
+    // 已包含该 tag 则不重复添加
+    if (current.indexOf(syntax) !== -1) return;
+    input.value = current ? current + ' ' + syntax : syntax;
+    input.focus();
 }

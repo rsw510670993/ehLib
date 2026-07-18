@@ -11,10 +11,14 @@ from ehlib.config import Config
 from ehlib.core.session_manager import SessionManager
 from ehlib.models.schemas import Gallery, Tag
 from ehlib.sites.base import SiteBase
+from ehlib.translate.tag_translator import TagTranslator
 from ehlib.utils.helpers import parse_exhentai_url
 from ehlib.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_translator = TagTranslator()
+_translator_loaded = False
 
 EXHENTAI_BASE = "https://exhentai.org"
 EHENTAI_BASE = "https://e-hentai.org"
@@ -82,14 +86,19 @@ class ExhentaiSite(SiteBase):
         artist = gallery.artist or ""
         uploaded_at = gallery.uploaded_at or ""
         category = gallery.category or ""
-        language = gallery.language or ""
+        language = (gallery.language or "").lower()
         title_jp = gallery.title_jp or ""
         group_name = gallery.group_name or ""
         tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
-        # always use gallery page cover URL (search thumbnail may be a placeholder)
+        tags_cn_json = ""
+        if tags_json:
+            global _translator_loaded
+            if not _translator_loaded:
+                _translator_loaded = _translator.load()
+            tags_cn_json = _translator.translate_tags(tags_json) if _translator_loaded else ""
+        thumb_path = ""
         if gallery.cover_url:
             cover_url = gallery.cover_url
-        thumb_path = ""
         if cover_url:
             safe = source_id.replace("/", "_").replace("\\", "_")
             ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
@@ -100,7 +109,61 @@ class ExhentaiSite(SiteBase):
             resp.raise_for_status()
             dest.write_bytes(resp.content)
             thumb_path = str(dest.resolve())
-        return artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json
+        return artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json
+
+    async def verify_gallery(self, source_id: str, thumbs_dir: str, old_cover_url: str = "") -> dict:
+        """校对单个画廊：获取最新数据并下载封面，返回新旧数据对比"""
+        gid, token = self._parse_gid_token(source_id)
+        url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
+        client = await self._session.get_client(self.name)
+        response = await client.get(url)
+        if self._session.is_cloudflare_blocked(response):
+            raise RuntimeError("Cloudflare blocked")
+        if response.status_code == 404:
+            return {"error": "not_found"}
+        response.raise_for_status()
+        gallery = self._parse_html(response.text, source_id)
+
+        tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
+        tags_cn_json = ""
+        if tags_json:
+            global _translator_loaded
+            if not _translator_loaded:
+                _translator_loaded = _translator.load()
+            tags_cn_json = _translator.translate_tags(tags_json) if _translator_loaded else ""
+
+        new = {
+            "title": gallery.title or "",
+            "title_jp": gallery.title_jp or "",
+            "artist": gallery.artist or "",
+            "group_name": gallery.group_name or "",
+            "language": (gallery.language or "").lower(),
+            "category": gallery.category or "",
+            "total_pages": gallery.total_pages,
+            "tags_json": tags_json,
+            "tags_cn_json": tags_cn_json,
+            "uploaded_at": gallery.uploaded_at or "",
+        }
+
+        thumb_path = ""
+        cover_url = gallery.cover_url or ""
+        if cover_url:
+            safe = source_id.replace("/", "_").replace("\\", "_")
+            ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
+            dest = Path(thumbs_dir) / f"{safe}.{ext}"
+            if cover_url == old_cover_url and dest.is_file():
+                thumb_path = str(dest.resolve())
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                client = await self._session.get_client(self.name)
+                resp = await client.get(cover_url)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+                thumb_path = str(dest.resolve())
+
+        new["cover_url"] = cover_url
+        new["thumb_path"] = thumb_path
+        return new
 
     async def search(self, query: str, page: int = 1, next_cursor: str = "", 
                      categories: list[int] | None = None,
@@ -133,17 +196,23 @@ class ExhentaiSite(SiteBase):
         resume_cursor: str = "",
         resume_page: int = 1,
         on_page: callable = None,
+        on_wait: callable = None,
     ) -> list[dict]:
         """爬取所有搜索结果页，返回简化后的 dict 列表。
         resume_cursor: 从哪个 next_cursor 开始续传
         resume_page: 当前恢复的页码（仅用于回调）
-        on_page: 每爬完一页的回调，接收 (page, items, next_cursor)
+        on_page: 每爬完一页的回调，接收 (page, items, next_cursor)。返回 False 则停止翻页
         """
+        import time as time_module
         all_items: list[dict] = []
         page = resume_page
         next_cursor = resume_cursor
         has_next = True
         consecutive_empty = 0
+        pages_in_batch = 0
+        total_requests = 0
+        start_time = time_module.time()
+        page_times = []
 
         while has_next:
             params = {"f_search": query, "f_sname": "on", "s": "2", "f_sft": "on", "f_sfu": "on", "f_sfl": "on"}
@@ -153,16 +222,20 @@ class ExhentaiSite(SiteBase):
                 params["next"] = next_cursor
 
             url = f"{EXHENTAI_BASE}/"
+            t0 = time_module.time()
             response = await self._session.fetch(self.name, url, params=params)
+            total_requests += 1
             if self._session.is_cloudflare_blocked(response):
                 logger.warning("Cloudflare blocked on page %d, waiting 60s...", page)
                 await sleep(60)
                 response = await self._session.fetch(self.name, url, params=params)
+                total_requests += 1
                 if self._session.is_cloudflare_blocked(response):
                     raise RuntimeError("Cloudflare still blocking after retry")
             if response.status_code == 404:
                 break
             response.raise_for_status()
+            t1 = time_module.time()
 
             soup = BeautifulSoup(response.text, "html.parser")
             self._parse_next_cursor(soup)
@@ -170,6 +243,7 @@ class ExhentaiSite(SiteBase):
             if page == 1:
                 logger.info("ExHentai reports: %d total results, %d pages", self.total_results, self.total_pages)
             page_items = self._parse_search_results_flat(soup)
+            page_times.append((page, len(page_items), t1 - t0, total_requests))
 
             if not page_items:
                 consecutive_empty += 1
@@ -180,17 +254,34 @@ class ExhentaiSite(SiteBase):
                 all_items.extend(page_items)
 
             if on_page:
-                await on_page(page, page_items, self.next_cursor)
+                result = await on_page(page, page_items, self.next_cursor)
+                if result is False:
+                    break
 
             if self.has_next and self.next_cursor:
                 next_cursor = self.next_cursor
                 page += 1
-                import random
-                delay = random.randint(300, 600)
-                logger.info("Crawl page %d complete (%d items), next_cursor=%s, waiting %ds...", page, len(page_items), next_cursor, delay)
-                await sleep(delay)
+                pages_in_batch += 1
+                if pages_in_batch % 2 == 0:
+                    import random
+                    delay = random.randint(180, 300)
+                    next_run = time_module.strftime("%H:%M:%S", time_module.localtime(time_module.time() + delay))
+                    logger.info("Batch complete (%d pages), next at %s, waiting %ds...", pages_in_batch, next_run, delay)
+                    if on_wait:
+                        await on_wait(next_run, delay)
+                    await sleep(delay)
             else:
                 has_next = False
+
+        elapsed = time_module.time() - start_time
+        elapsed_str = f"{int(elapsed//60)}m{int(elapsed%60)}s"
+        avg_freq = total_requests / elapsed if elapsed > 0 else 0
+        logger.info("=" * 50)
+        logger.info("Crawl finished: %d pages, %d items, %d requests", len(page_times), len(all_items), total_requests)
+        logger.info("Total time: %s, avg frequency: %.2f req/min", elapsed_str, avg_freq * 60)
+        for pt in page_times:
+            logger.info("  Page %d: %d items, %.1fs, request #%d", pt[0], pt[1], pt[2], pt[3])
+        logger.info("=" * 50)
 
         return all_items
 
@@ -461,16 +552,22 @@ class ExhentaiSite(SiteBase):
         tags = []
 
         tag_rows = soup.select("#taglist tr")
+        if not tag_rows:
+            taglist = soup.select_one("#taglist")
+            if taglist:
+                tag_rows = taglist.find_all(["tr", "div", "li", "section"], class_=True) or taglist.find_all("tr")
         for row in tag_rows:
-            td = row.select_one("td.tc")
+            td = row.select_one("td.tc") or row.select_one("td:first-child")
             if not td:
                 continue
             tag_type = td.get_text(strip=True).rstrip(":").lower().replace(" ", "_")
 
+            found_links = False
             for tag_div in row.select("div"):
                 tag_link = tag_div.select_one("a")
                 if not tag_link:
                     continue
+                found_links = True
                 tag_name = tag_link.get_text(strip=True)
                 if not tag_name:
                     continue
@@ -483,10 +580,50 @@ class ExhentaiSite(SiteBase):
                 elif tag_type == "language":
                     language_candidates.append(tag_name)
 
+            if not found_links:
+                for tag_link in row.select("a"):
+                    tag_name = tag_link.get_text(strip=True)
+                    if not tag_name or tag_name == tag_type.rstrip(":"):
+                        continue
+                    tags.append(Tag(type=tag_type, name=tag_name))
+
+                    if tag_type == "artist":
+                        artist = tag_name
+                    elif tag_type == "group":
+                        group_name = tag_name
+                    elif tag_type == "language":
+                        language_candidates.append(tag_name)
+
+        # ultimate fallback: scan all links by URL pattern
+        if not tags:
+            TAG_URL_PATTERNS = {
+                "artist": "/artist/", "group": "/group/", "language": "/language/",
+                "parody": "/parody/", "character": "/character/",
+                "female": "/female/", "male": "/male/", "misc": "/misc/",
+                "other": "/other/", "cosplayer": "/cosplayer/",
+            }
+            seen = set()
+            for a in soup.select("a[href]"):
+                href = a.get("href", "")
+                for tag_type, pattern in TAG_URL_PATTERNS.items():
+                    if pattern in href:
+                        tag_name = a.get_text(strip=True)
+                        key = (tag_type, tag_name)
+                        if tag_name and key not in seen:
+                            seen.add(key)
+                            tags.append(Tag(type=tag_type, name=tag_name))
+                            if tag_type == "artist" and not artist:
+                                artist = tag_name
+                            elif tag_type == "group" and not group_name:
+                                group_name = tag_name
+                            elif tag_type == "language":
+                                language_candidates.append(tag_name)
+                        break
+
         # prefer specific language over "translated"
         if language_candidates:
             specific = [l for l in language_candidates if l.lower() != "translated"]
-            language = specific[0] if specific else language_candidates[0]
+            language = (specific[0] if specific else language_candidates[0]).lower()
 
         category_elem = soup.select_one("#gdc")
         if category_elem:
@@ -499,17 +636,25 @@ class ExhentaiSite(SiteBase):
         page_urls = self._extract_gallery_page_urls(soup)
 
         cover_url = ""
-        cover_img = soup.select_one("#gd1 img") or soup.select_one("#gdt img")
+        # prefer actual page thumbnails over #gd1 (which may be a preview strip)
+        cover_img = soup.select_one("#gdt .gdtl img") or soup.select_one("#gd1 img")
         if cover_img:
-            cover_url = cover_img.get("src", "")
+            cover_url = cover_img.get("data-src", "") or cover_img.get("src", "")
         if not cover_url or cover_url.startswith("data:"):
             # fallback: extract from CSS background (new ExHentai layout)
-            cover_div = soup.select_one("#gdt a div[style*=background]")
-            if cover_div:
+            cover_el = soup.select_one("#gd1 div[style*=background]")
+            if cover_el:
                 import re
-                m = re.search(r'url\(([^)]+)\)', cover_div.get("style", ""))
+                m = re.search(r'url\(([^)]+)\)', cover_el.get("style", ""))
                 if m:
                     cover_url = m.group(1)
+            if not cover_url or cover_url.startswith("data:"):
+                cover_el = soup.select_one("#gdt a[style*=background]") or soup.select_one("#gdt a div[style*=background]")
+                if cover_el:
+                    import re
+                    m = re.search(r'url\(([^)]+)\)', cover_el.get("style", ""))
+                    if m:
+                        cover_url = m.group(1)
 
         uploaded_at = ""
         posted_label = soup.select_one("#gdd td.gdt1")
@@ -524,7 +669,7 @@ class ExhentaiSite(SiteBase):
             for row in soup.select("#gdd tr"):
                 cells = row.select("td")
                 if len(cells) >= 2 and cells[0].get_text(strip=True) == "Language:":
-                    language = cells[1].get_text(" ", strip=True)
+                    language = cells[1].get_text(" ", strip=True).lower()
                     break
 
         gallery = Gallery(

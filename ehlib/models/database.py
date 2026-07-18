@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS search_presets (
     name        TEXT NOT NULL UNIQUE,
     keyword     TEXT DEFAULT '',
     categories  TEXT DEFAULT '',
+    languages   TEXT DEFAULT NULL,
     force_crawl INTEGER DEFAULT 0,
     created_at  TEXT NOT NULL DEFAULT ''
 )
@@ -114,11 +115,20 @@ class Database:
             for index_sql in CREATE_INDEXES:
                 await db.execute(index_sql)
             # 兼容旧库：添加可能缺失的列
-            for col in ["uploaded_at TEXT DEFAULT ''", "language TEXT DEFAULT ''", "group_name TEXT DEFAULT ''", "tags TEXT DEFAULT ''"]:
+            for col in ["uploaded_at TEXT DEFAULT ''", "language TEXT DEFAULT ''", "group_name TEXT DEFAULT ''", "tags TEXT DEFAULT ''", "tags_cn TEXT DEFAULT ''"]:
                 try:
                     await db.execute(f"ALTER TABLE search_cache ADD COLUMN {col}")
                 except Exception:
                     pass
+            # 兼容旧库：search_presets 增加 languages 列，既存预设补默认语种（中日+speechless）
+            try:
+                await db.execute("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL")
+            except Exception:
+                pass
+            try:
+                await db.execute("UPDATE search_presets SET languages='chinese,japanese,speechless' WHERE languages IS NULL")
+            except Exception:
+                pass
             await db.commit()
 
     async def gallery_exists(self, source: str, source_id: str) -> bool:
@@ -520,17 +530,17 @@ class Database:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
-    async def update_search_cache_metadata(self, source: str, source_id: str, artist: str, thumb_path: str, uploaded_at: str = "", category: str = "", thumbnail: str = "", language: str = "", title_jp: str = "", group_name: str = "", tags: str = "") -> None:
+    async def update_search_cache_metadata(self, source: str, source_id: str, artist: str, thumb_path: str, uploaded_at: str = "", category: str = "", thumbnail: str = "", language: str = "", title_jp: str = "", group_name: str = "", tags: str = "", tags_cn: str = "") -> None:
         async with aiosqlite.connect(self._db_path) as db:
             if uploaded_at:
                 await db.execute(
-                    "UPDATE search_cache SET artist=?, thumb_path=?, uploaded_at=?, category=?, thumbnail=?, language=?, title_jp=?, group_name=?, tags=?, crawled_at=? WHERE source=? AND source_id=?",
-                    (artist, thumb_path, uploaded_at, category, thumbnail, language, title_jp, group_name, tags, datetime.now().isoformat(), source, source_id),
+                    "UPDATE search_cache SET artist=?, thumb_path=?, uploaded_at=?, category=?, thumbnail=?, language=?, title_jp=?, group_name=?, tags=?, tags_cn=?, crawled_at=? WHERE source=? AND source_id=?",
+                    (artist, thumb_path, uploaded_at, category, thumbnail, language, title_jp, group_name, tags, tags_cn, datetime.now().isoformat(), source, source_id),
                 )
             else:
                 await db.execute(
-                    "UPDATE search_cache SET artist=?, thumb_path=?, category=?, thumbnail=?, language=?, title_jp=?, group_name=?, tags=?, crawled_at=? WHERE source=? AND source_id=?",
-                    (artist, thumb_path, category, thumbnail, language, title_jp, group_name, tags, datetime.now().isoformat(), source, source_id),
+                    "UPDATE search_cache SET artist=?, thumb_path=?, category=?, thumbnail=?, language=?, title_jp=?, group_name=?, tags=?, tags_cn=?, crawled_at=? WHERE source=? AND source_id=?",
+                    (artist, thumb_path, category, thumbnail, language, title_jp, group_name, tags, tags_cn, datetime.now().isoformat(), source, source_id),
                 )
             await db.commit()
 
@@ -552,6 +562,15 @@ class Database:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
+    async def get_search_presets(self) -> list[dict]:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id, name, keyword, categories, languages, force_crawl FROM search_presets ORDER BY name"
+            )
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
     async def delete_search_cache(self, source: str, source_id: str) -> bool:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
@@ -560,6 +579,44 @@ class Database:
             )
             await db.commit()
             return cursor.rowcount > 0
+
+    async def get_cached_source_ids(self, source: str = "exhentai") -> list[str]:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT source_id FROM search_cache WHERE source=? ORDER BY uploaded_at DESC, source_id DESC",
+                (source,),
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+    async def get_all_cache_tags(self, source: str = "exhentai") -> list[dict]:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT source_id, tags FROM search_cache WHERE source=? AND tags!='' AND tags!='[]' ORDER BY source_id",
+                (source,),
+            )
+            rows = await cursor.fetchall()
+            return [{"source_id": r[0], "tags": r[1]} for r in rows]
+
+    async def update_cache_tags_cn(self, source: str, source_id: str, tags_cn: str) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "UPDATE search_cache SET tags_cn=? WHERE source=? AND source_id=?",
+                (tags_cn, source, source_id),
+            )
+            await db.commit()
+
+    async def get_search_cache_row(self, source: str, source_id: str) -> dict | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "SELECT * FROM search_cache WHERE source=? AND source_id=?",
+                (source, source_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            columns = [d[0] for d in cursor.description]
+            return dict(zip(columns, row))
 
     # ── Legacy: delete_gallery ──────────────────────────────
 

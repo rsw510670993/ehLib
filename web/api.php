@@ -128,15 +128,15 @@ function public_image_url_from_path($path) {
 function find_gallery_image_path($local_path, $page) {
     $exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
     if ($page === 'cover') {
-        foreach ($exts as $ext) {
-            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
-            if (is_file($candidate)) return $candidate;
-        }
         foreach (['001', '1'] as $name) {
             foreach ($exts as $ext) {
                 $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
                 if (is_file($candidate)) return $candidate;
             }
+        }
+        foreach ($exts as $ext) {
+            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
+            if (is_file($candidate)) return $candidate;
         }
         return '';
     }
@@ -211,6 +211,18 @@ function run_python($args, $timeout = 120) {
             @fclose($pipes[2]);
             @proc_close($proc);
             return ['ok' => false, 'error' => 'Command timed out (' . $timeout . 's)'];
+        }
+
+        // 检测下载取消标记
+        if (is_file($root . '/data/download_cancel.flag')) {
+            @proc_terminate($proc, 15);
+            usleep(100000);
+            @proc_terminate($proc, 9);
+            @fclose($pipes[1]);
+            @fclose($pipes[2]);
+            @proc_close($proc);
+            @unlink($root . '/data/download_cancel.flag');
+            return ['ok' => false, 'error' => 'Download cancelled by user'];
         }
 
         $r = [$pipes[1], $pipes[2]];
@@ -470,7 +482,14 @@ try {
                 }
                 if ($source) { $where .= ' AND ' . $prefix . 'source=?'; $params[] = $source; }
                 if ($artist) { $where .= ' AND ' . $prefix . 'artist LIKE ?'; $params[] = '%' . $artist . '%'; }
-                if ($language) { $where .= ' AND ' . $prefix . 'language=?'; $params[] = $language; }
+                if ($language) {
+                    $langs = array_filter(array_map('trim', explode(',', $language)));
+                    if (!empty($langs)) {
+                        $placeholders = implode(',', array_fill(0, count($langs), '?'));
+                        $where .= ' AND ' . $prefix . 'language IN (' . $placeholders . ')';
+                        foreach ($langs as $l) $params[] = $l;
+                    }
+                }
 
                 $group_having = '';
                 if ($has_tags && $tag_mode === 'all') {
@@ -490,7 +509,7 @@ try {
                 $total = (int)$count_stmt->fetchColumn();
 
                 // Data query with limit/offset
-                $select_cols = $has_tags ? 'g.*' : '*';
+                $select_cols = $has_tags ? 'DISTINCT g.*' : '*';
                 $order_col = $prefix . 'uploaded_at';
                 $order_id_col = $prefix . 'source_id';
                 $data_query = "SELECT $select_cols FROM $from $joins $where $group_having ORDER BY COALESCE(NULLIF($order_col, '') , '0000-00-00') DESC, CAST(SUBSTR($order_id_col || '/', 1, INSTR($order_id_col || '/', '/') - 1) AS INTEGER) DESC LIMIT $per_page OFFSET $offset";
@@ -622,12 +641,26 @@ try {
 
                 $download_base = resolve_download_path();
                 $local_path = trim((string)($gallery['local_path'] ?? ''));
+                $target_dir = '';
                 if ($local_path !== '') {
                     $normalized_local = normalize_path($local_path);
-                    if (!is_path_within($normalized_local, $download_base)) {
-                        error_exit('Refusing to delete path outside download directory');
+                    if (is_path_within($normalized_local, $download_base)) {
+                        $target_dir = $normalized_local;
                     }
-                    if (file_exists($normalized_local) && !delete_dir_recursive($normalized_local)) {
+                }
+                if ($target_dir === '' || !file_exists($target_dir)) {
+                    // 尝试通过 source/source_id 推导实际路径（处理路径格式不一致的情况）
+                    $expected_subdir = str_replace('/', '_', $source_id);
+                    $candidate = $download_base . DIRECTORY_SEPARATOR . $source . DIRECTORY_SEPARATOR . $expected_subdir;
+                    $normalized_candidate = normalize_path($candidate);
+                    if (is_path_within($normalized_candidate, $download_base) && file_exists($normalized_candidate)) {
+                        $target_dir = $normalized_candidate;
+                        // 更新 DB 中的 local_path 为正确路径
+                        $pdo->prepare('UPDATE galleries SET local_path=? WHERE id=?')->execute([$normalized_candidate, $gallery['id']]);
+                    }
+                }
+                if ($target_dir !== '') {
+                    if (!delete_dir_recursive($target_dir)) {
                         error_exit('Failed to delete local gallery directory');
                     }
                 }
@@ -702,19 +735,16 @@ try {
                 if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
                 $img_path = '';
                 if ($page === 'cover') {
-                    foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                        $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
-                        if (is_file($candidate)) { $img_path = $candidate; break; }
-                    }
-                    if (!$img_path) {
+                    foreach (['001', '1'] as $name) {
                         foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . '001.' . $ext;
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
                             if (is_file($candidate)) { $img_path = $candidate; break; }
                         }
+                        if ($img_path) break;
                     }
                     if (!$img_path) {
                         foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . '1.' . $ext;
+                            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
                             if (is_file($candidate)) { $img_path = $candidate; break; }
                         }
                     }
@@ -879,6 +909,21 @@ try {
             ], $result['ok']);
             break;
 
+        case 'stop_download':
+            $cancel_file = $root . '/data/download_cancel.flag';
+            file_put_contents($cancel_file, '1');
+            // 清理所有下载相关的进度文件
+            $progress_dir = $root . '/data/progress';
+            foreach (glob($progress_dir . '/*.json') as $f) {
+                $content = @file_get_contents($f);
+                $data = @json_decode($content, true);
+                if (is_array($data) && isset($data['status']) && $data['status'] === 'downloading') {
+                    @unlink($f);
+                }
+            }
+            json_exit(['message' => '下载任务已终止'], true);
+            break;
+
         case 'cache_search':
             $source = $_GET['source'] ?? 'exhentai';
             $artist = $_GET['artist'] ?? '';
@@ -901,18 +946,48 @@ try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
+                $search_fields = $_GET['search_fields'] ?? 'all';
                 $params = [];
                 $where = 'WHERE 1=1';
                 if ($source) { $where .= ' AND sc.source=?'; $params[] = $source; }
                 if ($artist) { $where .= ' AND sc.artist LIKE ?'; $params[] = '%' . $artist . '%'; }
-                if ($title) { $where .= ' AND (sc.title LIKE ? OR sc.title_jp LIKE ? OR sc.artist LIKE ?)'; $params[] = '%' . $title . '%'; $params[] = '%' . $title . '%'; $params[] = '%' . $title . '%'; }
+                if ($title) {
+                    $field_list = [];
+                    $scope_list = $search_fields === 'all' ? ['title','artist','tags','tags_cn'] : explode(',', $search_fields);
+                    if (in_array('title', $scope_list)) {
+                        $field_list[] = 'sc.title LIKE ?';
+                        $field_list[] = 'sc.title_jp LIKE ?';
+                        $params[] = '%' . $title . '%';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (in_array('artist', $scope_list)) {
+                        $field_list[] = 'sc.artist LIKE ?';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (in_array('tags', $scope_list)) {
+                        $field_list[] = 'sc.tags LIKE ?';
+                        $params[] = '%' . $title . '%';
+                        $field_list[] = 'sc.tags_cn LIKE ?';
+                        $params[] = '%' . $title . '%';
+                    }
+                    if (!empty($field_list)) {
+                        $where .= ' AND (' . implode(' OR ', $field_list) . ')';
+                    }
+                }
                 if ($category) { $where .= ' AND sc.category=?'; $params[] = $category; }
                 if (!empty($categories)) {
                     $where .= ' AND sc.category IN (' . implode(',', array_fill(0, count($categories), '?')) . ')';
                     $params = array_merge($params, $categories);
                 }
                 $cache_lang = $_GET['language'] ?? '';
-                if ($cache_lang) { $where .= ' AND sc.language=?'; $params[] = $cache_lang; }
+                if ($cache_lang) {
+                    $langs = array_filter(array_map('trim', explode(',', $cache_lang)));
+                    if (!empty($langs)) {
+                        $placeholders = implode(',', array_fill(0, count($langs), '?'));
+                        $where .= ' AND sc.language IN (' . $placeholders . ')';
+                        foreach ($langs as $l) $params[] = $l;
+                    }
+                }
 
                 // Count
                 $count_query = "SELECT COUNT(*) FROM search_cache sc $where";
@@ -943,6 +1018,7 @@ try {
                         'language' => $row['language'] ?? '',
                         'group_name' => $row['group_name'] ?? '',
                         'tags' => $row['tags'] ?? '',
+                        'tags_cn' => $row['tags_cn'] ?? '',
                         'total_pages' => (int)($row['total_pages'] ?? 0),
                         'artist' => $row['artist'] ?? '',
                         'uploaded_at' => $row['uploaded_at'] ?? '',
@@ -1010,6 +1086,7 @@ try {
             $query = $_POST['query'] ?? '';
             $force = !empty($_POST['force']);
             $categories = $_POST['categories'] ?? '';
+            $languages = $_POST['languages'] ?? '';
             if (!$query) error_exit('Query required');
             // 检查是否已有爬取进程在运行
             $pid_file = $root . '/data/crawl_pid_' . $source . '.txt';
@@ -1021,6 +1098,10 @@ try {
             }
             $args = ['crawl', $source, '--query', $query];
             if ($force) $args[] = '--force';
+            if ($languages !== '') {
+                $args[] = '--languages';
+                $args[] = $languages;
+            }
             // convert category names to ExHentai bitmask
             $cat_map = ['Misc'=>1,'Doujinshi'=>2,'Manga'=>4,'Artist CG'=>8,'Game CG'=>16,'Image Set'=>32,'Cosplay'=>64,'Asian Porn'=>128,'Non-H'=>256,'Western'=>512];
             if ($categories !== '') {
@@ -1064,6 +1145,62 @@ try {
             json_exit(['message' => '爬取任务已终止'], true);
             break;
 
+        case 'start_verify':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $data_dir = $root . '/data';
+            $pid_file = $data_dir . '/verify_pid_' . $source . '.txt';
+
+            if (is_file($pid_file)) {
+                $old_pid = trim(file_get_contents($pid_file));
+                if ($old_pid && DIRECTORY_SEPARATOR !== '\\' && is_dir('/proc/' . $old_pid)) {
+                    json_exit(['output' => '校对任务已在后台运行 (PID: ' . $old_pid . ')'], true);
+                    break;
+                }
+            }
+
+            $args = ['verify', $source];
+            $pid = run_python_background($args, $pid_file);
+            json_exit(['output' => '校对任务已在后台启动 (PID: ' . $pid . ')'], true);
+            break;
+
+        case 'stop_verify':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $cancel_file = $root . '/data/verify_cancel_' . $source . '.flag';
+            $pid_file = $root . '/data/verify_pid_' . $source . '.txt';
+            file_put_contents($cancel_file, '1');
+            if (is_file($pid_file)) {
+                $pid = trim(file_get_contents($pid_file));
+                if ($pid) {
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        exec('taskkill /F /PID ' . (int)$pid . ' 2>nul');
+                    } else {
+                        exec('kill -9 ' . (int)$pid . ' 2>/dev/null');
+                    }
+                }
+                @unlink($pid_file);
+            }
+            foreach (glob($root . '/data/progress/verify__verify_' . $source . '*.json') as $f) {
+                @unlink($f);
+            }
+            @unlink($cancel_file);
+            @unlink($root . '/data/verify_checkpoint_' . $source . '.json');
+            json_exit(['message' => '校对任务已终止'], true);
+            break;
+
+        case 'verify_status':
+            $source = $_GET['source'] ?? $_POST['source'] ?? 'exhentai';
+            $progress_dir = $root . '/data/progress';
+            foreach (glob($progress_dir . '/verify__verify_' . $source . '*.json') as $f) {
+                $content = @file_get_contents($f);
+                if ($content === false) continue;
+                $data = @json_decode($content, true);
+                if (!is_array($data)) continue;
+                json_exit(['running' => true, 'progress' => $data]);
+                break 2;
+            }
+            json_exit(['running' => false]);
+            break;
+
         case 'retry':
             $skip = !empty($_POST['skip_existing']);
             $data_dir = $root . '/data';
@@ -1103,13 +1240,14 @@ try {
             break;
 
         case 'export':
-            $output = $root . '/data/export_' . date('Ymd_His') . '.json';
+            $ts = date('Ymd_His');
+            $output = $root . "/data/export_$ts.json";
+            $zip_file = $root . "/data/export_$ts.zip";
             if (!is_dir($root . '/data')) mkdir($root . '/data', 0755, true);
-            $args = ['export', '--output', $output];
+            $args = ['export-package', '--output', $output, '--zip', $zip_file];
             $result = run_python($args);
-            if ($result['ok'] && is_file($output)) {
-                $content = json_decode(file_get_contents($output), true);
-                json_exit(['galleries' => $content, 'file' => basename($output)]);
+            if ($result['ok'] && is_file($zip_file)) {
+                json_exit(['file' => "data/export_$ts.zip", 'download_url' => "data/export_$ts.zip"]);
             }
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
@@ -1164,6 +1302,7 @@ try {
             $name = $_POST['name'] ?? '';
             $keyword = $_POST['keyword'] ?? '';
             $categories_raw = $_POST['categories'] ?? '';
+            $languages_raw = $_POST['languages'] ?? '';
             $force = !empty($_POST['force']);
             if (!$name) error_exit('名称不能为空');
             $categories = '';
@@ -1175,6 +1314,15 @@ try {
                     $categories = $categories_raw;
                 }
             }
+            $languages = '';
+            if ($languages_raw !== '') {
+                $parsed = json_decode($languages_raw, true);
+                if (is_array($parsed)) {
+                    $languages = implode(',', $parsed);
+                } else {
+                    $languages = $languages_raw;
+                }
+            }
             $db_path = $root . '/data/ehlib.db';
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
@@ -1184,11 +1332,13 @@ try {
                     name TEXT NOT NULL UNIQUE,
                     keyword TEXT DEFAULT '',
                     categories TEXT DEFAULT '',
+                    languages TEXT DEFAULT NULL,
                     force_crawl INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT ''
                 )");
-                $stmt = $pdo->prepare('INSERT OR REPLACE INTO search_presets (name, keyword, categories, force_crawl, created_at) VALUES (?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
-                $stmt->execute([$name, $keyword, $categories, $force ? 1 : 0]);
+                try { $pdo->exec("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL"); } catch (Exception $e) {}
+                $stmt = $pdo->prepare('INSERT OR REPLACE INTO search_presets (name, keyword, categories, languages, force_crawl, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
+                $stmt->execute([$name, $keyword, $categories, $languages, $force ? 1 : 0]);
                 json_exit(['message' => '已保存']);
             } catch (Exception $e) {
                 error_exit($e->getMessage());
@@ -1200,7 +1350,8 @@ try {
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-                $stmt = $pdo->query("SELECT id, name, keyword, categories, force_crawl, created_at FROM search_presets ORDER BY created_at DESC");
+                try { $pdo->exec("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL"); } catch (Exception $e) {}
+                $stmt = $pdo->query("SELECT id, name, keyword, categories, languages, force_crawl, created_at FROM search_presets ORDER BY created_at DESC");
                 $presets = $stmt->fetchAll();
                 json_exit(['presets' => $presets]);
             } catch (Exception $e) {
@@ -1224,11 +1375,75 @@ try {
 
         case 'clear_log':
             $data_dir = $root . '/data';
-            $cleared = 0;
-            foreach (glob($data_dir . '/bg_*.log') as $f) {
-                if (is_file($f) && @unlink($f)) $cleared++;
+            // check for running tasks
+            $running_tasks = [];
+            $pid_patterns = ['*_pid_*.txt', '*.pid'];
+            foreach ($pid_patterns as $pp) {
+                foreach (glob($data_dir . '/' . $pp) as $f) {
+                    $pid = trim(@file_get_contents($f));
+                    if (!$pid) continue;
+                    $task = basename($f);
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        $out = [];
+                        exec('tasklist /FI "PID eq ' . (int)$pid . '" /NH 2>nul', $out);
+                        if (count($out) > 1) $running_tasks[] = $task;
+                    } else {
+                        if (is_dir('/proc/' . $pid)) $running_tasks[] = $task;
+                    }
+                }
             }
-            json_exit(['message' => "已清理 $cleared 个日志文件"]);
+            if (!empty($running_tasks)) {
+                json_exit(['error' => '有任务正在运行，无法清理: ' . implode(', ', $running_tasks)], false);
+                break;
+            }
+            // clean working files (keep ehlib.db and thumbs/)
+            $cleared = 0;
+            $patterns = ['bg_*.log', 'bg_*.sh', '*.pid', '*_pid_*.txt', '*.flag', '*.lock', '*_progress_*.json', 'progress/*.json', 'verify_*.json', 'crawl_*.json', 'retry_*.json', 'download.lock'];
+            foreach ($patterns as $pattern) {
+                foreach (glob($data_dir . '/' . $pattern) as $f) {
+                    if (is_file($f) && @unlink($f)) $cleared++;
+                }
+            }
+            json_exit(['message' => "已清理 $cleared 个工作文件"]);
+            break;
+
+        case 'list_cached':
+            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
+            $q = $_POST['q'] ?? $_GET['q'] ?? '';
+            $db_path = $root . '/data/ehlib.db';
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                if ($q !== '') {
+                    $like = '%' . $q . '%';
+                    $stmt = $pdo->prepare("SELECT source_id, COALESCE(NULLIF(title,''), NULLIF(title_jp,'')) AS title, artist FROM search_cache WHERE source=? AND (title LIKE ? OR title_jp LIKE ? OR artist LIKE ? OR source_id LIKE ?) ORDER BY uploaded_at DESC, source_id DESC LIMIT 50");
+                    $stmt->execute([$source, $like, $like, $like, $like]);
+                } else {
+                    $stmt = $pdo->prepare("SELECT source_id, COALESCE(NULLIF(title,''), NULLIF(title_jp,'')) AS title, artist FROM search_cache WHERE source=? ORDER BY uploaded_at DESC, source_id DESC LIMIT 200");
+                    $stmt->execute([$source]);
+                }
+                json_exit(['galleries' => $stmt->fetchAll()]);
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'verify_single':
+            $source = $_POST['source'] ?? 'exhentai';
+            $sid = $_POST['source_id'] ?? '';
+            if (!$sid) error_exit('source_id required');
+            $result = run_python(['verify-single', $source, $sid], 60);
+            $result_file = $root . '/data/verify_single_result.json';
+            if (is_file($result_file)) {
+                $data = json_decode(file_get_contents($result_file), true);
+                @unlink($result_file);
+                json_exit($data ?: ['error' => 'parse failed']);
+            } else {
+                json_exit([
+                    'error' => ($result['stderr'] ?: $result['stdout'] ?: 'unknown error'),
+                    'exit_code' => $result['exit_code'] ?? -1,
+                ], false);
+            }
             break;
 
         default:

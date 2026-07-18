@@ -22,9 +22,8 @@ $base = rtrim(dirname($scriptName), '/');
         <li class="nav-item"><a class="nav-link active" href="#" data-page="dashboard"><i class="fas fa-tachometer-alt"></i>仪表盘</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="cache"><i class="fas fa-database"></i>本地缓存</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="settings"><i class="fas fa-cog"></i>系统设置</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="download"><i class="fas fa-download"></i>下载控制</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="cookies"><i class="fas fa-cookie-bite"></i>Cookie 配置</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="test-verify"><i class="fas fa-check-double"></i>单本校对</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="config"><i class="fas fa-cog"></i>站点配置</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="export"><i class="fas fa-file-export"></i>数据导出</a></li>
     </ul>
 </div>
@@ -108,9 +107,11 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
-        <!-- ═══ Cookie 配置 ═══ -->
-        <div id="page_cookies" class="page-section section-hidden">
-            <div class="card">
+        <!-- ═══ 站点配置 ═══ -->
+        <div id="page_config" class="page-section section-hidden">
+
+            <!-- Cookie 配置 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>Cookie 配置</span>
                     <button class="btn btn-sm btn-success" onclick="saveCookies()"><i class="fas fa-save me-1"></i>保存</button>
@@ -165,11 +166,9 @@ $base = rtrim(dirname($scriptName), '/');
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ═══ 系统设置 ═══ -->
-        <div id="page_settings" class="page-section section-hidden">
-            <div class="card">
+            <!-- 系统设置 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>系统设置</span>
                     <button class="btn btn-sm btn-success" onclick="saveSettings()"><i class="fas fa-save me-1"></i>保存</button>
@@ -220,11 +219,9 @@ $base = rtrim(dirname($scriptName), '/');
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ═══ 下载控制 ═══ -->
-        <div id="page_download" class="page-section section-hidden">
-            <div class="card">
+            <!-- 单一下载 -->
+            <div class="card mb-3">
                 <div class="card-header">单一下载</div>
                 <div class="card-body">
                     <ul class="nav nav-tabs mb-3" role="tablist">
@@ -286,7 +283,8 @@ $base = rtrim(dirname($scriptName), '/');
                 </div>
             </div>
 
-            <div class="card">
+            <!-- 批量下载 -->
+            <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span>批量下载</span>
                     <button class="btn btn-sm btn-primary" id="batch_download_btn" onclick="doBatchDownload()"><i class="fas fa-play me-1"></i>开始批量下载</button>
@@ -307,7 +305,8 @@ $base = rtrim(dirname($scriptName), '/');
                 </div>
             </div>
 
-            <div class="card">
+            <!-- 重新下载 -->
+            <div class="card mb-3">
                 <div class="card-header">重新下载</div>
                 <div class="card-body">
                     <p class="mb-2 text-muted">重新尝试下载之前未完成的画廊（数据库标记为 is_complete=0 的记录）。</p>
@@ -322,6 +321,7 @@ $base = rtrim(dirname($scriptName), '/');
                     <div id="retry_output" class="output-box"></div>
                 </div>
             </div>
+
         </div>
 
         <!-- ═══ 本地图库 ═══ -->
@@ -395,19 +395,52 @@ $base = rtrim(dirname($scriptName), '/');
                             <button class="btn btn-sm btn-outline-warning w-100" id="crawl_force" onclick="this.classList.toggle('active')">强制</button>
                         </div>
                         <div class="col-md-1 d-flex align-items-center justify-content-center">
-                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearCrawlLog()" title="清理日志"><i class="fas fa-trash-alt"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearCrawlLog()" title="清理工作文件"><i class="fas fa-trash-alt"></i></button>
                         </div>
                     </div>
+                    <div class="mb-1">
+                        <span class="small text-info me-2"><i class="fas fa-cloud-download-alt me-1"></i>爬取分类:</span>
+                        <div id="crawl_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-cat="all" onclick="crawlToggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag" data-cat="Doujinshi" onclick="crawlToggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
+                            <button class="cat-tag" data-cat="Manga" onclick="crawlToggleCategory(this)" style="--cat-color:#3498db">Manga</button>
+                            <button class="cat-tag" data-cat="Artist CG" onclick="crawlToggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
+                            <button class="cat-tag" data-cat="Game CG" onclick="crawlToggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
+                            <button class="cat-tag" data-cat="Western" onclick="crawlToggleCategory(this)" style="--cat-color:#27ae60">Western</button>
+                            <button class="cat-tag" data-cat="Non-H" onclick="crawlToggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
+                            <button class="cat-tag" data-cat="Image Set" onclick="crawlToggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
+                            <button class="cat-tag" data-cat="Cosplay" onclick="crawlToggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
+                            <button class="cat-tag" data-cat="Asian Porn" onclick="crawlToggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
+                            <button class="cat-tag" data-cat="Misc" onclick="crawlToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
+                        </div>
+                    </div>
+                    <div class="mb-1">
+                        <span class="small text-info me-2">爬取语言:</span>
+                        <div id="crawl_language_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-lang="all" onclick="crawlToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
+                        </div>
+                    </div>
+                    <div class="mt-1" id="saved_presets_row"></div>
+                    <hr class="my-2">
                     <div class="row g-2 align-items-end mb-2">
                         <div class="col-md-5">
                             <label class="form-label small mb-1 text-muted"><i class="fas fa-filter me-1"></i>本地检索</label>
-                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索标题/作者" onkeydown="if(event.key==='Enter')cacheSearch()">
+                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索关键词" onkeydown="if(event.key==='Enter')cacheSearch()">
                         </div>
                         <div class="col-md-1">
                             <button class="btn btn-sm btn-outline-primary w-100" onclick="cacheSearch()" title="筛选"><i class="fas fa-filter"></i></button>
                         </div>
                         <div class="col-md-1">
                             <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <span class="small text-muted me-2">检索范围:</span>
+                        <div id="cache_search_scope" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-scope="all" onclick="toggleSearchScope(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag active" data-scope="title" onclick="toggleSearchScope(this)" style="--cat-color:#e67e22">标题</button>
+                            <button class="cat-tag active" data-scope="artist" onclick="toggleSearchScope(this)" style="--cat-color:#9b59b6">作者</button>
+                            <button class="cat-tag active" data-scope="tags" onclick="toggleSearchScope(this)" style="--cat-color:#27ae60">标签</button>
                         </div>
                     </div>
                     <div>
@@ -432,12 +465,45 @@ $base = rtrim(dirname($scriptName), '/');
                             <button class="cat-tag active" data-lang="all" onclick="cacheToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
                         </div>
                     </div>
-                    <div class="mt-1" id="saved_presets_row"></div>
+                    <div class="mt-1" id="cache_batch_bar"></div>
                 </div>
                 <div class="card-body" id="cache_grid_body">
                     <div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
                 </div>
                 <div class="card-footer" id="cache_pagination"></div>
+            </div>
+
+            <!-- 作品详情弹窗 -->
+            <div class="modal fade" id="cache_detail_modal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title text-truncate" id="cache_detail_title">作品详情</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body" id="cache_detail_body">
+                            <div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">关闭</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 校对 -->
+            <div class="card mt-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>校对</span>
+                    <div>
+                        <button class="btn btn-sm btn-outline-info" id="verify_start_btn" onclick="startVerify()"><i class="fas fa-check-double me-1"></i>开始校对</button>
+                        <button class="btn btn-sm btn-outline-danger d-none" id="verify_stop_btn" onclick="stopVerify()"><i class="fas fa-stop me-1"></i>终止校对</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-2">对比 ExHentai 与本地缓存的一致性，自动修复元数据并重新下载封面。</p>
+                    <div id="verify_progress" class="output-box"></div>
+                </div>
             </div>
         </div>
 
@@ -474,13 +540,35 @@ $base = rtrim(dirname($scriptName), '/');
             </div>
         </div>
 
+        <!-- ═══ 单本校对 ═══ -->
+        <div id="page_test-verify" class="page-section section-hidden">
+            <div class="card">
+                <div class="card-header"><i class="fas fa-check-double me-1"></i>单本校对</div>
+                <div class="card-body">
+                    <div class="row g-3 align-items-end">
+                        <div class="col-md-6">
+                            <label class="form-label">搜索画廊</label>
+                            <input type="text" class="form-control" id="tv_search_input" placeholder="输入标题、作者或 ID 检索..." autocomplete="off">
+                            <div id="tv_search_results" class="list-group mt-1" style="max-height:300px;overflow-y:auto;display:none"></div>
+                        </div>
+                        <div class="col-md-2">
+                            <button class="btn btn-primary w-100" id="tv_verify_btn" onclick="tvVerify()" disabled>
+                                <i class="fas fa-play me-1"></i>开始校对
+                            </button>
+                        </div>
+                    </div>
+                    <div id="tv_result" class="output-box mt-3"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══ 数据导出 ═══ -->
         <div id="page_export" class="page-section section-hidden">
             <div class="card">
-                <div class="card-header">导出元数据</div>
+                <div class="card-header">导出数据</div>
                 <div class="card-body">
-                    <p class="text-muted">将所有本地画廊的元数据导出为 JSON 格式，包含标题、作者、标签等信息。</p>
-                    <button class="btn btn-primary" onclick="doExport()"><i class="fas fa-file-export me-1"></i>导出 JSON</button>
+                    <p class="text-muted">导出为 ZIP 包，包含元数据 JSON、数据库文件、所有封面图（不含已下载漫画）。</p>
+                    <button class="btn btn-primary" onclick="doExport()"><i class="fas fa-file-export me-1"></i>导出 ZIP</button>
                     <div id="export_output" class="output-box"></div>
                     <div id="export_table_wrapper" style="display:none" class="mt-3">
                         <div class="table-responsive" style="max-height:400px;overflow-y:auto">
@@ -511,12 +599,13 @@ $base = rtrim(dirname($scriptName), '/');
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
 <script src="assets/js/core.js"></script>
-<script src="assets/js/navigation.js?v=3">
+<script src="assets/js/navigation.js?v=4"></script>
 <script src="assets/js/config.js"></script>
-<script src="assets/js/download.js"></script>
+<script src="assets/js/download.js?v=2"></script>
 <script src="assets/js/gallery.js?v=8"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=17"></script>
+<script src="assets/js/cache.js?v=21"></script>
+<script src="assets/js/test_verify.js"></script>
 </body>
 </html>

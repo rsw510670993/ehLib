@@ -47,47 +47,220 @@ function resetCacheCategories() {
     document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
 }
 
-// ─── Language toggle (local cache) ────────────────────────
+// ─── Category toggles (crawl) ─────────────────────────────
 
-let _cacheLanguage = '';
-
-function cacheToggleLanguage(el) {
-    document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
-    el.classList.add('active');
-    _cacheLanguage = el.dataset.lang === 'all' ? '' : el.dataset.lang;
-    cacheSearch();
+function crawlToggleCategory(el) {
+    var allBtn = document.querySelector('#crawl_category_tags .cat-tag[data-cat="all"]');
+    if (el.dataset.cat === 'all') {
+        var allActive = allBtn.classList.contains('active');
+        document.querySelectorAll('#crawl_category_tags .cat-tag').forEach(function(t) {
+            t.classList.toggle('active', !allActive);
+        });
+    } else {
+        el.classList.toggle('active');
+        var allTags = document.querySelectorAll('#crawl_category_tags .cat-tag[data-cat]:not([data-cat="all"])');
+        var activeTags = document.querySelectorAll('#crawl_category_tags .cat-tag.active[data-cat]:not([data-cat="all"])');
+        if (activeTags.length === allTags.length) {
+            allBtn.classList.add('active');
+        } else {
+            allBtn.classList.remove('active');
+        }
+    }
 }
 
-function resetCacheLanguage() {
-    _cacheLanguage = '';
-    document.querySelectorAll('#cache_language_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
-    var allBtn = document.querySelector('#cache_language_tags .cat-tag[data-lang="all"]');
-    if (allBtn) allBtn.classList.add('active');
-}
-
-async function loadCacheLanguages() {
-    var resp = await fetch(API + '?action=cache_languages&source=exhentai');
-    var data = await resp.json();
-    if (!data.ok || !data.languages) return;
-    var langs = data.languages.filter(function(l) { return l; });
-    var priority = ['japanese', 'chinese'];
-    var sorted = [];
-    priority.forEach(function(p) {
-        var idx = langs.indexOf(p);
-        if (idx !== -1) { sorted.push(langs[idx]); langs.splice(idx, 1); }
+function getCrawlSelectedCategories() {
+    var allBtn = document.querySelector('#crawl_category_tags .cat-tag[data-cat="all"]');
+    if (allBtn && allBtn.classList.contains('active')) return null;
+    var cats = [];
+    document.querySelectorAll('#crawl_category_tags .cat-tag.active[data-cat]').forEach(function(t) {
+        if (t.dataset.cat !== 'all') cats.push(t.dataset.cat);
     });
-    langs.sort();
-    sorted = sorted.concat(langs);
-    var container = document.getElementById('cache_language_tags');
-    sorted.forEach(function(l) {
+    return cats.length > 0 ? cats : null;
+}
+
+// 将分类列表应用到爬取标签组（书签恢复用）
+function _applyCrawlCategoryTags(cats) {
+    var sel = '#crawl_category_tags';
+    document.querySelectorAll(sel + ' .cat-tag').forEach(function(t) { t.classList.remove('active'); });
+    if (!cats || cats.length === 0) {
+        document.querySelectorAll(sel + ' .cat-tag').forEach(function(t) { t.classList.add('active'); });
+        return;
+    }
+    cats.forEach(function(c) {
+        var btn = document.querySelector(sel + ' .cat-tag[data-cat="' + c + '"]');
+        if (btn) btn.classList.add('active');
+    });
+    var allBtn = document.querySelector(sel + ' .cat-tag[data-cat="all"]');
+    var allTags = document.querySelectorAll(sel + ' .cat-tag[data-cat]:not([data-cat="all"])');
+    var activeTags = document.querySelectorAll(sel + ' .cat-tag.active[data-cat]:not([data-cat="all"])');
+    if (allBtn && activeTags.length === allTags.length) allBtn.classList.add('active');
+}
+
+// ─── Language tags (shared builder) ───────────────────────
+// 常用语种固定显示在折叠栏外（speechless 在外，english 收进折叠栏）
+var LANG_PRIORITY = ['japanese', 'chinese', 'speechless', 'n/a'];
+// 默认选中：中日+speechless
+var LANG_DEFAULTS = ['japanese', 'chinese', 'speechless'];
+
+async function _fetchSiteLanguages() {
+    try {
+        var resp = await fetch(API + '?action=cache_languages&source=exhentai');
+        var data = await resp.json();
+        if (!data.ok || !data.languages) return null;
+        return data.languages.filter(function(l) { return l; });
+    } catch (e) {
+        return null;
+    }
+}
+
+function toggleLanguageCollapse(btn) {
+    var content = btn.parentElement.querySelector('.language-collapse-content');
+    var collapsed = content.classList.toggle('collapsed');
+    btn.textContent = btn.dataset.label + (collapsed ? ' ▸' : ' ▾');
+}
+
+// 渲染一组语言标签：常用语种在折叠栏外，其余进折叠栏；点亮状态以 stateSet 为准
+function _buildLanguageTags(container, langs, stateSet, onToggle) {
+    var work = (langs || []).slice();
+    LANG_PRIORITY.forEach(function(p) {
+        var idx = work.indexOf(p);
+        if (idx !== -1) work.splice(idx, 1);
+    });
+    work.sort();
+    container.innerHTML = '';
+
+    var allBtn = document.createElement('button');
+    allBtn.className = 'cat-tag';
+    allBtn.dataset.lang = 'all';
+    allBtn.style.setProperty('--cat-color', '#0d6efd');
+    allBtn.textContent = '全部';
+    allBtn.onclick = function() { onToggle(this); };
+    container.appendChild(allBtn);
+
+    LANG_PRIORITY.forEach(function(l) {
         var btn = document.createElement('button');
-        btn.className = 'cat-tag';
+        btn.className = 'cat-tag' + (stateSet.has(l) ? ' active' : '');
         btn.dataset.lang = l;
         btn.style.setProperty('--cat-color', '#6b7280');
         btn.textContent = l;
-        btn.onclick = function() { cacheToggleLanguage(this); };
+        btn.onclick = function() { onToggle(this); };
         container.appendChild(btn);
     });
+
+    if (work.length > 0) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'language-collapse-wrapper';
+
+        var toggleBtn = document.createElement('button');
+        toggleBtn.className = 'cat-tag language-collapse-toggle';
+        toggleBtn.dataset.label = '其他语言 (' + work.length + ')';
+        toggleBtn.textContent = toggleBtn.dataset.label + ' ▸';
+        toggleBtn.onclick = function() { toggleLanguageCollapse(this); };
+        wrapper.appendChild(toggleBtn);
+
+        var content = document.createElement('div');
+        content.className = 'language-collapse-content collapsed';
+        work.forEach(function(l) {
+            var btn = document.createElement('button');
+            btn.className = 'cat-tag' + (stateSet.has(l) ? ' active' : '');
+            btn.dataset.lang = l;
+            btn.style.setProperty('--cat-color', '#6b7280');
+            btn.textContent = l;
+            btn.onclick = function() { onToggle(this); };
+            content.appendChild(btn);
+        });
+        wrapper.appendChild(content);
+        container.appendChild(wrapper);
+    }
+}
+
+// 同步「全部」按钮点亮状态
+function _syncLanguageAllState(container) {
+    var allBtn = container.querySelector('.cat-tag[data-lang="all"]');
+    if (!allBtn) return;
+    var allTags = container.querySelectorAll('.cat-tag[data-lang]:not([data-lang="all"])');
+    var activeTags = container.querySelectorAll('.cat-tag.active[data-lang]:not([data-lang="all"])');
+    allBtn.classList.toggle('active', allTags.length > 0 && activeTags.length === allTags.length);
+}
+
+function _toggleLanguageTag(el, container, stateSet) {
+    if (el.dataset.lang === 'all') {
+        var allActive = el.classList.contains('active');
+        stateSet.clear();
+        container.querySelectorAll('.cat-tag[data-lang]').forEach(function(t) {
+            t.classList.toggle('active', !allActive);
+            if (!allActive && t.dataset.lang !== 'all') stateSet.add(t.dataset.lang);
+        });
+    } else {
+        el.classList.toggle('active');
+        if (el.classList.contains('active')) stateSet.add(el.dataset.lang);
+        else stateSet.delete(el.dataset.lang);
+        _syncLanguageAllState(container);
+    }
+}
+
+// 重置为默认语种（中日+speechless）并同步 DOM
+function _resetLanguageTags(container, stateSet) {
+    stateSet.clear();
+    LANG_DEFAULTS.forEach(function(l) { stateSet.add(l); });
+    container.querySelectorAll('.cat-tag[data-lang]').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.lang !== 'all' && stateSet.has(t.dataset.lang));
+    });
+    _syncLanguageAllState(container);
+}
+
+// 将给定语种列表应用到标签组（书签恢复用）
+function _applyLanguageTags(container, stateSet, langs) {
+    stateSet.clear();
+    (langs || []).forEach(function(l) { stateSet.add(l); });
+    container.querySelectorAll('.cat-tag[data-lang]').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.lang !== 'all' && stateSet.has(t.dataset.lang));
+    });
+    _syncLanguageAllState(container);
+}
+
+// ─── Language toggle (local cache) ────────────────────────
+
+let _cacheLanguages = new Set(LANG_DEFAULTS);
+
+function cacheToggleLanguage(el) {
+    _toggleLanguageTag(el, document.getElementById('cache_language_tags'), _cacheLanguages);
+    cacheSearch();
+}
+
+function getCacheSelectedLanguages() {
+    if (_cacheLanguages.size === 0) return null;
+    return Array.from(_cacheLanguages);
+}
+
+function resetCacheLanguage() {
+    _resetLanguageTags(document.getElementById('cache_language_tags'), _cacheLanguages);
+}
+
+async function loadCacheLanguages() {
+    // 默认中日+speechless 在 fetch 前就设置好，loadCachePage 能立刻生效
+    _cacheLanguages = new Set(LANG_DEFAULTS);
+    var langs = await _fetchSiteLanguages();
+    _buildLanguageTags(document.getElementById('cache_language_tags'), langs, _cacheLanguages, cacheToggleLanguage);
+}
+
+// ─── Language toggle (crawl) ──────────────────────────────
+
+let _crawlLanguages = new Set(LANG_DEFAULTS);
+
+function crawlToggleLanguage(el) {
+    _toggleLanguageTag(el, document.getElementById('crawl_language_tags'), _crawlLanguages);
+}
+
+function getCrawlSelectedLanguages() {
+    if (_crawlLanguages.size === 0) return null;
+    return Array.from(_crawlLanguages);
+}
+
+async function loadCrawlLanguages() {
+    _crawlLanguages = new Set(LANG_DEFAULTS);
+    var langs = await _fetchSiteLanguages();
+    _buildLanguageTags(document.getElementById('crawl_language_tags'), langs, _crawlLanguages, crawlToggleLanguage);
 }
 
 // ─── Local cache listing ─────────────────────────────────
@@ -103,8 +276,10 @@ async function loadCachePage(page) {
 
     let params = '?action=cache_search&page=' + _cachePage + '&per_page=' + _cachePerPage;
     if (keyword) params += '&title=' + encodeURIComponent(keyword);
+    var scope = getCacheSearchScope();
+    if (scope !== 'all') params += '&search_fields=' + encodeURIComponent(scope);
     if (cats) params += '&categories=' + encodeURIComponent(cats.join(','));
-    if (_cacheLanguage) params += '&language=' + encodeURIComponent(_cacheLanguage);
+    if (_cacheLanguages.size > 0) params += '&language=' + encodeURIComponent(getCacheSelectedLanguages().join(','));
 
     const resp = await fetch(API + params);
     const data = await resp.json();
@@ -121,24 +296,33 @@ async function loadCachePage(page) {
     loadSearchPresets();
 }
 
+function renderCacheBatchBar() {
+    var hasSel = _selectedIds.size > 0;
+    var allSel = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
+    var bar = document.getElementById('cache_batch_bar');
+    if (!bar) return;
+    var dlDisabled = hasSel ? '' : ' disabled';
+    bar.innerHTML =
+        '<div class="d-flex align-items-center gap-2 py-1 px-2 bg-light rounded">' +
+        '<input class="form-check-input mt-0" type="checkbox" onchange="selectAllCache(this.checked)" ' + (allSel ? 'checked' : '') + ' title="全选/取消">' +
+        '<span class="small text-muted me-1" id="batch_count">' + (hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中') + '</span>' +
+        '<button class="btn btn-sm btn-outline-primary py-0 px-2" onclick="cacheBatchDownload()" title="批量下载"' + dlDisabled + '><i class="fas fa-download me-1"></i>批量下载</button>' +
+        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"' + dlDisabled + '><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
+        '<button class="btn btn-sm btn-outline-secondary py-0 px-2' + (hasSel ? '' : ' d-none') + '" onclick="clearCacheSelection()">取消选择</button>' +
+        '</div>';
+}
+
 function renderCacheGrid() {
     const body = document.getElementById('cache_grid_body');
     if (!_cacheResults || _cacheResults.length === 0) {
         body.innerHTML = '<div class="text-center text-muted py-5">暂无缓存数据。点「后台爬取」填充缓存。</div>';
+        renderCacheBatchBar();
         return;
     }
 
-    var hasSel = _selectedIds.size > 0;
-    var allSel = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
-    var toolbar = '<div id="cache_batch_bar" class="d-flex align-items-center gap-2 mb-2 py-1 px-2 bg-light rounded">' +
-        '<input class="form-check-input mt-0" type="checkbox" onchange="selectAllCache(this.checked)" ' + (allSel ? 'checked' : '') + ' title="全选/取消">' +
-        '<span class="small text-muted me-1" id="batch_count">' + (hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中') + '</span>' +
-        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"' + (hasSel ? '' : ' disabled') + '><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
-        '<button class="btn btn-sm btn-outline-secondary py-0 px-2' + (hasSel ? '' : ' d-none') + '" onclick="clearCacheSelection()">取消选择</button>' +
-        '</div>';
-
-    body.innerHTML = toolbar + '<div class="gallery-flex-grid" id="cache_grid">' +
-        _cacheResults.map(function(g) {
+    renderCacheBatchBar();
+    body.innerHTML = '<div class="gallery-flex-grid" id="cache_grid">' +
+        _cacheResults.map(function(g, idx) {
             var displayTitle = g.title || '(无标题)';
             var catColor = CAT_COLORS[g.category] || '#6c757d';
             var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(g.category) + '</span>' : '';
@@ -146,12 +330,12 @@ function renderCacheGrid() {
             var lang = g.language || '';
             var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
             var thumbHtml = g.thumb_url
-                ? '<img src="' + g.thumb_url + '" class="card-img-top" alt="cover" loading="lazy" style="aspect-ratio:3/4;object-fit:cover" onerror="this.style.display=\'none\'">'
+                ? '<img src="' + g.thumb_url + '" class="card-img-top" alt="cover" loading="lazy" style="aspect-ratio:3/4;object-fit:cover" onerror="this.style.display=\'none\'" onload="onCoverLoad(this)">'
                 : '<div class="placeholder-thumb" style="aspect-ratio:3/4;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:2rem"><i class="far fa-image"></i></div>';
             var source_id = g.source_id || '';
             var escapedSid = escapeAttr(source_id);
             var downloadBtn = g.is_local
-                ? '<button class="btn btn-sm btn-outline-secondary py-0 px-1" disabled title="已下载"><i class="fas fa-check"></i></button>'
+                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="阅读"><i class="fas fa-book-open"></i></button>'
                 : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
             return '<div>' +
                 '<div class="card gallery-card">' +
@@ -161,7 +345,7 @@ function renderCacheGrid() {
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
                 '<div class="card-body px-2 py-1">' +
-                '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
+                '<div class="small title-clamp" style="cursor:pointer;color:var(--bs-link-color)" title="点击查看详情" onclick="showCacheDetail(' + idx + ')">' + escapeHtml(displayTitle) + '</div>' +
                 '<div class="d-flex justify-content-between align-items-center gap-1" style="margin-top:2px">' +
                 catBadge +
                 langBadge +
@@ -200,7 +384,11 @@ function renderCachePagination() {
     }
     html += '<li class="page-item' + (_cachePage >= totalPages ? ' disabled' : '') + '"><a class="page-link" href="#" onclick="event.preventDefault();loadCachePage(' + (_cachePage + 1) + ')">&raquo;</a></li>';
     html += '</ul></nav>';
-    html += '<span class="text-muted small">共 ' + _cacheTotal + ' 条</span></div>';
+    html += '<span class="text-muted small me-2">共 ' + _cacheTotal + ' 条</span>';
+    html += '<div class="input-group input-group-sm" style="width:130px"><span class="input-group-text">跳转</span>' +
+        '<input type="number" class="form-control" id="cache_page_jump" value="' + _cachePage + '" min="1" max="' + totalPages + '" onkeydown="if(event.key===\'Enter\'){var p=parseInt(this.value);if(p>=1&&p<=' + totalPages + ')loadCachePage(p);}">' +
+        '</div>';
+    html += '</div>';
     el.innerHTML = html;
 }
 
@@ -209,10 +397,43 @@ function cacheSearch() {
     loadCachePage(1);
 }
 
+// ─── Search scope toggles ─────────────────────────────
+
+function toggleSearchScope(el) {
+    var allBtn = document.querySelector('#cache_search_scope .cat-tag[data-scope="all"]');
+    if (el.dataset.scope === 'all') {
+        var active = !el.classList.contains('active');
+        document.querySelectorAll('#cache_search_scope .cat-tag').forEach(function(t) {
+            t.classList.toggle('active', active);
+        });
+    } else {
+        el.classList.toggle('active');
+        var scopeBtns = document.querySelectorAll('#cache_search_scope .cat-tag[data-scope]:not([data-scope="all"])');
+        var activeBtns = document.querySelectorAll('#cache_search_scope .cat-tag.active[data-scope]:not([data-scope="all"])');
+        if (allBtn) allBtn.classList.toggle('active', activeBtns.length === scopeBtns.length);
+    }
+    cacheSearch();
+}
+
+function getCacheSearchScope() {
+    var allBtn = document.querySelector('#cache_search_scope .cat-tag[data-scope="all"]');
+    if (allBtn && allBtn.classList.contains('active')) return 'all';
+    var scopes = [];
+    document.querySelectorAll('#cache_search_scope .cat-tag.active[data-scope]').forEach(function(t) {
+        if (t.dataset.scope !== 'all') scopes.push(t.dataset.scope);
+    });
+    return scopes.length > 0 ? scopes.join(',') : 'all';
+}
+
+function resetSearchScope() {
+    document.querySelectorAll('#cache_search_scope .cat-tag').forEach(function(t) { t.classList.add('active'); });
+}
+
 function cacheClearFilter() {
     document.getElementById('cache_keyword').value = '';
     resetCacheCategories();
     resetCacheLanguage();
+    resetSearchScope();
     _cachePage = 1;
     loadCachePage(1);
 }
@@ -225,16 +446,18 @@ async function startCrawl() {
     var query = document.getElementById('crawl_keyword').value.trim();
     if (!query) { showToast('请输入爬取关键词', 'warning'); return; }
     var force = document.getElementById('crawl_force').classList.contains('active');
-    var allBtn = document.querySelector('#cache_category_tags .cat-tag[data-cat="all"]');
+    var allBtn = document.querySelector('#crawl_category_tags .cat-tag[data-cat="all"]');
     var categories = (allBtn && allBtn.classList.contains('active')) ? 'all' : [];
     if (categories !== 'all') {
-        document.querySelectorAll('#cache_category_tags .cat-tag.active[data-cat]').forEach(function(t) {
+        document.querySelectorAll('#crawl_category_tags .cat-tag.active[data-cat]').forEach(function(t) {
             if (t.dataset.cat !== 'all') categories.push(t.dataset.cat);
         });
         categories = categories.join(',');
     }
     var form = { action: 'crawl', source: 'exhentai', query: query, force: force ? '1' : '' };
     if (categories) form.categories = categories;
+    var langs = getCrawlSelectedLanguages();
+    if (langs && langs.length) form.languages = langs.join(',');
     showToast('正在启动爬取任务...', 'info');
     var res = await api('crawl', { form: form });
     if (res.ok) {
@@ -250,9 +473,9 @@ async function startCrawl() {
 }
 
 async function clearCrawlLog() {
-    if (!await confirmDialog({ title: '清理日志', message: '确定清理后台爬取日志吗？' })) return;
+    if (!await confirmDialog({ title: '清理工作文件', message: '确定清理所有工作文件吗？' })) return;
     var res = await api('clear_log', { form: { action: 'clear_log' } });
-    showToast(res.ok ? '日志已清理' : (res.error || '清理失败'), res.ok ? 'success' : 'danger');
+    showToast(res.ok ? '已清理' : (res.error || '清理失败'), res.ok ? 'success' : 'danger');
 }
 
 // ─── Single download from cache ───────────────────────────
@@ -290,7 +513,8 @@ async function cacheDeleteItem(sid) {
 
 async function saveSearchPreset() {
     var keyword = document.getElementById('crawl_keyword').value.trim();
-    var cats = getCacheSelectedCategories();
+    var cats = getCrawlSelectedCategories();
+    var langs = getCrawlSelectedLanguages();
     var force = document.getElementById('crawl_force').classList.contains('active');
     var name = await promptDialog({ title: '保存检索条件', message: '为当前检索条件命名：', defaultValue: keyword || '未命名' });
     if (!name) return;
@@ -300,6 +524,7 @@ async function saveSearchPreset() {
             name: name,
             keyword: keyword,
             categories: cats ? JSON.stringify(cats) : '',
+            languages: langs ? JSON.stringify(langs) : '',
             force: force ? '1' : '',
         }
     });
@@ -325,6 +550,7 @@ async function loadSearchPresets() {
         var force = p.force_crawl ? ' (强制)' : '';
         var detail = p.keyword;
         if (cats) detail += ' | ' + cats;
+        if (p.languages) detail += ' | ' + p.languages;
         html += '<span class="saved-search-tag" onclick="applySearchPreset(\'' + escapeAttr(p.name) + '\')" title="' + escapeAttr(detail) + '">' +
             '<i class="far fa-bookmark me-1" style="font-size:.65rem"></i>' + escapeHtml(p.name) + force +
             '<span class="saved-search-del" onclick="event.stopPropagation();deleteSearchPreset(' + p.id + ')" title="删除">&times;</span>' +
@@ -339,24 +565,19 @@ async function applySearchPreset(name) {
     if (!res.ok || !res.presets) return;
     var preset = res.presets.find(function(p) { return p.name === name; });
     if (!preset) { showToast('未找到该预设', 'warning'); return; }
+    // 书签只恢复爬取侧控件，不影响本地浏览筛选
     document.getElementById('crawl_keyword').value = preset.keyword || '';
     document.getElementById('crawl_force').classList.toggle('active', !!preset.force_crawl);
     var cats = preset.categories ? preset.categories.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }) : [];
-    document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.remove('active'); });
-    if (cats.length === 0) {
-        document.querySelectorAll('#cache_category_tags .cat-tag').forEach(function(t) { t.classList.add('active'); });
+    _applyCrawlCategoryTags(cats);
+    // 旧预设无 languages 字段时用默认（中日+speechless），空串表示不限制
+    var presetLangs;
+    if (preset.languages === null || preset.languages === undefined) {
+        presetLangs = LANG_DEFAULTS.slice();
     } else {
-        cats.forEach(function(c) {
-            var btn = document.querySelector('#cache_category_tags .cat-tag[data-cat="' + c + '"]');
-            if (btn) btn.classList.add('active');
-        });
-        var allBtn = document.querySelector('#cache_category_tags .cat-tag[data-cat="all"]');
-        if (allBtn) {
-            var allTags = document.querySelectorAll('#cache_category_tags .cat-tag[data-cat]:not([data-cat="all"])');
-            var activeTags = document.querySelectorAll('#cache_category_tags .cat-tag.active[data-cat]:not([data-cat="all"])');
-            if (activeTags.length === allTags.length) allBtn.classList.add('active');
-        }
+        presetLangs = preset.languages.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; });
     }
+    _applyLanguageTags(document.getElementById('crawl_language_tags'), _crawlLanguages, presetLangs);
 }
 
 async function deleteSearchPreset(id) {
@@ -404,10 +625,12 @@ function updateBatchBar() {
     var allSelected = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
     var countEl = document.getElementById('batch_count');
     var delBtn = bar.querySelector('.btn-outline-danger');
+    var dlBtn = bar.querySelector('.btn-outline-primary');
     var cancelBtn = bar.querySelector('.btn-outline-secondary');
     var selectAll = bar.querySelector('.form-check-input');
     if (countEl) countEl.textContent = hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中';
     if (delBtn) delBtn.disabled = !hasSel;
+    if (dlBtn) dlBtn.disabled = !hasSel;
     if (cancelBtn) cancelBtn.classList.toggle('d-none', !hasSel);
     if (selectAll) selectAll.checked = allSelected;
 }
@@ -423,5 +646,154 @@ async function batchDeleteCache() {
         await loadCachePage(_cachePage);
     } else {
         showToast(res.error || '删除失败', 'danger');
+    }
+}
+
+async function cacheBatchDownload() {
+    if (_selectedIds.size === 0) { showToast('请先选择项目', 'warning'); return; }
+    var urls = [];
+    _cacheResults.forEach(function(g) {
+        if (_selectedIds.has(g.source_id)) {
+            if (g.source === 'exhentai') urls.push('https://exhentai.org/g/' + g.source_id + '/');
+            else if (g.source === 'nhentai') urls.push('https://nhentai.net/g/' + g.source_id + '/');
+        }
+    });
+    if (urls.length === 0) { showToast('无法构建下载链接', 'warning'); return; }
+    if (!await confirmDialog({ title: '批量下载', message: '确定下载选中的 ' + urls.length + ' 个画廊吗？' })) return;
+    document.getElementById('batch_urls').value = urls.join('\n');
+    var tabEl = document.querySelector('[data-bs-target="#download"]');
+    if (tabEl) { var tab = new bootstrap.Tab(tabEl); tab.show(); }
+    doBatchDownload();
+}
+
+// ─── 校对 ───
+
+function renderVerifyStatus(data) {
+    var el = document.getElementById('verify_progress');
+    if (!el) return;
+    if (!data || !data.running || !data.progress) {
+        el.classList.remove('show');
+        el.innerHTML = '';
+        document.getElementById('verify_start_btn')?.classList.remove('d-none');
+        document.getElementById('verify_stop_btn')?.classList.add('d-none');
+        return;
+    }
+    document.getElementById('verify_start_btn')?.classList.add('d-none');
+    document.getElementById('verify_stop_btn')?.classList.remove('d-none');
+    el.classList.add('show');
+
+    var p = data.progress;
+    var total = parseInt(p.total_pages, 10) || 0;
+    var cur = parseInt(p.current, 10) || 0;
+    var pct = total > 0 ? Math.min(100, Math.round(cur / total * 100)) : 0;
+    var msg = escapeHtml(p.message || '');
+    var isWaiting = p.status === 'waiting';
+    var barColor = isWaiting ? '#6c757d' : '#0d6efd';
+    el.innerHTML = '<div class="mb-1 small">' + msg + '</div>' +
+        '<div class="progress" style="height:8px"><div class="progress-bar progress-bar-striped progress-bar-animated" style="width:' + pct + '%;background:' + barColor + '">' + pct + '%</div></div>';
+}
+
+async function startVerify() {
+    var source = 'exhentai';
+    var res = await api('start_verify', { form: { action: 'start_verify', source: source } });
+    if (res.ok) {
+        showToast(res.output || '校对任务已启动', 'success');
+        renderVerifyStatus({ running: true, progress: { total_pages: 0, current: 0, message: '启动中...', status: 'running' } });
+        setTimeout(pollVerifyStatus, 5000);
+    } else {
+        showToast(res.error || res.output || '启动失败', 'danger');
+    }
+}
+
+async function stopVerify() {
+    if (!await confirmDialog({ title: '终止校对', message: '确定终止正在运行的校对任务吗？', okText: '终止', okClass: 'btn-danger' })) return;
+    await api('stop_verify', { form: { action: 'stop_verify', source: 'exhentai' } });
+    renderVerifyStatus(null);
+}
+
+// ─── Detail Popup ─────────────────────────────────────────
+
+function showCacheDetail(idx) {
+    var gallery = _cacheResults[idx];
+    if (!gallery) return;
+
+    var catColor = CAT_COLORS[gallery.category] || '#6c757d';
+    var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
+    var lang = gallery.language || '';
+    var langColorVal = langColor[lang.toLowerCase()] || '#6b7280';
+
+    var titleEl = document.getElementById('cache_detail_title');
+    var bodyEl = document.getElementById('cache_detail_body');
+    if (!bodyEl) return;
+    if (titleEl) titleEl.textContent = gallery.title || '(无标题)';
+
+    var tagsHtml = '';
+    var tagSource = gallery.tags_cn || gallery.tags;
+    if (tagSource) {
+        try {
+            var parsed = JSON.parse(tagSource);
+            if (Array.isArray(parsed)) {
+                var typeLabels = { 'artist':'作者', 'parody':'原作', 'character':'角色', 'group':'社团', 'male':'男性', 'female':'女性', 'language':'语言', 'category':'分类', 'mixed':'混合', 'cosplayer':'Coser', 'other':'其他' };
+                var typeColors = { 'artist':'#e74c3c', 'male':'#3498db', 'female':'#e91e63', 'parody':'#9b59b6', 'character':'#27ae60', 'group':'#f39c12', 'language':'#0dcaf0', 'category':'#95a5a6', 'mixed':'#607d8b', 'cosplayer':'#00bcd4', 'other':'#6b7280' };
+                var grouped = {};
+                parsed.forEach(function(t) {
+                    var type = t.type || 'other';
+                    if (type === 'category' && gallery.category) return;
+                    if (!grouped[type]) grouped[type] = [];
+                    grouped[type].push({ type: type, raw: t.name || '', cn: t.name_cn || '' });
+                });
+                var order = ['parody', 'character', 'artist', 'group', 'male', 'female', 'cosplayer', 'mixed', 'language', 'category', 'other'];
+                tagsHtml = order.map(function(type) {
+                    if (!grouped[type] || grouped[type].length === 0) return '';
+                    var color = typeColors[type] || '#6b7280';
+                    var label = typeLabels[type] || type;
+                    var badges = grouped[type].map(function(tag) {
+                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="点击加入爬取关键词" onclick="addTagToCrawlKeyword(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\')">' + escapeHtml(tag.cn || tag.raw) + '</span>';
+                    }).join('');
+                    return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
+                }).filter(function(s) { return s; }).join('');
+            }
+        } catch(e) {}
+    }
+
+    bodyEl.innerHTML =
+        '<div class="row g-3">' +
+        '<div class="col-md-4">' +
+        (gallery.thumb_url
+            ? '<div style="background:#1a1a1a;border-radius:0.375rem;display:flex;align-items:center;justify-content:center;min-height:200px"><img src="' + gallery.thumb_url + '" class="img-fluid rounded" alt="cover" style="max-width:100%;max-height:400px;object-fit:contain"></div>'
+            : '<div style="aspect-ratio:3/4;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:3rem"><i class="far fa-image"></i></div>') +
+        '</div>' +
+        '<div class="col-md-8">' +
+        '<table class="table table-sm table-borderless mb-0">' +
+        '<tr><td class="text-muted" style="width:80px">标题</td><td>' + escapeHtml(gallery.title || '') + '</td></tr>' +
+        (gallery.title_jp ? '<tr><td class="text-muted">日文标题</td><td>' + escapeHtml(gallery.title_jp) + '</td></tr>' : '') +
+        (gallery.artist ? '<tr><td class="text-muted">作者</td><td>' + escapeHtml(gallery.artist) + '</td></tr>' : '') +
+        (gallery.group_name ? '<tr><td class="text-muted">社团</td><td>' + escapeHtml(gallery.group_name) + '</td></tr>' : '') +
+                '<tr><td class="text-muted">分类</td><td><span class="badge" style="background:' + catColor + '">' + escapeHtml(gallery.category || '') + '</span></td></tr>' +
+        (lang ? '<tr><td class="text-muted">语言</td><td><span style="color:' + langColorVal + '">' + escapeHtml(lang) + '</span></td></tr>' : '') +
+        '<tr><td class="text-muted">页数</td><td>' + (gallery.total_pages || 0) + 'p</td></tr>' +
+        (gallery.uploaded_at ? '<tr><td class="text-muted">上传日期</td><td>' + escapeHtml(gallery.uploaded_at) + '</td></tr>' : '') +
+        '<tr><td class="text-muted">下载状态</td><td>' + (gallery.is_local ? '<span class="text-success"><i class="fas fa-check me-1"></i>已下载</span>' : '<span class="text-muted">未下载</span>') + '</td></tr>' +
+        '</table>' +
+        (tagsHtml ? '<div class="mt-2 pt-2 border-top">' + tagsHtml + '</div>' : '') +
+        '</div>' +
+        '</div>';
+
+    var modalEl = document.getElementById('cache_detail_modal');
+    if (modalEl && typeof bootstrap !== 'undefined') {
+        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+    }
+}
+
+async function pollVerifyStatus() {
+    var data = await api('verify_status&source=exhentai');
+    var wasRunning = pollVerifyStatus._running;
+    pollVerifyStatus._running = data && data.running;
+    renderVerifyStatus(data);
+    if (data && data.running) {
+        setTimeout(pollVerifyStatus, 8000);
+    } else if (wasRunning && !data.running) {
+        loadCachePage(_cachePage || 1);
     }
 }

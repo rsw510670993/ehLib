@@ -1,30 +1,23 @@
-// ─── Export ───
+function escapeHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 async function doExport() {
-    clearOutput('export_output');
-    document.getElementById('export_output').classList.add('show');
-    document.getElementById('export_output').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>导出中...';
+    const out = document.getElementById('export_output');
+    out.classList.add('show');
+    out.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>打包中...';
     document.getElementById('export_table_wrapper').style.display = 'none';
 
     const res = await api('export');
     if (!res.ok) {
-        showOutput('export_output', res.output || '导出失败', true);
+        out.innerHTML = '<span class="error">导出失败: ' + escapeHtml(res.output || '') + '</span>';
         return;
     }
 
-    showOutput('export_output', `导出成功: ${res.file || ''}，共 ${(res.galleries || []).length} 条记录`, false);
-
-    const galleries = res.galleries || [];
-    if (galleries.length === 0) return;
-
-    document.getElementById('export_count').textContent = `共 ${galleries.length} 条记录`;
-    document.getElementById('export_table_body').innerHTML = galleries.map(g =>
-        `<tr>
-            <td><span class="badge ${g.source === 'nhentai' ? 'bg-danger' : 'bg-info'}">${g.source}</span></td>
-            <td class="font-monospace">${g.source_id}</td>
-            <td>${g.title}</td>
-            <td>${g.artist || '-'}</td>
-            <td>${g.total_pages}p</td>
-        </tr>`
-    ).join('');
-    document.getElementById('export_table_wrapper').style.display = 'block';
+    const file = res.file || '';
+    const url = res.download_url || 'data/' + file;
+    out.innerHTML = '<i class="fas fa-check-circle" style="color:#22c55e"></i> 导出成功<br>' +
+        '<a href="' + url + '" class="btn btn-success btn-sm mt-2" download><i class="fas fa-download me-1"></i>下载导出包 (' + file + ')</a>' +
+        '<br><span class="small" style="color:#94a3b8">包含: 元数据JSON + 数据库 + 封面图</span>';
 }

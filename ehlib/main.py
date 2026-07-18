@@ -1,7 +1,9 @@
 import argparse
 import asyncio
 import json
+import random
 import sys
+import time
 from asyncio import sleep
 from pathlib import Path
 
@@ -17,7 +19,29 @@ from ehlib.utils.logger import setup_logger, get_logger
 from ehlib.utils.progress import write_progress, remove_progress
 
 
+def _is_updated_on_site(existing, item: dict) -> bool:
+    """站点上的上传日期与本地已下载作品不一致时视为已被更新（不能作为中断点）。
+    任一侧日期缺失时回退为旧行为（仅按 is_complete 判断）。"""
+    site_date = " ".join(str(item.get("uploaded_at", "") or "").split())
+    local_date = " ".join((existing.uploaded_at or "").split())
+    return bool(site_date and local_date and site_date != local_date)
+
+
+def _parse_languages(languages) -> set:
+    """解析逗号分隔/列表形式的语种筛选条件，返回小写集合。空集合表示不过滤。
+    注意：E-Hentai 的 language: 标签搜索不可靠（japanese 不过滤、~ 语义异常），
+    语种筛选在元数据抓取后按画廊 Language 属性执行。"""
+    if isinstance(languages, str):
+        parts = languages.split(",")
+    else:
+        parts = list(languages or [])
+    return {str(l).strip().lower() for l in parts if str(l).strip()}
+
+
 async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -> None:
+    download_cancel = Path("data/download_cancel.flag")
+    if download_cancel.exists():
+        download_cancel.unlink()
     downloader = Downloader(config, db)
     try:
         if args.url:
@@ -37,11 +61,16 @@ async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -
 
         gallery = await downloader.download(source, identifier, force=args.force)
         print(f"Downloaded: [{gallery.source}] {gallery.title} ({gallery.total_pages} pages)")
+    except KeyboardInterrupt:
+        print("Download cancelled by user.")
     finally:
         await downloader.close()
 
 
 async def cmd_batch(args: argparse.Namespace, config: Config, db: Database) -> None:
+    download_cancel = Path("data/download_cancel.flag")
+    if download_cancel.exists():
+        download_cancel.unlink()
     filepath = Path(args.file)
     if not filepath.exists():
         print(f"Error: File not found: {args.file}")
@@ -52,6 +81,8 @@ async def cmd_batch(args: argparse.Namespace, config: Config, db: Database) -> N
     try:
         results = await downloader.download_batch(urls)
         print(f"Batch complete: {len(results)} galleries downloaded")
+    except KeyboardInterrupt:
+        print("Batch download cancelled by user.")
     finally:
         await downloader.close()
 
@@ -116,7 +147,8 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
         else:
             site = NhentaiSite(config, session)
 
-        print(f"Starting crawl: {args.source}, query='{args.query}'")
+        lang_filter = _parse_languages(getattr(args, "languages", "") or "")
+        print(f"Starting crawl: {args.source}, query='{args.query}'" + (f", languages={sorted(lang_filter)}" if lang_filter else ""))
         write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, 0, "running", f"Page {resume_page}")
 
         async def on_page(page: int, items: list[dict], next_cursor: str):
@@ -135,7 +167,7 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 batch = [it for it in items if it.get("source_id", "") in saved_ids]
                 await db.save_search_results(batch)
 
-            # 获取元数据和封面（1分钟间隔）
+            # 获取元数据和封面
             for idx, item in enumerate(items, 1):
                 if cancel_file.exists():
                     raise KeyboardInterrupt()
@@ -143,8 +175,20 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 if not sid or sid in metadata_done:
                     continue
                 try:
-                    artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
-                    await db.update_search_cache_metadata(args.source, sid, artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json)
+                    artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
+                    # 语种后置过滤：Language 属性不在选中集合内则从缓存剔除
+                    # （保留在 reserved_ids 中，避免断点续传时重新入库）
+                    if lang_filter and language and language not in lang_filter:
+                        await db.delete_search_cache(args.source, sid)
+                        if thumb_path:
+                            try:
+                                Path(thumb_path).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                        metadata_done.add(sid)
+                        print(f"    Filtered out (language={language}): {sid}")
+                        continue
+                    await db.update_search_cache_metadata(args.source, sid, artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json)
                     metadata_done.add(sid)
                     print(f"    Metadata {idx}/{len(items)}: {sid} artist={artist} uploaded={uploaded_at}")
                 except Exception as e:
@@ -158,9 +202,32 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                     "query": args.query,
                 }))
                 write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", len(items), idx, "running", f"Page {page}, metadata {idx}/{len(items)}")
-                if idx < len(items):
-                    import random
-                    await sleep(random.randint(5, 10))
+
+            # 更新模式：遇到已下载且上传日期一致的作品则停止翻页（但仍更新当前页元数据）
+            if args.update:
+                for item in items:
+                    sid = item.get("source_id", "")
+                    if not sid:
+                        continue
+                    try:
+                        existing = await db.get_gallery(args.source, sid)
+                        if existing and existing.is_complete:
+                            if _is_updated_on_site(existing, item):
+                                print(f"  Gallery updated on site, not a stop point: {sid} (local={existing.uploaded_at}, site={item.get('uploaded_at', '')})")
+                                continue
+                            print(f"  Already-downloaded gallery found: {sid}, stopping further pages")
+                            progress_file.write_text(json.dumps({
+                                "page": page,
+                                "next_cursor": next_cursor,
+                                "saved_ids": list(reserved_ids),
+                                "metadata_ids": list(metadata_done),
+                                "query": args.query,
+                            }))
+                            write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, page, "completed", f"已是最新，Page {page}")
+                            remove_progress("crawl", CRAWL_TASK_ID)
+                            return False
+                    except Exception as e:
+                        print(f"  Check download status failed for {sid}: {e}")
 
             # 保存进度文件（全页完成后）
             progress_file.write_text(json.dumps({
@@ -172,10 +239,15 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
             }))
             write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, page, "running", f"Page {page}, cached {len(reserved_ids)}")
             print(f"  Page {page}: {len(items)} items, total cached: {len(reserved_ids)}, metadata done: {len(metadata_done)}")
+            return True
+
+        async def on_wait(next_run: str, delay: int):
+            write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, 0, "waiting", f"等待至 {next_run} ({delay}s)")
 
         cats = None
         if args.categories:
             cats = list(args.categories)
+        t_start = time.time()
         try:
             await site.crawl_all_pages(
                 query=args.query,
@@ -183,6 +255,7 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 resume_cursor=resume_cursor,
                 resume_page=resume_page,
                 on_page=on_page,
+                on_wait=on_wait,
             )
         except KeyboardInterrupt:
             print("Crawl cancelled by user.")
@@ -191,12 +264,385 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 cancel_file.unlink()
             return
 
-        print(f"Crawl complete. Total items cached: {len(reserved_ids)}")
+        elapsed = time.time() - t_start
+        elapsed_str = f"{int(elapsed//60)}m{int(elapsed%60)}s"
+        print(f"Crawl complete. Total items cached: {len(reserved_ids)}, time: {elapsed_str}")
         remove_progress("crawl", CRAWL_TASK_ID)
         if progress_file.exists():
             progress_file.unlink()
         if cancel_file.exists():
             cancel_file.unlink()
+    finally:
+        await session.close()
+
+
+async def cmd_update_artists(args: argparse.Namespace, config: Config, db: Database) -> None:
+    """Execute saved search presets in update mode: crawl each preset's keyword, stop at already-downloaded"""
+    import random as _random
+    source = args.source
+    logger = get_logger("ehlib")
+    thumbs_dir = f"data/thumbs/{source}"
+
+    presets = await db.get_search_presets()
+    if not presets:
+        print("No saved search presets found.")
+        return
+
+    print(f"Executing {len(presets)} search presets on {source}")
+    total_new = 0
+
+    for idx, preset in enumerate(presets, 1):
+        name = preset.get("name", "")
+        keyword = preset.get("keyword", "").strip()
+        categories_str = preset.get("categories", "").strip()
+        languages = (preset.get("languages") or "").strip()
+        force = preset.get("force_crawl", 0)
+
+        if not keyword:
+            print(f"\n[{idx}/{len(presets)}] SKIP '{name}': empty keyword")
+            continue
+
+        cats = None
+        if categories_str:
+            try:
+                cats = [int(c.strip()) for c in categories_str.split(",") if c.strip()]
+            except ValueError:
+                print(f"\n[{idx}/{len(presets)}] SKIP '{name}': invalid categories '{categories_str}'")
+                continue
+
+        mode = "force" if force else "update"
+        lang_filter = _parse_languages(languages)
+        print(f"\n[{idx}/{len(presets)}] {name} ({mode})")
+        print(f"    query: {keyword}")
+        if lang_filter:
+            print(f"    languages: {sorted(lang_filter)}")
+        if cats:
+            print(f"    categories: {cats}")
+        logger.info("Preset '%s': query=%s, cats=%s, langs=%s, mode=%s", name, keyword, cats, sorted(lang_filter), mode)
+
+        progress_file = Path(f"data/update_{source}_{idx}.json")
+        cancel_file = Path(f"data/crawl_cancel_{source}.flag")
+        CRAWL_TASK_ID = f"crawl_{source}"
+
+        if cancel_file.exists():
+            cancel_file.unlink()
+
+        session = SessionManager(config)
+        try:
+            if source == "exhentai":
+                site = ExhentaiSite(config, session)
+            else:
+                site = NhentaiSite(config, session)
+
+            reserved_ids = set()
+            metadata_done = set()
+
+            write_progress("crawl", CRAWL_TASK_ID, f"更新: {name[:20]}", 0, idx, "running", f"Preset {idx}/{len(presets)}")
+
+            async def on_page(page: int, items: list[dict], next_cursor: str):
+                if cancel_file.exists():
+                    raise KeyboardInterrupt()
+
+                saved_ids = []
+                for item in items:
+                    sid = item.get("source_id", "")
+                    if sid and sid not in reserved_ids:
+                        reserved_ids.add(sid)
+                        saved_ids.append(sid)
+                if saved_ids:
+                    batch = [it for it in items if it.get("source_id", "") in saved_ids]
+                    await db.save_search_results(batch)
+
+                for item_idx, item in enumerate(items, 1):
+                    if cancel_file.exists():
+                        raise KeyboardInterrupt()
+                    sid = item.get("source_id", "")
+                    if not sid or sid in metadata_done:
+                        continue
+                    try:
+                        item_artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
+                        # 语种后置过滤：Language 属性不在选中集合内则从缓存剔除
+                        if lang_filter and language and language not in lang_filter:
+                            await db.delete_search_cache(source, sid)
+                            if thumb_path:
+                                try:
+                                    Path(thumb_path).unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            metadata_done.add(sid)
+                            print(f"    Filtered out (language={language}): {sid}")
+                            continue
+                        await db.update_search_cache_metadata(source, sid, item_artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json)
+                        metadata_done.add(sid)
+                    except Exception as e:
+                        print(f"    Metadata failed for {sid}: {e}")
+
+                if not force:
+                    for item in items:
+                        sid = item.get("source_id", "")
+                        if not sid:
+                            continue
+                        try:
+                            existing = await db.get_gallery(source, sid)
+                            if existing and existing.is_complete:
+                                if _is_updated_on_site(existing, item):
+                                    print(f"  Updated on site, not a stop point: {sid} (local={existing.uploaded_at}, site={item.get('uploaded_at', '')})")
+                                    logger.info("Preset '%s' gallery %s updated on site, continue", name, sid)
+                                    continue
+                                print(f"  Up-to-date (already downloaded: {sid})")
+                                logger.info("Preset '%s' up-to-date at %s", name, sid)
+                                return False
+                        except Exception as e:
+                            print(f"  Check failed for {sid}: {e}")
+
+                print(f"  Page {page}: {len(items)} items, total cached: {len(reserved_ids)}")
+                return True
+
+            await site.crawl_all_pages(
+                query=keyword,
+                categories=cats,
+                resume_cursor="",
+                resume_page=1,
+                on_page=on_page,
+                on_wait=None,
+            )
+
+            new_count = len(reserved_ids) - len(metadata_done)
+            total_new += max(0, new_count)
+            print(f"  Done: {len(reserved_ids)} cached, {len(metadata_done)} metadata")
+            logger.info("Preset '%s' done: %d cached", name, len(reserved_ids))
+            remove_progress("crawl", CRAWL_TASK_ID)
+
+        except KeyboardInterrupt:
+            print(f"  Preset '{name}': cancelled.")
+            remove_progress("crawl", CRAWL_TASK_ID)
+            if cancel_file.exists():
+                cancel_file.unlink()
+            return
+        finally:
+            await session.close()
+            if progress_file.exists():
+                progress_file.unlink()
+
+        if idx < len(presets):
+            delay = _random.randint(30, 90)
+            print(f"  Waiting {delay}s before next preset...")
+            await sleep(delay)
+
+    print(f"\nUpdate complete: {len(presets)} presets processed, {total_new} new items cached")
+    if cancel_file.exists():
+        cancel_file.unlink()
+
+
+async def cmd_verify(args: argparse.Namespace, config: Config, db: Database) -> None:
+    """校对缓存的画廊：对比元数据、重下封面"""
+    source = args.source
+    CHECKPOINT = Path(f"data/verify_checkpoint_{source}.json")
+    CANCEL = Path(f"data/verify_cancel_{source}.flag")
+    PROGRESS_ID = f"verify_{source}"
+    BATCH_SIZE = 100
+
+    if CANCEL.exists():
+        CANCEL.unlink()
+
+    if CHECKPOINT.exists():
+        cp = json.loads(CHECKPOINT.read_text())
+        source_ids = cp["source_ids"]
+        start_idx = cp["current_index"]
+        total = cp["total"]
+        mismatches = cp.get("mismatches", 0)
+        errors = cp.get("errors", 0)
+        verified = cp.get("verified", 0)
+        print(f"Resuming verify: {verified}/{total} done, {mismatches} mismatches, from index {start_idx}")
+    else:
+        source_ids = await db.get_cached_source_ids(source)
+        total = len(source_ids)
+        start_idx = 0
+        mismatches = 0
+        errors = 0
+        verified = 0
+        print(f"Starting verify: {total} galleries")
+        CHECKPOINT.write_text(json.dumps({
+            "source_ids": source_ids, "current_index": 0,
+            "total": total, "verified": 0, "mismatches": 0, "errors": 0,
+        }))
+
+    if total == 0:
+        print("No galleries to verify.")
+        return
+
+    thumbs_dir = f"data/thumbs/{source}"
+    session = SessionManager(config)
+    try:
+        if source == "exhentai":
+            site = ExhentaiSite(config, session)
+        else:
+            site = NhentaiSite(config, session)
+
+        write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "running", f"{verified}/{total}")
+
+        while start_idx < total:
+            if CANCEL.exists():
+                print("Verify cancelled.")
+                break
+
+            batch = source_ids[start_idx:start_idx + BATCH_SIZE]
+            batch_errors = 0
+
+            for sid in batch:
+                if CANCEL.exists():
+                    break
+                try:
+                    row = await db.get_search_cache_row(source, sid)
+                    old_cover = (row or {}).get("thumbnail", "") or ""
+                    new = await site.verify_gallery(sid, thumbs_dir, old_cover)
+                    if "error" in new:
+                        print(f"  SKIP {sid}: {new['error']}")
+                        errors += 1
+                        continue
+
+                    if row:
+                        diff = {}
+                        field_map = {"artist":"artist","uploaded_at":"uploaded_at","category":"category",
+                                     "language":"language","title_jp":"title_jp","group_name":"group_name","tags":"tags_json"}
+                        for field, rfield in field_map.items():
+                            old_val = row.get(field, "") or ""
+                            new_val = new.get(rfield, "") or ""
+                            if field == "language":
+                                if str(old_val).lower() != str(new_val).lower():
+                                    diff[field] = (old_val, new_val)
+                            elif str(old_val) != str(new_val):
+                                diff[field] = (old_val, new_val)
+                        old_pages = row.get("total_pages", 0) or 0
+                        if int(old_pages) != int(new.get("total_pages", 0)):
+                            diff["total_pages"] = (old_pages, new["total_pages"])
+
+                        # 封面 URL 变化也计为差异
+                        old_cover = row.get("thumbnail", "") or ""
+                        new_cover = new.get("cover_url", "") or ""
+                        if old_cover != new_cover:
+                            diff["cover_url"] = (old_cover, new_cover)
+
+                        if diff:
+                            mismatches += 1
+                            print(f"  MISMATCH {sid}: {diff}")
+
+                        # don't overwrite tags with empty
+                        new_tags = new["tags_json"]
+                        new_tags_cn = new.get("tags_cn_json", "")
+                        if row and (not new_tags or new_tags == '""' or new_tags == "[]"):
+                            new_tags = row.get("tags", "") or ""
+                            new_tags_cn = row.get("tags_cn", "") or ""
+                        await db.update_search_cache_metadata(
+                            source, sid,
+                            new["artist"], new["thumb_path"],
+                            new["uploaded_at"], new["category"],
+                            new["cover_url"], new["language"],
+                            new["title_jp"], new["group_name"],
+                            new_tags, new_tags_cn,
+                        )
+                    verified += 1
+                    print(f"  OK {sid}")
+                except Exception as e:
+                    errors += 1
+                    print(f"  ERROR {sid}: {e}")
+
+                details = f"{verified}/{total}"
+                write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "running", details)
+
+            start_idx += BATCH_SIZE
+            CHECKPOINT.write_text(json.dumps({
+                "source_ids": source_ids, "current_index": start_idx,
+                "total": total, "verified": verified, "mismatches": mismatches,
+                "errors": errors, "updated_at": time.time(),
+            }))
+
+            if start_idx < total and not CANCEL.exists():
+                delay = random.randint(60, 300)
+                next_run = time.strftime("%H:%M:%S", time.localtime(time.time() + delay))
+                details = f"{verified}/{total}"
+                if mismatches or errors:
+                    details += f"  △{mismatches} ✗{errors}"
+                print(f"Batch done ({details}), next at {next_run}, waiting {delay}s...")
+                write_progress("verify", PROGRESS_ID, f"校对: {source}", total, verified + errors, "waiting", f"等待至 {next_run}  {details}")
+                await sleep(delay)
+
+        print(f"Verify finished: {verified}/{total}  △{mismatches} ✗{errors}")
+        remove_progress("verify", PROGRESS_ID)
+        if CHECKPOINT.exists():
+            CHECKPOINT.unlink()
+        if CANCEL.exists():
+            CANCEL.unlink()
+    finally:
+        await session.close()
+
+
+async def cmd_verify_single(args: argparse.Namespace, config: Config, db: Database) -> None:
+    source = args.source
+    source_id = args.source_id
+    thumbs_dir = f"data/thumbs/{source}"
+
+    # suppress logger output - write output to temp file instead of stdout
+    import logging
+    logging.getLogger("ehlib").handlers.clear()
+
+    out_file = Path(f"data/verify_single_result.json")
+    session = SessionManager(config)
+    try:
+        if source == "exhentai":
+            site = ExhentaiSite(config, session)
+        else:
+            site = NhentaiSite(config, session)
+
+        row = await db.get_search_cache_row(source, source_id)
+        old = dict(row) if row else None
+        old_cover = (old or {}).get("thumbnail", "") or ""
+
+        result = await site.verify_gallery(source_id, thumbs_dir, old_cover)
+
+        if "error" in result:
+            out_file.write_text(json.dumps({"error": result["error"], "old": old}, ensure_ascii=False))
+            return
+
+        diff = {}
+        if old:
+            for field, rfield in (("artist","artist"), ("uploaded_at","uploaded_at"), ("category","category"),
+                                  ("language","language"), ("title_jp","title_jp"), ("group_name","group_name"),
+                                  ("tags","tags_json")):
+                ov = (old.get(field, "") or "").strip()
+                nv = (result.get(rfield, "") or "").strip()
+                if field == "language":
+                    if ov.lower() != nv.lower():
+                        diff[field] = (ov, nv)
+                elif ov != nv:
+                    diff[field] = (ov, nv)
+            op = old.get("total_pages", 0) or 0
+            np = result.get("total_pages", 0) or 0
+            if int(op) != int(np):
+                diff["total_pages"] = (op, np)
+            oc = (old.get("thumbnail", "") or "").strip()
+            nc = (result.get("cover_url", "") or "").strip()
+            if oc != nc:
+                diff["cover_url"] = (oc, nc)
+
+        # update DB with new data so the thumb is immediately reflected
+        # but don't overwrite tags with empty
+        new_tags = result["tags_json"]
+        new_tags_cn = result.get("tags_cn_json", "")
+        if row and (not new_tags or new_tags == '""' or new_tags == "[]"):
+            new_tags = row.get("tags", "") or ""
+            new_tags_cn = row.get("tags_cn", "") or ""
+        await db.update_search_cache_metadata(
+            source, source_id,
+            result["artist"], result["thumb_path"],
+            result["uploaded_at"], result["category"],
+            result["cover_url"], result["language"],
+            result["title_jp"], result["group_name"],
+            new_tags, new_tags_cn,
+        )
+
+        output = {"old": old, "new": result, "diff": diff}
+        out_file.write_text(json.dumps(output, ensure_ascii=False))
     finally:
         await session.close()
 
@@ -247,6 +693,29 @@ async def cmd_count_retry_pages(args: argparse.Namespace, config: Config, db: Da
 async def cmd_export(args: argparse.Namespace, _config: Config, db: Database) -> None:
     await db.export_json(args.output)
     print(f"Exported to {args.output}")
+
+
+async def cmd_export_package(args: argparse.Namespace, _config: Config, db: Database) -> None:
+    import zipfile
+    output = getattr(args, "output", None)
+    zip_path = getattr(args, "zip", None)
+    if not output or not zip_path:
+        print("--output and --zip are required")
+        return
+    # export metadata json
+    await db.export_json(output)
+    # create zip
+    data_dir = Path("data")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(output, arcname="metadata.json")
+        zf.write(str(data_dir / "ehlib.db"), arcname="ehlib.db")
+        thumbs_dir = data_dir / "thumbs"
+        if thumbs_dir.is_dir():
+            for f in sorted(thumbs_dir.rglob("*")):
+                if f.is_file():
+                    zf.write(f, arcname=str(f.relative_to(data_dir)))
+        Path(output).unlink(missing_ok=True)
+    print(f"Exported package to {zip_path}")
 
 
 async def cmd_migrate_dirs(_args: argparse.Namespace, config: Config, db: Database) -> None:
@@ -307,6 +776,42 @@ async def cmd_refresh_metadata(args: argparse.Namespace, config: Config, db: Dat
         print(f"Error: {e}", file=sys.stderr)
     finally:
         await downloader.close()
+
+
+async def cmd_update_translations(_args: argparse.Namespace, _config: Config, _db: Database) -> None:
+    from ehlib.translate.tag_translator import download_latest
+    try:
+        path = download_latest()
+        print(f"Translation database updated: {path}")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+
+
+async def cmd_translate_tags(args: argparse.Namespace, _config: Config, db: Database) -> None:
+    from ehlib.translate.tag_translator import TagTranslator
+    source = args.source or "exhentai"
+    translator = TagTranslator()
+    if not translator.load():
+        print("Translation database not found. Run 'update-translations' first.", file=sys.stderr)
+        return
+
+    rows = await db.get_all_cache_tags(source)
+    total = len(rows)
+    if total == 0:
+        print("No cached tags to translate.")
+        return
+
+    print(f"Translating {total} cache entries...")
+    done = 0
+    for row in rows:
+        tags_json = row["tags"]
+        tags_cn = translator.translate_tags(tags_json)
+        if tags_cn and tags_cn != tags_json:
+            await db.update_cache_tags_cn(source, row["source_id"], tags_cn)
+        done += 1
+        if done % 50 == 0:
+            print(f"  {done}/{total}")
+    print(f"Done. {done} entries processed.")
 
 
 async def cmd_recover_orphans(args: argparse.Namespace, config: Config, db: Database) -> None:
@@ -414,6 +919,8 @@ def main() -> None:
     crawl.add_argument("--query", required=True, help="Search query (artist name, tag, etc.)")
     crawl.add_argument("--force", action="store_true", help="Restart crawl from beginning")
     crawl.add_argument("--categories", type=int, nargs="*", help="Category bitmask values (e.g. 2 4 8)")
+    crawl.add_argument("--languages", type=str, default="", help="Comma-separated languages to keep (e.g. chinese,japanese,speechless); filtered by gallery Language attribute after metadata fetch")
+    crawl.add_argument("--update", action="store_true", help="Stop when encountering already-downloaded galleries (update mode)")
 
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
@@ -433,15 +940,35 @@ def main() -> None:
 
     count_retry_parser = subparsers.add_parser("count-retry-pages", help="Count total pages across incomplete galleries")
 
+    verify = subparsers.add_parser("verify", help="Verify cached gallery metadata & re-download covers")
+    verify.add_argument("source", choices=["exhentai", "nhentai"], help="Source site")
+
     exp = subparsers.add_parser("export", help="Export metadata to JSON")
     exp.add_argument("--output", default="metadata.json", help="Output file path")
     exp.add_argument("--format", choices=["json"], default="json", help="Export format")
 
+    exp_pkg = subparsers.add_parser("export-package", help="Export metadata + covers + DB as ZIP")
+    exp_pkg.add_argument("--output", required=True, help="Temp JSON output path")
+    exp_pkg.add_argument("--zip", required=True, help="Output ZIP file path")
+
     subparsers.add_parser("migrate-dirs", help="Migrate gallery directories to ID-only names")
+
+    single_verify = subparsers.add_parser("verify-single", help="Verify a single gallery metadata & cover")
+    single_verify.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
+    single_verify.add_argument("source_id", help="Gallery source ID")
 
     refresh = subparsers.add_parser("refresh-metadata", help="Re-fetch metadata for an existing gallery (preserves local images)")
     refresh.add_argument("source", choices=["nhentai", "exhentai"], help="Source site")
     refresh.add_argument("source_id", help="Gallery source ID or gid/token for exhentai")
+
+    ua = subparsers.add_parser("update-artists", help="Execute saved search presets in update mode (stop at already-downloaded)")
+    ua.add_argument("--source", choices=["exhentai", "nhentai"], default="exhentai", help="Source site")
+
+    ut = subparsers.add_parser("update-translations", help="Download the latest EhTagTranslation database")
+    ut.add_argument("--source", choices=["exhentai", "nhentai"], default="exhentai", help="Source site (unused, for consistency)")
+
+    tt = subparsers.add_parser("translate-tags", help="Batch-translate all cached tags using the translation database")
+    tt.add_argument("--source", choices=["exhentai", "nhentai"], default="exhentai", help="Source site")
 
     recover = subparsers.add_parser("recover-orphans", help="Scan download dirs and recover galleries with no DB record")
     recover.add_argument("--source", choices=["nhentai", "exhentai"], help="Limit scan to a specific source")
@@ -467,9 +994,15 @@ def main() -> None:
             "config": cmd_config,
             "retry": cmd_retry,
             "count-retry-pages": cmd_count_retry_pages,
+            "verify": cmd_verify,
+            "verify-single": cmd_verify_single,
             "export": cmd_export,
+            "export-package": cmd_export_package,
             "migrate-dirs": cmd_migrate_dirs,
             "refresh-metadata": cmd_refresh_metadata,
+            "update-artists": cmd_update_artists,
+            "update-translations": cmd_update_translations,
+            "translate-tags": cmd_translate_tags,
             "recover-orphans": cmd_recover_orphans,
         }
         handler = commands.get(args.command)
