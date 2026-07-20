@@ -11,7 +11,8 @@ function switchPage(name) {
         config: ['站点配置', 'Cookie、系统设置、下载控制'],
         gallery: ['本地图库', '已下载的画廊列表'],
         cache: ['本地缓存', '检索 exhentai 缓存并下载'],
-        'test-verify': ['单本校对', '对单个画廊进行封面和元数据校对'],
+        'crawl-history': ['爬取历史', '查看爬取结果并管理定期刷新对象'],
+        'test-verify': ['校对', '批量或单独校对缓存元数据与封面'],
         export: ['数据导出', '导出元数据+封面+DB'],
     };
     const t = titles[name] || ['页面', ''];
@@ -21,9 +22,10 @@ function switchPage(name) {
     // load data on page switch
     if (name === 'dashboard') loadDashboard();
     if (name === 'gallery') loadGalleries();
-    if (name === 'cache') { loadCacheLanguages(); loadCrawlLanguages(); loadCachePage(1); pollVerifyStatus(); }
+    if (name === 'cache') { loadCacheLanguages(); loadCrawlLanguages(); loadCachePage(1); loadCrawlQueue(); }
+    if (name === 'crawl-history') loadCrawlHistoryPage();
     if (name === 'config') { loadCookies(); loadSettings(); }
-    if (name === 'test-verify') { tvLoadList(); }
+    if (name === 'test-verify') { tvLoadList(); pollVerifyStatus(); }
 }
 
 document.querySelectorAll('.sidebar .nav-link').forEach(a => {

@@ -1,10 +1,12 @@
 import argparse
 import asyncio
 import json
+import os
 import random
 import sys
 import time
 from asyncio import sleep
+from contextlib import contextmanager
 from pathlib import Path
 
 from ehlib.config import get_config, Config
@@ -17,6 +19,14 @@ from ehlib.storage.file_manager import FileManager
 from ehlib.utils.helpers import parse_nhentai_url, parse_exhentai_url
 from ehlib.utils.logger import setup_logger, get_logger
 from ehlib.utils.progress import write_progress, remove_progress
+
+
+class CrawlLockBusy(RuntimeError):
+    """Raised when another crawl worker/process already holds a lock."""
+
+
+class CrawlLockError(RuntimeError):
+    """Raised when a crawl lock file cannot be opened or locked."""
 
 
 def _is_updated_on_site(existing, item: dict) -> bool:
@@ -36,6 +46,63 @@ def _parse_languages(languages) -> set:
     else:
         parts = list(languages or [])
     return {str(l).strip().lower() for l in parts if str(l).strip()}
+
+
+@contextmanager
+def _exclusive_crawl_lock(blocking: bool = False, lock_name: str = "crawl.lock"):
+    """Allow only one crawl/update process across all sources and entry points."""
+    lock_path = Path("data") / lock_name
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_file = lock_path.open("a+b")
+        if os.name != "nt":
+            try:
+                os.chmod(lock_path, 0o666)
+            except OSError:
+                pass
+    except PermissionError:
+        if os.name == "nt":
+            raise CrawlLockError(f"Cannot open crawl lock: {lock_path}")
+        try:
+            # POSIX flock does not require a writable descriptor. Existing lock
+            # files may belong to DSM, http, or an interactive NAS user.
+            lock_file = lock_path.open("rb")
+        except OSError as exc:
+            raise CrawlLockError(f"Cannot open crawl lock {lock_path}: {exc}") from exc
+    except OSError as exc:
+        raise CrawlLockError(f"Cannot open crawl lock {lock_path}: {exc}") from exc
+
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if lock_path.stat().st_size == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+    except BlockingIOError as exc:
+        lock_file.close()
+        raise CrawlLockBusy("Another crawl task is already running; concurrent crawls are not allowed.") from exc
+    except OSError as exc:
+        lock_file.close()
+        raise CrawlLockError(f"Cannot lock {lock_path}: {exc}") from exc
+
+    try:
+        yield
+    finally:
+        try:
+            if os.name == "nt":
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
 
 
 async def cmd_download(args: argparse.Namespace, config: Config, db: Database) -> None:
@@ -115,7 +182,7 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
     CRAWL_TASK_ID = f"crawl_{args.source}"
 
     # 如果已有取消标记则清除
-    if cancel_file.exists():
+    if cancel_file.exists() and not getattr(args, "preserve_cancel", False):
         cancel_file.unlink()
 
     # 恢复进度
@@ -166,6 +233,9 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
             if saved_ids:
                 batch = [it for it in items if it.get("source_id", "") in saved_ids]
                 await db.save_search_results(batch)
+            queue_job_id = getattr(args, "queue_job_id", 0)
+            if queue_job_id:
+                await db.set_search_cache_origin(args.source, [it.get("source_id", "") for it in items if it.get("source_id")], queue_job_id)
 
             # 获取元数据和封面
             for idx, item in enumerate(items, 1):
@@ -276,163 +346,60 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
         await session.close()
 
 
-async def cmd_update_artists(args: argparse.Namespace, config: Config, db: Database) -> None:
-    """Execute saved search presets in update mode: crawl each preset's keyword, stop at already-downloaded"""
-    import random as _random
-    source = args.source
-    logger = get_logger("ehlib")
-    thumbs_dir = f"data/thumbs/{source}"
-
-    presets = await db.get_search_presets()
-    if not presets:
-        print("No saved search presets found.")
-        return
-
-    print(f"Executing {len(presets)} search presets on {source}")
-    total_new = 0
-
-    for idx, preset in enumerate(presets, 1):
-        name = preset.get("name", "")
-        keyword = preset.get("keyword", "").strip()
-        categories_str = preset.get("categories", "").strip()
-        languages = (preset.get("languages") or "").strip()
-        force = preset.get("force_crawl", 0)
-
-        if not keyword:
-            print(f"\n[{idx}/{len(presets)}] SKIP '{name}': empty keyword")
+async def cmd_crawl_worker(_args: argparse.Namespace, config: Config, db: Database) -> None:
+    """Run queued crawl jobs sequentially in strict FIFO order."""
+    print("Crawl queue worker started.")
+    await db.recover_interrupted_crawl_jobs()
+    while True:
+        job = await db.claim_next_crawl_job()
+        if job is None:
+            if getattr(_args, "once", False):
+                return
+            await sleep(2)
             continue
 
-        cats = None
-        if categories_str:
-            try:
-                cats = [int(c.strip()) for c in categories_str.split(",") if c.strip()]
-            except ValueError:
-                print(f"\n[{idx}/{len(presets)}] SKIP '{name}': invalid categories '{categories_str}'")
-                continue
-
-        mode = "force" if force else "update"
-        lang_filter = _parse_languages(languages)
-        print(f"\n[{idx}/{len(presets)}] {name} ({mode})")
-        print(f"    query: {keyword}")
-        if lang_filter:
-            print(f"    languages: {sorted(lang_filter)}")
-        if cats:
-            print(f"    categories: {cats}")
-        logger.info("Preset '%s': query=%s, cats=%s, langs=%s, mode=%s", name, keyword, cats, sorted(lang_filter), mode)
-
-        progress_file = Path(f"data/update_{source}_{idx}.json")
-        cancel_file = Path(f"data/crawl_cancel_{source}.flag")
-        CRAWL_TASK_ID = f"crawl_{source}"
-
-        if cancel_file.exists():
-            cancel_file.unlink()
-
-        session = SessionManager(config)
+        job_id = int(job["id"])
         try:
-            if source == "exhentai":
-                site = ExhentaiSite(config, session)
-            else:
-                site = NhentaiSite(config, session)
+            categories = [int(value) for value in (job.get("categories") or "").split(",") if value]
+        except ValueError:
+            await db.finish_crawl_job(job_id, "failed", "Invalid category values")
+            continue
 
-            reserved_ids = set()
-            metadata_done = set()
+        crawl_args = argparse.Namespace(
+            source=job.get("source") or "exhentai",
+            query=job.get("query") or "",
+            force=bool(job.get("force_crawl")),
+            categories=categories,
+            languages=job.get("languages") or "",
+            update=(
+                job.get("refresh_target_id") is not None
+                and not bool(job.get("force_crawl"))
+            ),
+            preserve_cancel=True,
+            queue_job_id=job_id,
+        )
+        Path(f"data/crawl_progress_{crawl_args.source}.json").unlink(missing_ok=True)
+        print(f"Queue job #{job_id} started: {crawl_args.query}")
+        try:
+            with _exclusive_crawl_lock(blocking=True):
+                await cmd_crawl(crawl_args, config, db)
+            status = await db.get_crawl_job_status(job_id)
+            final_status = "cancelled" if status == "cancel_requested" else "completed"
+            await db.finish_crawl_job(job_id, final_status)
+            print(f"Queue job #{job_id} {final_status}.")
+        except Exception as exc:
+            await db.finish_crawl_job(job_id, "failed", str(exc))
+            print(f"Queue job #{job_id} failed: {exc}", file=sys.stderr)
 
-            write_progress("crawl", CRAWL_TASK_ID, f"更新: {name[:20]}", 0, idx, "running", f"Preset {idx}/{len(presets)}")
-
-            async def on_page(page: int, items: list[dict], next_cursor: str):
-                if cancel_file.exists():
-                    raise KeyboardInterrupt()
-
-                saved_ids = []
-                for item in items:
-                    sid = item.get("source_id", "")
-                    if sid and sid not in reserved_ids:
-                        reserved_ids.add(sid)
-                        saved_ids.append(sid)
-                if saved_ids:
-                    batch = [it for it in items if it.get("source_id", "") in saved_ids]
-                    await db.save_search_results(batch)
-
-                for item_idx, item in enumerate(items, 1):
-                    if cancel_file.exists():
-                        raise KeyboardInterrupt()
-                    sid = item.get("source_id", "")
-                    if not sid or sid in metadata_done:
-                        continue
-                    try:
-                        item_artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
-                        # 语种后置过滤：Language 属性不在选中集合内则从缓存剔除
-                        if lang_filter and language and language not in lang_filter:
-                            await db.delete_search_cache(source, sid)
-                            if thumb_path:
-                                try:
-                                    Path(thumb_path).unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                            metadata_done.add(sid)
-                            print(f"    Filtered out (language={language}): {sid}")
-                            continue
-                        await db.update_search_cache_metadata(source, sid, item_artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json)
-                        metadata_done.add(sid)
-                    except Exception as e:
-                        print(f"    Metadata failed for {sid}: {e}")
-
-                if not force:
-                    for item in items:
-                        sid = item.get("source_id", "")
-                        if not sid:
-                            continue
-                        try:
-                            existing = await db.get_gallery(source, sid)
-                            if existing and existing.is_complete:
-                                if _is_updated_on_site(existing, item):
-                                    print(f"  Updated on site, not a stop point: {sid} (local={existing.uploaded_at}, site={item.get('uploaded_at', '')})")
-                                    logger.info("Preset '%s' gallery %s updated on site, continue", name, sid)
-                                    continue
-                                print(f"  Up-to-date (already downloaded: {sid})")
-                                logger.info("Preset '%s' up-to-date at %s", name, sid)
-                                return False
-                        except Exception as e:
-                            print(f"  Check failed for {sid}: {e}")
-
-                print(f"  Page {page}: {len(items)} items, total cached: {len(reserved_ids)}")
-                return True
-
-            await site.crawl_all_pages(
-                query=keyword,
-                categories=cats,
-                resume_cursor="",
-                resume_page=1,
-                on_page=on_page,
-                on_wait=None,
-            )
-
-            new_count = len(reserved_ids) - len(metadata_done)
-            total_new += max(0, new_count)
-            print(f"  Done: {len(reserved_ids)} cached, {len(metadata_done)} metadata")
-            logger.info("Preset '%s' done: %d cached", name, len(reserved_ids))
-            remove_progress("crawl", CRAWL_TASK_ID)
-
-        except KeyboardInterrupt:
-            print(f"  Preset '{name}': cancelled.")
-            remove_progress("crawl", CRAWL_TASK_ID)
-            if cancel_file.exists():
-                cancel_file.unlink()
-            return
-        finally:
-            await session.close()
-            if progress_file.exists():
-                progress_file.unlink()
-
-        if idx < len(presets):
-            delay = _random.randint(30, 90)
-            print(f"  Waiting {delay}s before next preset...")
-            await sleep(delay)
-
-    print(f"\nUpdate complete: {len(presets)} presets processed, {total_new} new items cached")
-    if cancel_file.exists():
-        cancel_file.unlink()
-
+async def cmd_update_artists(_args: argparse.Namespace, config: Config, db: Database) -> None:
+    """Enqueue enabled completed-task refresh targets and ensure the queue is drained."""
+    queued = await db.enqueue_enabled_refresh_targets()
+    print(f"Queued {queued} enabled refresh target(s).")
+    try:
+        with _exclusive_crawl_lock(lock_name="crawl-worker.lock"):
+            await cmd_crawl_worker(argparse.Namespace(once=True), config, db)
+    except CrawlLockBusy:
+        print("Crawl queue worker is already running; queued jobs will be processed there.")
 
 async def cmd_verify(args: argparse.Namespace, config: Config, db: Database) -> None:
     """校对缓存的画廊：对比元数据、重下封面"""
@@ -922,6 +889,8 @@ def main() -> None:
     crawl.add_argument("--languages", type=str, default="", help="Comma-separated languages to keep (e.g. chinese,japanese,speechless); filtered by gallery Language attribute after metadata fetch")
     crawl.add_argument("--update", action="store_true", help="Stop when encountering already-downloaded galleries (update mode)")
 
+    subparsers.add_parser("crawl-worker", help="Process queued crawl jobs sequentially")
+
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
     lst.add_argument("--artist", help="Filter by artist")
@@ -990,6 +959,7 @@ def main() -> None:
             "download": cmd_download,
             "batch": cmd_batch,
             "crawl": cmd_crawl,
+            "crawl-worker": cmd_crawl_worker,
             "list": cmd_list,
             "config": cmd_config,
             "retry": cmd_retry,
@@ -1007,7 +977,22 @@ def main() -> None:
         }
         handler = commands.get(args.command)
         if handler:
-            await handler(args, config, db)
+            if args.command == "crawl":
+                try:
+                    with _exclusive_crawl_lock():
+                        await handler(args, config, db)
+                except (CrawlLockBusy, CrawlLockError) as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+            elif args.command == "crawl-worker":
+                try:
+                    with _exclusive_crawl_lock(lock_name="crawl-worker.lock"):
+                        await handler(args, config, db)
+                except CrawlLockBusy:
+                    print("Crawl queue worker is already running.")
+                except CrawlLockError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+            else:
+                await handler(args, config, db)
             return
 
     asyncio.run(run())

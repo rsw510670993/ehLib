@@ -86,6 +86,38 @@ CREATE TABLE IF NOT EXISTS search_presets (
 )
 """
 
+CREATE_REFRESH_TARGETS = """
+CREATE TABLE IF NOT EXISTS refresh_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    preset_id INTEGER UNIQUE,
+    origin_job_id INTEGER DEFAULT NULL,
+    name TEXT NOT NULL,
+    query TEXT NOT NULL,
+    categories TEXT DEFAULT '',
+    languages TEXT DEFAULT '',
+    force_crawl INTEGER DEFAULT 0,
+    completed_at TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT ''
+)
+"""
+CREATE_CRAWL_JOBS = """
+CREATE TABLE IF NOT EXISTS crawl_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL DEFAULT 'exhentai',
+    query TEXT NOT NULL,
+    categories TEXT DEFAULT '',
+    languages TEXT DEFAULT '',
+    force_crawl INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT '',
+    started_at TEXT DEFAULT '',
+    finished_at TEXT DEFAULT '',
+    refresh_target_id INTEGER DEFAULT NULL
+)
+"""
+
 CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_galleries_source ON galleries(source, source_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_type_name ON tags(type, name)",
@@ -112,6 +144,8 @@ class Database:
             await db.execute(CREATE_GALLERY_TAGS)
             await db.execute(CREATE_SEARCH_CACHE)
             await db.execute(CREATE_SEARCH_PRESETS)
+            await db.execute(CREATE_CRAWL_JOBS)
+            await db.execute(CREATE_REFRESH_TARGETS)
             for index_sql in CREATE_INDEXES:
                 await db.execute(index_sql)
             # 兼容旧库：添加可能缺失的列
@@ -120,15 +154,24 @@ class Database:
                     await db.execute(f"ALTER TABLE search_cache ADD COLUMN {col}")
                 except Exception:
                     pass
-            # 兼容旧库：search_presets 增加 languages 列，既存预设补默认语种（中日+speechless）
+            # 兼容旧库：search_presets 增加 languages 列，既存预设补默认语种（中日+speechless+text cleaned）
             try:
                 await db.execute("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL")
             except Exception:
                 pass
             try:
-                await db.execute("UPDATE search_presets SET languages='chinese,japanese,speechless' WHERE languages IS NULL")
+                await db.execute("UPDATE search_presets SET languages='japanese,chinese,speechless,text cleaned' WHERE languages IS NULL")
             except Exception:
                 pass
+            try:
+                await db.execute("ALTER TABLE crawl_jobs ADD COLUMN refresh_target_id INTEGER DEFAULT NULL")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_job_id INTEGER DEFAULT NULL")
+            except Exception:
+                pass
+            await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_targets_origin_job ON refresh_targets(origin_job_id) WHERE origin_job_id IS NOT NULL")
             await db.commit()
 
     async def gallery_exists(self, source: str, source_id: str) -> bool:
@@ -452,6 +495,37 @@ class Database:
             await db.commit()
         return saved
 
+    async def set_search_cache_origin(self, source: str, source_ids: list[str], job_id: int) -> None:
+        if not source_ids:
+            return
+        async with aiosqlite.connect(self._db_path) as db:
+            placeholders = ",".join("?" for _ in source_ids)
+            await db.execute(
+                f"UPDATE search_cache SET origin_job_id=? WHERE source=? AND source_id IN ({placeholders})",
+                [job_id, source, *source_ids],
+            )
+            await db.commit()
+
+    async def register_completed_refresh_target(self, source: str, source_id: str) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT j.* FROM search_cache sc
+                   JOIN crawl_jobs j ON j.id=sc.origin_job_id
+                   WHERE sc.source=? AND sc.source_id=?""",
+                (source, source_id),
+            )
+            job = await cursor.fetchone()
+            if job is None or job["refresh_target_id"] is not None:
+                return False
+            cursor = await db.execute(
+                """INSERT OR IGNORE INTO refresh_targets
+                   (preset_id,origin_job_id,name,query,categories,languages,force_crawl,completed_at,enabled,created_at)
+                   VALUES (NULL,?,?,?,?,?,?,?,1,?)""",
+                (job["id"], f"任务 #{job['id']}", job["query"], job["categories"], job["languages"], job["force_crawl"], datetime.now().isoformat(), datetime.now().isoformat()),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
     async def search_cache_exists(self, source: str, source_id: str) -> bool:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
@@ -571,6 +645,80 @@ class Database:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
+    async def enqueue_enabled_refresh_targets(self) -> int:
+        category_map = {
+            "Misc": 1, "Doujinshi": 2, "Manga": 4, "Artist CG": 8,
+            "Game CG": 16, "Image Set": 32, "Cosplay": 64,
+            "Asian Porn": 128, "Non-H": 256, "Western": 512,
+        }
+        queued = 0
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            active_batch = await db.execute(
+                "SELECT 1 FROM crawl_jobs WHERE refresh_target_id IS NOT NULL "
+                "AND status IN ('pending','running','cancel_requested') LIMIT 1"
+            )
+            if await active_batch.fetchone():
+                await db.rollback()
+                return 0
+            cursor = await db.execute("SELECT * FROM refresh_targets WHERE enabled=1 ORDER BY id")
+            for row in await cursor.fetchall():
+                active = await db.execute(
+                    "SELECT 1 FROM crawl_jobs WHERE refresh_target_id=? AND status IN ('pending','running','cancel_requested') LIMIT 1",
+                    (row["id"],),
+                )
+                if await active.fetchone():
+                    continue
+                category_values = [str(category_map[name.strip()]) for name in (row["categories"] or "").split(",") if name.strip() in category_map]
+                await db.execute(
+                    """INSERT INTO crawl_jobs
+                       (source,query,categories,languages,force_crawl,status,created_at,refresh_target_id)
+                       VALUES ('exhentai',?,?,?,?, 'pending', ?, ?)""",
+                    (row["query"], ",".join(category_values), row["languages"], row["force_crawl"], datetime.now().isoformat(), row["id"]),
+                )
+                queued += 1
+            await db.commit()
+        return queued
+    async def recover_interrupted_crawl_jobs(self) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("UPDATE crawl_jobs SET status='pending', started_at='' WHERE status='running'")
+            await db.execute(
+                "UPDATE crawl_jobs SET status='cancelled', finished_at=? WHERE status='cancel_requested'",
+                (datetime.now().isoformat(),),
+            )
+            await db.commit()
+    async def claim_next_crawl_job(self) -> dict | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT * FROM crawl_jobs WHERE status='pending' ORDER BY id LIMIT 1"
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                await db.commit()
+                return None
+            await db.execute(
+                "UPDATE crawl_jobs SET status='running', started_at=?, error='' WHERE id=?",
+                (datetime.now().isoformat(), row["id"]),
+            )
+            await db.commit()
+            return dict(row)
+
+    async def get_crawl_job_status(self, job_id: int) -> str:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute("SELECT status FROM crawl_jobs WHERE id=?", (job_id,))
+            row = await cursor.fetchone()
+            return str(row[0]) if row else ""
+
+    async def finish_crawl_job(self, job_id: int, status: str, error: str = "") -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "UPDATE crawl_jobs SET status=?, error=?, finished_at=? WHERE id=?",
+                (status, error, datetime.now().isoformat(), job_id),
+            )
+            await db.commit()
     async def delete_search_cache(self, source: str, source_id: str) -> bool:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(

@@ -98,9 +98,9 @@ function _applyCrawlCategoryTags(cats) {
 
 // ─── Language tags (shared builder) ───────────────────────
 // 常用语种固定显示在折叠栏外（speechless 在外，english 收进折叠栏）
-var LANG_PRIORITY = ['japanese', 'chinese', 'speechless', 'n/a'];
-// 默认选中：中日+speechless
-var LANG_DEFAULTS = ['japanese', 'chinese', 'speechless'];
+var LANG_PRIORITY = ['japanese', 'chinese', 'speechless', 'text cleaned'];
+// 默认选中：中日+speechless+text cleaned
+var LANG_DEFAULTS = ['japanese', 'chinese', 'speechless', 'text cleaned'];
 
 async function _fetchSiteLanguages() {
     try {
@@ -199,7 +199,7 @@ function _toggleLanguageTag(el, container, stateSet) {
     }
 }
 
-// 重置为默认语种（中日+speechless）并同步 DOM
+// 重置为默认语种（中日+speechless+text cleaned）并同步 DOM
 function _resetLanguageTags(container, stateSet) {
     stateSet.clear();
     LANG_DEFAULTS.forEach(function(l) { stateSet.add(l); });
@@ -238,7 +238,7 @@ function resetCacheLanguage() {
 }
 
 async function loadCacheLanguages() {
-    // 默认中日+speechless 在 fetch 前就设置好，loadCachePage 能立刻生效
+    // 默认中日+speechless+text cleaned 在 fetch 前就设置好，loadCachePage 能立刻生效
     _cacheLanguages = new Set(LANG_DEFAULTS);
     var langs = await _fetchSiteLanguages();
     _buildLanguageTags(document.getElementById('cache_language_tags'), langs, _cacheLanguages, cacheToggleLanguage);
@@ -312,6 +312,18 @@ function renderCacheBatchBar() {
         '</div>';
 }
 
+function normalizeCacheTitle(title) {
+    return String(title || '').replace(/\s+/g, ' ').trim();
+}
+
+function getCacheDisplayTitles(gallery) {
+    var original = normalizeCacheTitle(gallery.title);
+    var japanese = normalizeCacheTitle(gallery.title_jp);
+    return {
+        primary: japanese || original || '(无标题)',
+        secondary: japanese && original && japanese !== original ? original : ''
+    };
+}
 function renderCacheGrid() {
     const body = document.getElementById('cache_grid_body');
     if (!_cacheResults || _cacheResults.length === 0) {
@@ -323,7 +335,7 @@ function renderCacheGrid() {
     renderCacheBatchBar();
     body.innerHTML = '<div class="gallery-flex-grid" id="cache_grid">' +
         _cacheResults.map(function(g, idx) {
-            var displayTitle = g.title || '(无标题)';
+            var displayTitles = getCacheDisplayTitles(g);
             var catColor = CAT_COLORS[g.category] || '#6c757d';
             var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(g.category) + '</span>' : '';
             var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
@@ -337,6 +349,7 @@ function renderCacheGrid() {
             var downloadBtn = g.is_local
                 ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="阅读"><i class="fas fa-book-open"></i></button>'
                 : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
+            var sourceBtn = '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>';
             return '<div>' +
                 '<div class="card gallery-card">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0;cursor:pointer" onclick="toggleCacheSelect(\'' + escapedSid + '\',null,event)">' +
@@ -345,14 +358,17 @@ function renderCacheGrid() {
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
                 '<div class="card-body px-2 py-1">' +
-                '<div class="small title-clamp" style="cursor:pointer;color:var(--bs-link-color)" title="点击查看详情" onclick="showCacheDetail(' + idx + ')">' + escapeHtml(displayTitle) + '</div>' +
+                '<div style="cursor:pointer" title="点击查看详情" onclick="showCacheDetail(' + idx + ')">' +
+                '<div class="small title-clamp" style="color:var(--bs-link-color)">' + escapeHtml(displayTitles.primary) + '</div>' +
+                (displayTitles.secondary ? '<div class="text-muted text-truncate" style="font-size:.7rem" title="' + escapeAttr(displayTitles.secondary) + '">' + escapeHtml(displayTitles.secondary) + '</div>' : '') +
+                '</div>' +
                 '<div class="d-flex justify-content-between align-items-center gap-1" style="margin-top:2px">' +
                 catBadge +
                 langBadge +
                 '</div>' +
                 '<div class="d-flex justify-content-between align-items-center" style="margin-top:2px">' +
                 '<span class="small text-muted">' + (g.total_pages || 0) + 'p</span>' +
-                downloadBtn +
+                '<span class="d-inline-flex gap-1">' + downloadBtn + sourceBtn + '</span>' +
                 '</div>' +
                 '</div>' +
                 '</div>' +
@@ -385,12 +401,20 @@ function renderCachePagination() {
     html += '<li class="page-item' + (_cachePage >= totalPages ? ' disabled' : '') + '"><a class="page-link" href="#" onclick="event.preventDefault();loadCachePage(' + (_cachePage + 1) + ')">&raquo;</a></li>';
     html += '</ul></nav>';
     html += '<span class="text-muted small me-2">共 ' + _cacheTotal + ' 条</span>';
-    html += '<div class="input-group input-group-sm" style="width:130px"><span class="input-group-text">跳转</span>' +
-        '<input type="number" class="form-control" id="cache_page_jump" value="' + _cachePage + '" min="1" max="' + totalPages + '" onkeydown="if(event.key===\'Enter\'){var p=parseInt(this.value);if(p>=1&&p<=' + totalPages + ')loadCachePage(p);}">' +
+    html += '<div class="input-group input-group-sm" style="width:150px"><span class="input-group-text">跳转</span>' +
+        '<input type="number" class="form-control" id="cache_page_jump" value="' + _cachePage + '" min="1" max="' + totalPages + '" onkeydown="if(event.key===\'Enter\')cacheJumpPage(' + totalPages + ')">' +
+        '<button type="button" class="btn btn-outline-primary" onclick="cacheJumpPage(' + totalPages + ')">确定</button>' +
         '</div>';
     html += '</div>';
     el.innerHTML = html;
 }
+
+function cacheJumpPage(totalPages) {
+    var input = document.getElementById('cache_page_jump');
+    var page = input ? parseInt(input.value, 10) : 0;
+    if (page >= 1 && page <= totalPages) loadCachePage(page);
+}
+
 
 function cacheSearch() {
     _cachePage = 1;
@@ -440,6 +464,41 @@ function cacheClearFilter() {
 
 // ─── Crawl dialog category toggles ────────────────────────
 
+async function loadCrawlQueue() {
+    var el = document.getElementById('crawl_queue_list');
+    if (!el) return;
+    var res = await api('crawl_queue');
+    if (!res.ok) {
+        el.innerHTML = '<span class="text-danger">' + escapeHtml(res.error || '队列读取失败') + '</span>';
+        return;
+    }
+    var jobs = res.jobs || [];
+    if (!jobs.length) {
+        el.innerHTML = '<span class="text-muted">暂无任务</span>';
+        return;
+    }
+    var labels = { pending:'排队中', running:'执行中', cancel_requested:'停止中' };
+    var colors = { pending:'warning', running:'primary', cancel_requested:'danger' };
+    el.innerHTML = '<div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">' +
+        '<thead><tr><th>顺序</th><th>状态</th><th>关键词</th><th>语言</th><th>创建时间</th><th></th></tr></thead><tbody>' +
+        jobs.map(function(job, index) {
+            var statusText = labels[job.status] || job.status;
+            var canStop = job.status === 'pending' || job.status === 'running';
+            return '<tr><td title="任务 #' + job.id + '">' + (index + 1) + '</td>' +
+                '<td><span class="badge bg-' + (colors[job.status] || 'secondary') + '">' + escapeHtml(statusText) + '</span></td>' +
+                '<td class="text-break">' + escapeHtml(job.query || '') + '</td>' +
+                '<td class="text-break">' + escapeHtml(job.languages || '全部') + '</td>' +
+                '<td class="text-nowrap">' + escapeHtml(job.created_at || '') + '</td>' +
+                '<td>' + (canStop ? '<button class="btn btn-sm btn-outline-danger" onclick="stopCrawlJob(' + job.id + ')"><i class="fas fa-stop"></i></button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+}
+
+async function stopCrawlJob(jobId) {
+    if (!await confirmDialog({ title: '停止爬取任务', message: '只停止任务 #' + jobId + '，队列中的其他任务会继续执行。', okText: '停止', okClass: 'btn-danger' })) return;
+    var res = await api('stop_crawl', { form: { action: 'stop_crawl', job_id: jobId } });
+    showToast(res.ok ? '停止请求已提交' : (res.error || '停止失败'), res.ok ? 'success' : 'danger');
+    loadCrawlQueue();
+}
 // ─── Crawl action ─────────────────────────────────────────
 
 async function startCrawl() {
@@ -461,7 +520,8 @@ async function startCrawl() {
     showToast('正在启动爬取任务...', 'info');
     var res = await api('crawl', { form: form });
     if (res.ok) {
-        showToast('爬取任务已启动，在底部进度栏查看进度', 'success');
+        showToast('爬取任务已加入队列，当前排队位置：' + (res.position || 1), 'success');
+        loadCrawlQueue();
         _crawlActive = true;
         _crawlEverSeen = false;
         startProgressPoller();
@@ -570,7 +630,7 @@ async function applySearchPreset(name) {
     document.getElementById('crawl_force').classList.toggle('active', !!preset.force_crawl);
     var cats = preset.categories ? preset.categories.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s; }) : [];
     _applyCrawlCategoryTags(cats);
-    // 旧预设无 languages 字段时用默认（中日+speechless），空串表示不限制
+    // 旧预设无 languages 字段时用默认（中日+speechless+text cleaned），空串表示不限制
     var presetLangs;
     if (preset.languages === null || preset.languages === undefined) {
         presetLangs = LANG_DEFAULTS.slice();
@@ -699,7 +759,6 @@ async function startVerify() {
     if (res.ok) {
         showToast(res.output || '校对任务已启动', 'success');
         renderVerifyStatus({ running: true, progress: { total_pages: 0, current: 0, message: '启动中...', status: 'running' } });
-        setTimeout(pollVerifyStatus, 5000);
     } else {
         showToast(res.error || res.output || '启动失败', 'danger');
     }
@@ -725,7 +784,8 @@ function showCacheDetail(idx) {
     var titleEl = document.getElementById('cache_detail_title');
     var bodyEl = document.getElementById('cache_detail_body');
     if (!bodyEl) return;
-    if (titleEl) titleEl.textContent = gallery.title || '(无标题)';
+    var detailTitles = getCacheDisplayTitles(gallery);
+    if (titleEl) titleEl.textContent = detailTitles.primary;
 
     var tagsHtml = '';
     var tagSource = gallery.tags_cn || gallery.tags;
@@ -765,8 +825,8 @@ function showCacheDetail(idx) {
         '</div>' +
         '<div class="col-md-8">' +
         '<table class="table table-sm table-borderless mb-0">' +
-        '<tr><td class="text-muted" style="width:80px">标题</td><td>' + escapeHtml(gallery.title || '') + '</td></tr>' +
-        (gallery.title_jp ? '<tr><td class="text-muted">日文标题</td><td>' + escapeHtml(gallery.title_jp) + '</td></tr>' : '') +
+        '<tr><td class="text-muted" style="width:80px">标题</td><td>' + escapeHtml(detailTitles.primary) + '</td></tr>' +
+        (detailTitles.secondary ? '<tr><td class="text-muted">原标题</td><td><small class="text-muted">' + escapeHtml(detailTitles.secondary) + '</small></td></tr>' : '') +
         (gallery.artist ? '<tr><td class="text-muted">作者</td><td>' + escapeHtml(gallery.artist) + '</td></tr>' : '') +
         (gallery.group_name ? '<tr><td class="text-muted">社团</td><td>' + escapeHtml(gallery.group_name) + '</td></tr>' : '') +
                 '<tr><td class="text-muted">分类</td><td><span class="badge" style="background:' + catColor + '">' + escapeHtml(gallery.category || '') + '</span></td></tr>' +
@@ -788,12 +848,6 @@ function showCacheDetail(idx) {
 
 async function pollVerifyStatus() {
     var data = await api('verify_status&source=exhentai');
-    var wasRunning = pollVerifyStatus._running;
     pollVerifyStatus._running = data && data.running;
     renderVerifyStatus(data);
-    if (data && data.running) {
-        setTimeout(pollVerifyStatus, 8000);
-    } else if (wasRunning && !data.running) {
-        loadCachePage(_cachePage || 1);
-    }
 }
