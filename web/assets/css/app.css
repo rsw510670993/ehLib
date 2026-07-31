@@ -232,6 +232,31 @@ button.cat-tag[data-cat="all"]:not(.active):hover {
 .language-collapse-content.collapsed { display: none; }
 .language-collapse-toggle { --cat-color: #9ca3af !important; }
 
+/* ─── Bookmark Collapse ─── */
+.bookmark-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .2rem .4rem;
+    font-size: .8rem;
+    color: #6b7280;
+    cursor: pointer;
+    user-select: none;
+    border-radius: 3px;
+    transition: background .15s ease;
+}
+.bookmark-header:hover {
+    background: #e5e7eb;
+}
+.bookmark-header .badge {
+    font-size: .68rem;
+    font-weight: 500;
+    vertical-align: middle;
+}
+.bookmark-content.collapsed {
+    display: none;
+}
+
 /* ─── Saved Search Tags ─── */
 .saved-search-tag {
     display: inline-flex;
@@ -280,4 +305,24 @@ button.cat-tag[data-cat="all"]:not(.active):hover {
     #confirm_modal .modal-body { font-size: .92rem; }
     #confirm_modal .modal-footer { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
     #confirm_modal .modal-footer .btn { width: 100%; margin: 0; }
+}
+/* Hide number spinners only on the cache page jump input. */
+#cache_page_jump {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+#cache_page_jump::-webkit-inner-spin-button,
+#cache_page_jump::-webkit-outer-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+}
+.verify-search-results {
+    position: absolute;
+    z-index: 1050;
+    top: calc(100% + .25rem);
+    left: 0;
+    right: 0;
+    max-height: 300px;
+    overflow-y: auto;
+    box-shadow: 0 .5rem 1rem rgba(0, 0, 0, .15);
 }

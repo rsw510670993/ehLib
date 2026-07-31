@@ -38,7 +38,7 @@ function normalize_path($path) {
         }
         return $prefix . DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $normalized);
     }
-    if (str_starts_with($path, DIRECTORY_SEPARATOR)) {
+    if (substr($path, 0, strlen(DIRECTORY_SEPARATOR)) === DIRECTORY_SEPARATOR) {
         $parts = preg_split('/[\\\\\/]+/', ltrim($path, '\\/'));
         $normalized = [];
         foreach ($parts as $part) {
@@ -68,7 +68,7 @@ function resolve_download_path() {
     global $root;
     $config = read_config();
     $download_path = $config['download']['path'] ?? './downloads';
-    if (preg_match('/^[A-Za-z]:[\\\\\/]/', $download_path) || str_starts_with($download_path, '/') || str_starts_with($download_path, '\\')) {
+    if (preg_match('/^[A-Za-z]:[\\\\\/]/', $download_path) || substr($download_path, 0, 1) === '/' || substr($download_path, 0, 1) === '\\') {
         return normalize_path($download_path);
     }
     return normalize_path($root . DIRECTORY_SEPARATOR . $download_path);
@@ -77,7 +77,8 @@ function resolve_download_path() {
 function is_path_within($child, $parent) {
     $child = rtrim(strtolower(normalize_path($child)), DIRECTORY_SEPARATOR);
     $parent = rtrim(strtolower(normalize_path($parent)), DIRECTORY_SEPARATOR);
-    return $child === $parent || str_starts_with($child, $parent . DIRECTORY_SEPARATOR);
+    $parent_with_sep = $parent . DIRECTORY_SEPARATOR;
+    return $child === $parent || substr($child, 0, strlen($parent_with_sep)) === $parent_with_sep;
 }
 
 
@@ -104,7 +105,7 @@ function public_gallery_image_url($source, $source_id, $file) {
     if ($source === '' || $source_id === '' || $file === '') return '';
     $public_source_id = str_replace('/', '_', $source_id);
     foreach ([$source, $public_source_id, $file] as $part) {
-        if (str_contains($part, '/') || str_contains($part, '\\') || $part === '.' || $part === '..') return '';
+        if (strpos($part, '/') !== false || strpos($part, '\\') !== false || $part === '.' || $part === '..') return '';
     }
     return 'ehlib_images/' . rawurlencode($source) . '/' . rawurlencode($public_source_id) . '/' . rawurlencode($file);
 }
@@ -299,7 +300,8 @@ function run_python_background($args, $pid_file = null) {
     $script_file = $data_dir . '/bg_' . $tag . '.sh';
     $log_file = $data_dir . '/bg_' . $tag . '.log';
     $script = '#!/bin/sh' . "\n"
-        . 'export TZ=Asia/Shanghai' . "\n"
+        . 'export TZ=Asia/Tokyo' . "\n"
+        . 'export PYTHONUNBUFFERED=1' . "\n"
         . 'echo $$ > ' . escapeshellarg($pid_file) . "\n"
         . 'cd ' . escapeshellarg($root) . "\n"
         . $cmd_str . ' >> ' . escapeshellarg($log_file) . ' 2>&1' . "\n"
@@ -313,6 +315,23 @@ function run_python_background($args, $pid_file = null) {
     usleep(500000);
     $pid = is_file($pid_file) ? trim(file_get_contents($pid_file)) : 'unknown';
     return $pid;
+}
+
+function is_crawl_worker_process($pid) {
+    $pid = (int)$pid;
+    if ($pid <= 0) return false;
+    if (DIRECTORY_SEPARATOR === '\\') {
+        $out = [];
+        exec('tasklist /FI "PID eq ' . $pid . '" /NH 2>nul', $out);
+        return count($out) > 1;
+    }
+    $proc_dir = '/proc/' . $pid;
+    if (!is_dir($proc_dir)) return false;
+    $cmdline = @file_get_contents($proc_dir . '/cmdline');
+    if ($cmdline === false || $cmdline === '') return true;
+    $cmdline = str_replace("\0", ' ', $cmdline);
+    return strpos($cmdline, 'bg_crawl_worker_pid.sh') !== false
+        || (strpos($cmdline, 'ehlib') !== false && strpos($cmdline, 'crawl-worker') !== false);
 }
 
 function run_python_locked($args, $timeout = 120) {
@@ -347,6 +366,66 @@ function run_python_locked($args, $timeout = 120) {
         @fclose($lock);
     }
 }
+
+function translate_search_preset_name($query) {
+    global $root;
+    $query = trim((string)$query);
+    if ($query === '') return '';
+    static $loaded = false;
+    static $ns_map = [];
+    static $ns_alias = ['category' => 'reclass'];
+    static $ns_display = [
+        'artist' => '作者',
+        'character' => '角色',
+        'cosplayer' => 'Coser',
+        'female' => '女性',
+        'group' => '社团',
+        'language' => '语言',
+        'male' => '男性',
+        'mixed' => '混合',
+        'other' => '其他',
+        'parody' => '原作',
+        'reclass' => '分类',
+        'category' => '分类',
+    ];
+
+    if (!$loaded) {
+        $loaded = true;
+        $db_path = $root . '/data/eh_tag_translation.json';
+        if (is_file($db_path)) {
+            $raw = @json_decode((string)@file_get_contents($db_path), true);
+            $entries = is_array($raw) && isset($raw['data']) && is_array($raw['data']) ? $raw['data'] : $raw;
+            if (is_array($entries)) {
+                foreach ($entries as $entry) {
+                    $ns_name = $entry['namespace'] ?? '';
+                    $ns_data = $entry['data'] ?? null;
+                    if (!$ns_name || !is_array($ns_data)) continue;
+                    $tag_map = [];
+                    foreach ($ns_data as $tag_key => $tag_val) {
+                        if (is_array($tag_val) && !empty($tag_val['name'])) {
+                            $tag_map[strtolower((string)$tag_key)] = (string)$tag_val['name'];
+                        }
+                    }
+                    $ns_map[$ns_name] = $tag_map;
+                }
+            }
+        }
+    }
+
+    return preg_replace_callback('/(?<!\S)(-?)([a-zA-Z_]+):(?:"([^"]+)"|(\S+))/', function ($m) use ($ns_map, $ns_alias, $ns_display) {
+        $ns = $m[2];
+        $raw_name = $m[3] !== '' ? $m[3] : $m[4];
+        $name = substr($raw_name, -1) === '$' ? substr($raw_name, 0, -1) : $raw_name;
+        $lookup_ns = $ns_alias[$ns] ?? $ns;
+        $translated = $ns_map[$lookup_ns][strtolower($name)] ?? null;
+        $label = $ns_display[$ns] ?? ($ns_display[$lookup_ns] ?? $ns);
+        if (!$translated && $label === $ns) {
+            return $m[0];
+        }
+        return $m[1] . $label . ':' . ($translated ?: $name);
+    }, $query);
+}
+
 function read_config() {
     global $root;
     $path = $root . '/config.yaml';
@@ -1083,66 +1162,125 @@ try {
 
         case 'crawl':
             $source = $_POST['source'] ?? 'exhentai';
-            $query = $_POST['query'] ?? '';
+            $query = trim($_POST['query'] ?? '');
             $force = !empty($_POST['force']);
             $categories = $_POST['categories'] ?? '';
             $languages = $_POST['languages'] ?? '';
             if (!$query) error_exit('Query required');
-            // 检查是否已有爬取进程在运行
-            $pid_file = $root . '/data/crawl_pid_' . $source . '.txt';
-            if (is_file($pid_file)) {
-                $old_pid = trim(file_get_contents($pid_file));
-                if ($old_pid && is_dir('/proc/' . $old_pid)) {
-                    error_exit('已有爬取任务在运行 (PID: ' . $old_pid . ')，请先终止或等待完成');
-                }
-            }
-            $args = ['crawl', $source, '--query', $query];
-            if ($force) $args[] = '--force';
-            if ($languages !== '') {
-                $args[] = '--languages';
-                $args[] = $languages;
-            }
-            // convert category names to ExHentai bitmask
             $cat_map = ['Misc'=>1,'Doujinshi'=>2,'Manga'=>4,'Artist CG'=>8,'Game CG'=>16,'Image Set'=>32,'Cosplay'=>64,'Asian Porn'=>128,'Non-H'=>256,'Western'=>512];
-            if ($categories !== '') {
-                $args[] = '--categories';
-                if ($categories === 'all') {
-                    $args[] = (string)array_sum(array_values($cat_map));
-                } else {
-                    foreach (explode(',', $categories) as $c) {
-                        $c = trim($c);
-                        if (isset($cat_map[$c])) $args[] = (string)$cat_map[$c];
-                    }
+            $category_values = [];
+            if ($categories === 'all') {
+                $category_values[] = array_sum(array_values($cat_map));
+            } elseif ($categories !== '') {
+                foreach (explode(',', $categories) as $category) {
+                    $category = trim($category);
+                    if (isset($cat_map[$category])) $category_values[] = $cat_map[$category];
                 }
             }
-            $pid = run_python_background($args, $pid_file);
-            json_exit(['output' => '爬取任务已在后台启动 (PID: ' . $pid . ')'], true);
+            try {
+                $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec("CREATE TABLE IF NOT EXISTS crawl_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL DEFAULT 'exhentai', query TEXT NOT NULL, categories TEXT DEFAULT '', languages TEXT DEFAULT '', force_crawl INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', error TEXT DEFAULT '', created_at TEXT NOT NULL DEFAULT '', started_at TEXT DEFAULT '', finished_at TEXT DEFAULT '')");
+                $stmt = $pdo->prepare("INSERT INTO crawl_jobs (source,query,categories,languages,force_crawl,status,created_at) VALUES (?,?,?,?,?,'pending',datetime('now','localtime'))");
+                $stmt->execute([$source, $query, implode(',', $category_values), $languages, $force ? 1 : 0]);
+                $job_id = (int)$pdo->lastInsertId();
+                $stmt = $pdo->prepare("SELECT COUNT(*) FROM crawl_jobs WHERE status='pending' AND id<=?");
+                $stmt->execute([$job_id]);
+                $position = (int)$stmt->fetchColumn();
+                $worker_pid_file = $root . '/data/crawl_worker_pid.txt';
+                $worker_running = false;
+                if (is_file($worker_pid_file)) {
+                    $worker_pid = trim((string)file_get_contents($worker_pid_file));
+                    $worker_running = is_crawl_worker_process($worker_pid);
+                }
+                if (!$worker_running) {
+                    @unlink($worker_pid_file);
+                    run_python_background(['crawl-worker'], $worker_pid_file);
+                }
+                json_exit(['message' => '爬取任务已加入队列', 'job_id' => $job_id, 'position' => $position]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'crawl_queue':
+            try {
+                $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec("CREATE TABLE IF NOT EXISTS crawl_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL DEFAULT 'exhentai', query TEXT NOT NULL, categories TEXT DEFAULT '', languages TEXT DEFAULT '', force_crawl INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', error TEXT DEFAULT '', created_at TEXT NOT NULL DEFAULT '', started_at TEXT DEFAULT '', finished_at TEXT DEFAULT '')");
+                $jobs = $pdo->query("SELECT * FROM crawl_jobs WHERE status IN ('pending','running','cancel_requested') ORDER BY id")->fetchAll();
+                json_exit(['jobs' => $jobs]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'crawl_history':
+            try {
+                $page = max(1, (int)($_GET['page'] ?? $_POST['page'] ?? 1));
+                $per_page = max(10, min(100, (int)($_GET['per_page'] ?? $_POST['per_page'] ?? 50)));
+                $offset = ($page - 1) * $per_page;
+                $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec("CREATE TABLE IF NOT EXISTS crawl_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL DEFAULT 'exhentai', query TEXT NOT NULL, categories TEXT DEFAULT '', languages TEXT DEFAULT '', force_crawl INTEGER DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending', error TEXT DEFAULT '', created_at TEXT NOT NULL DEFAULT '', started_at TEXT DEFAULT '', finished_at TEXT DEFAULT '')");
+                $pdo->exec("CREATE TABLE IF NOT EXISTS refresh_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, preset_id INTEGER UNIQUE, name TEXT NOT NULL, query TEXT NOT NULL, categories TEXT DEFAULT '', languages TEXT DEFAULT '', force_crawl INTEGER DEFAULT 0, completed_at TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')");
+                $columns = $pdo->query("PRAGMA table_info(crawl_jobs)")->fetchAll();
+                $has_refresh_target_id = false;
+                foreach ($columns as $column) {
+                    if (($column['name'] ?? '') === 'refresh_target_id') $has_refresh_target_id = true;
+                }
+                if (!$has_refresh_target_id) $pdo->exec("ALTER TABLE crawl_jobs ADD COLUMN refresh_target_id INTEGER DEFAULT NULL");
+                $total = (int)$pdo->query("SELECT COUNT(*) FROM crawl_jobs WHERE status IN ('completed','failed','cancelled')")->fetchColumn();
+                $stmt = $pdo->prepare(
+                    "SELECT j.*,rt.name AS refresh_target_name
+                     FROM crawl_jobs j
+                     LEFT JOIN refresh_targets rt ON rt.id=j.refresh_target_id
+                     WHERE j.status IN ('completed','failed','cancelled')
+                     ORDER BY COALESCE(NULLIF(j.finished_at,''),j.created_at) DESC,j.id DESC
+                     LIMIT :limit OFFSET :offset"
+                );
+                $stmt->bindValue(':limit', $per_page, PDO::PARAM_INT);
+                $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+                $stmt->execute();
+                json_exit(['jobs' => $stmt->fetchAll(), 'page' => $page, 'per_page' => $per_page, 'total' => $total]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'clear_crawl_history':
+            $scope = $_POST['scope'] ?? $_GET['scope'] ?? '';
+            if (!in_array($scope, ['failed', 'all'], true)) error_exit('Invalid history scope');
+            try {
+                $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
+                if ($scope === 'failed') {
+                    $stmt = $pdo->prepare("DELETE FROM crawl_jobs WHERE status IN ('failed','cancelled')");
+                } else {
+                    $stmt = $pdo->prepare("DELETE FROM crawl_jobs WHERE status IN ('completed','failed','cancelled')");
+                }
+                $stmt->execute();
+                $deleted = $stmt->rowCount();
+                json_exit(['message' => '已清理 ' . $deleted . ' 条爬取历史', 'deleted' => $deleted]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'translate_search_preset_name':
+            $query = trim($_POST['query'] ?? $_GET['query'] ?? '');
+            json_exit(['name' => $query === '' ? '' : translate_search_preset_name($query)]);
             break;
 
         case 'stop_crawl':
-            $source = $_POST['source'] ?? $_GET['source'] ?? 'exhentai';
-            $pid_file = $root . '/data/crawl_pid_' . $source . '.txt';
-            $cancel_file = $root . '/data/crawl_cancel_' . $source . '.flag';
-            // 先写取消标记（Python 端会检测）
-            file_put_contents($cancel_file, '1');
-            // 再杀进程
-            if (is_file($pid_file)) {
-                $pid = trim(file_get_contents($pid_file));
-                if ($pid) {
-                    if (DIRECTORY_SEPARATOR === '\\') {
-                        exec('taskkill /F /PID ' . (int)$pid . ' 2>nul');
-                    } else {
-                        exec('kill -9 ' . (int)$pid . ' 2>/dev/null');
-                    }
+            $job_id = (int)($_POST['job_id'] ?? $_GET['job_id'] ?? 0);
+            if (!$job_id) error_exit('job_id required');
+            try {
+                $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->prepare('SELECT id,source,status FROM crawl_jobs WHERE id=?');
+                $stmt->execute([$job_id]);
+                $job = $stmt->fetch();
+                if (!$job) error_exit('Queue job not found');
+                if ($job['status'] === 'pending') {
+                    $pdo->prepare("UPDATE crawl_jobs SET status='cancelled',finished_at=datetime('now','localtime') WHERE id=? AND status='pending'")->execute([$job_id]);
+                } elseif ($job['status'] === 'running') {
+                    $pdo->prepare("UPDATE crawl_jobs SET status='cancel_requested' WHERE id=? AND status='running'")->execute([$job_id]);
+                    file_put_contents($root . '/data/crawl_cancel_' . $job['source'] . '.flag', '1');
                 }
-                @unlink($pid_file);
-            }
-            // 清理进度文件
-            $progress_dir = $root . '/data/progress';
-            foreach (glob($progress_dir . '/crawl__crawl_' . $source . '*.json') as $f) {
-                @unlink($f);
-            }
-            json_exit(['message' => '爬取任务已终止'], true);
+                json_exit(['message' => '任务停止请求已提交', 'job_id' => $job_id]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
             break;
 
         case 'start_verify':
@@ -1277,6 +1415,29 @@ try {
             ]);
             break;
 
+        case 'refresh_targets':
+            try {
+                $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec("CREATE TABLE IF NOT EXISTS refresh_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, preset_id INTEGER UNIQUE, name TEXT NOT NULL, query TEXT NOT NULL, categories TEXT DEFAULT '', languages TEXT DEFAULT '', force_crawl INTEGER DEFAULT 0, completed_at TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')");
+                $targets = $pdo->query('SELECT id,preset_id,name,query,categories,languages,force_crawl,completed_at,enabled FROM refresh_targets ORDER BY completed_at DESC,id DESC')->fetchAll();
+                json_exit(['targets' => $targets]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'toggle_refresh_target':
+            $id = (int)($_POST['id'] ?? $_GET['id'] ?? 0);
+            $enabled = !empty($_POST['enabled']) ? 1 : 0;
+            if (!$id) error_exit('id required');
+            try {
+                $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
+                $stmt = $pdo->prepare('UPDATE refresh_targets SET enabled=? WHERE id=?');
+                $stmt->execute([$enabled, $id]);
+                if ($stmt->rowCount() < 1) error_exit('Refresh target not found or unchanged');
+                json_exit(['message' => $enabled ? '已开启定期刷新' : '已关闭定期刷新']);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
         case 'parse_cookie_string':
             $cookie_string = $_POST['cookie_string'] ?? $_GET['cookie_string'] ?? '';
             if (!$cookie_string) error_exit('cookie_string required');
@@ -1299,12 +1460,15 @@ try {
             break;
 
         case 'save_search_preset':
-            $name = $_POST['name'] ?? '';
-            $keyword = $_POST['keyword'] ?? '';
+            $name = trim($_POST['name'] ?? '');
+            $keyword = trim($_POST['keyword'] ?? '');
             $categories_raw = $_POST['categories'] ?? '';
             $languages_raw = $_POST['languages'] ?? '';
             $force = !empty($_POST['force']);
             if (!$name) error_exit('名称不能为空');
+            if ($keyword !== '' && ($name === $keyword || $name === '未命名')) {
+                $name = translate_search_preset_name($keyword);
+            }
             $categories = '';
             if ($categories_raw !== '') {
                 $parsed = json_decode($categories_raw, true);

@@ -374,8 +374,10 @@ function trackDownloadProgress(source, sourceId) {
 }
 
 async function stopCrawl() {
-    if (!await confirmDialog({ title: '终止爬取', message: '确定终止正在运行的后台爬取任务吗？', okText: '终止', okClass: 'btn-danger' })) return;
-    await api('stop_crawl', { form: { action: 'stop_crawl', source: 'exhentai' } });
+    var queue = await api('crawl_queue');
+    var running = queue.ok ? (queue.jobs || []).find(function(job) { return job.status === 'running'; }) : null;
+    if (!running) { showToast('当前没有正在执行的爬取任务', 'warning'); return; }
+    await stopCrawlJob(running.id);
     checkDownloadProgress();
 }
 

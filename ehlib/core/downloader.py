@@ -65,6 +65,7 @@ class Downloader:
                 gallery.is_complete = True
                 gallery.downloaded_at = existing.downloaded_at
                 await self._db.save_gallery(gallery)
+                await self._db.register_completed_refresh_target(source, gallery.source_id)
                 return gallery
 
         gallery_dir = self._file_manager.create_gallery_dir(source, gallery.source_id, gallery.title)
@@ -110,6 +111,7 @@ class Downloader:
         gallery.updated_at = datetime.now().isoformat()
 
         await self._db.save_gallery(gallery)
+        await self._db.register_completed_refresh_target(source, gallery.source_id)
         self._save_metadata_file(gallery, gallery_dir)
         remove_progress(source, gallery.source_id)
 
