@@ -102,7 +102,7 @@ async function loadRefreshTargets() {
             '<td>' + escapeHtml(target.name || '') + '</td>' +
             '<td class="text-break"><code>' + escapeHtml(target.query || '') + '</code></td>' +
             '<td class="text-break">' + escapeHtml(target.languages || '全部') + '</td>' +
-            '<td class="text-nowrap">' + escapeHtml(target.completed_at || '') + '</td>' +
+            '<td class="text-nowrap">' + escapeHtml(formatCrawlHistoryTime(target.completed_at || '')) + '</td>' +
             '</tr>').join('') + '</tbody></table></div>';
 }
 

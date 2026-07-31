@@ -576,7 +576,14 @@ async function saveSearchPreset() {
     var cats = getCrawlSelectedCategories();
     var langs = getCrawlSelectedLanguages();
     var force = document.getElementById('crawl_force').classList.contains('active');
-    var name = await promptDialog({ title: '保存检索条件', message: '为当前检索条件命名：', defaultValue: keyword || '未命名' });
+    var defaultName = keyword || '未命名';
+    if (keyword) {
+        var translated = await api('translate_search_preset_name', {
+            form: { action: 'translate_search_preset_name', query: keyword }
+        });
+        if (translated.ok && translated.name) defaultName = translated.name;
+    }
+    var name = await promptDialog({ title: '保存检索条件', message: '为当前检索条件命名：', defaultValue: defaultName });
     if (!name) return;
     var res = await api('save_search_preset', {
         form: {
@@ -596,14 +603,32 @@ async function saveSearchPreset() {
     }
 }
 
+var _bookmarkCollapsed = false;
+
+function toggleBookmarkCollapse() {
+    _bookmarkCollapsed = !_bookmarkCollapsed;
+    var row = document.getElementById('saved_presets_row');
+    var icon = document.getElementById('bookmark_collapse_icon');
+    if (_bookmarkCollapsed) {
+        row.classList.add('collapsed');
+        icon.className = 'fas fa-chevron-down';
+    } else {
+        row.classList.remove('collapsed');
+        icon.className = 'fas fa-chevron-up';
+    }
+}
+
 async function loadSearchPresets() {
     var row = document.getElementById('saved_presets_row');
+    var count = document.getElementById('bookmark_count');
     if (!row) return;
     var res = await api('list_search_presets', { params: { action: 'list_search_presets' } });
     if (!res.ok || !res.presets || res.presets.length === 0) {
         row.innerHTML = '';
+        if (count) count.textContent = '0';
         return;
     }
+    if (count) count.textContent = res.presets.length;
     var html = '<div class="d-inline-flex flex-wrap gap-1 align-items-center">';
     res.presets.forEach(function(p) {
         var cats = p.categories || '';
@@ -618,6 +643,7 @@ async function loadSearchPresets() {
     });
     html += '</div>';
     row.innerHTML = html;
+    if (_bookmarkCollapsed) row.classList.add('collapsed');
 }
 
 async function applySearchPreset(name) {

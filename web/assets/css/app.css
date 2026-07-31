@@ -232,6 +232,31 @@ button.cat-tag[data-cat="all"]:not(.active):hover {
 .language-collapse-content.collapsed { display: none; }
 .language-collapse-toggle { --cat-color: #9ca3af !important; }
 
+/* ─── Bookmark Collapse ─── */
+.bookmark-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .2rem .4rem;
+    font-size: .8rem;
+    color: #6b7280;
+    cursor: pointer;
+    user-select: none;
+    border-radius: 3px;
+    transition: background .15s ease;
+}
+.bookmark-header:hover {
+    background: #e5e7eb;
+}
+.bookmark-header .badge {
+    font-size: .68rem;
+    font-weight: 500;
+    vertical-align: middle;
+}
+.bookmark-content.collapsed {
+    display: none;
+}
+
 /* ─── Saved Search Tags ─── */
 .saved-search-tag {
     display: inline-flex;

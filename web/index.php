@@ -421,7 +421,13 @@ $base = rtrim(dirname($scriptName), '/');
                             <button class="cat-tag active" data-lang="all" onclick="crawlToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
                         </div>
                     </div>
-                    <div class="mt-1" id="saved_presets_row"></div>
+                    <div class="mt-1" id="saved_presets_section">
+                        <div class="bookmark-header" onclick="toggleBookmarkCollapse()">
+                            <span><i class="far fa-bookmark me-1"></i>书签 <span id="bookmark_count" class="badge bg-secondary">0</span></span>
+                            <i class="fas fa-chevron-up" id="bookmark_collapse_icon"></i>
+                        </div>
+                        <div id="saved_presets_row" class="bookmark-content"></div>
+                    </div>
                     <div class="mt-2" id="crawl_queue_panel">
                         <div class="d-flex justify-content-between align-items-center mb-1"><span class="small text-info"><i class="fas fa-list-ol me-1"></i>爬取队列</span><button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="loadCrawlQueue()" title="刷新队列"><i class="fas fa-sync"></i></button></div>
                         <div id="crawl_queue_list" class="small text-muted">暂无任务</div>
@@ -537,7 +543,7 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><i class="fas fa-clock-rotate-left me-1"></i>已结束的爬取任务</span>
                     <div class="d-flex gap-1">
-                        <button class="btn btn-sm btn-outline-warning" onclick="clearCrawlHistory('failed')" title="清空失败记录"><i class="fas fa-eraser me-1"></i>清空失败</button>
+                        <button class="btn btn-sm btn-outline-warning" onclick="clearCrawlHistory('failed')" title="清空失败/取消记录"><i class="fas fa-eraser me-1"></i>清空失败/取消</button>
                         <button class="btn btn-sm btn-outline-danger" onclick="clearCrawlHistory('all')" title="清空全部历史记录"><i class="fas fa-trash-alt me-1"></i>清空全部</button>
                         <button class="btn btn-sm btn-outline-secondary" onclick="loadCrawlHistory()" title="刷新历史"><i class="fas fa-sync"></i></button>
                     </div>
