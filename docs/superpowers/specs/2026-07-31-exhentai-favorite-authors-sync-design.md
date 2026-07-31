@@ -43,8 +43,9 @@ favorites.php?favcat=c&page=p
         ▼
   refresh_targets.origin_kind='favorite_artist'：
     - query      = artist:"<name>$"
+    - languages  = japanese,chinese,speechless,text cleaned
     - name       = 已保存预设名优先；否则"作者:汉化名"
-    - enabled=1（默认开启）
+    - enabled=1（默认开启，与用户手动下载页默认启用一致）
     - 若已存在则只 UPDATE 增补来源 favcat 集合，不覆盖用户手动改的名字
 ```
 
@@ -170,7 +171,7 @@ dedup_keep_order(artists)
 
 - `query` = 精确匹配作者：`artist:"<artist>$"`
 - `categories = ''`（作者维度不限制分类；如用户需要可以手动改）
-- `languages = ''`（同上）
+- `languages = 'japanese,chinese,speechless,text cleaned'`（与手动下载页默认一致）
 - `force_crawl = 0`（同之前的作者刷新对象）
 - `origin_kind = 'favorite_artist'`
 - `origin_artist = artist`（原始 key）
@@ -194,13 +195,12 @@ dedup_keep_order(artists)
 
 这样能保证"用户手工整理的刷新对象"不被自动同步弄坏。
 
-### 9.4 移除/下线规则
+### 9.4 移除/下线规则（本版不处理）
 
-- 当某本书从远程收藏夹消失时，只在 `remote_favorites` 标记 `is_removed=1`。
-- **不自动删除 / 停用 refresh_targets**（用户只是移除收藏，但仍想持续追作者）。
-- 如果某作者，在 `is_removed=0 AND favcat IN (0,1,9)` 里**完全不再出现**：
-  - 默认不做处理。后续如果用户强烈需要"自动停更"可以加开关 `--prune-orphan-authors`。
-  - 本版先明确：不自动停更。只在 summary 里输出 `orphan_authors_count`。
+用户明确要求"作者移除/下线完全由用户手动清理"，因此本版实现不引入任何自动停更逻辑：
+- 当某本书从远程收藏夹消失时，只在 `remote_favorites` 标记 `is_removed=1`（用于后续人工审计），但**不会**联动停用或删除 `refresh_targets`。
+- 即使某作者在本轮同步里完全没再出现，也不会修改该作者已生成的刷新对象。
+- 摘要统计不再输出 orphan 相关字段。
 
 ## 10. 命令行接口
 
@@ -241,7 +241,6 @@ python -m ehlib sync-exhentai-favorite-authors \
   "refresh_targets_updated": 4,
   "refresh_targets_name_skipped_user_custom": 10,
   "refresh_targets_skipped_unchanged": 15,
-  "orphan_authors_current_run": 2,
   "removed_items_marked": 9,
   "errors": [],
   "request_timings": {
