@@ -38,7 +38,7 @@ function normalize_path($path) {
         }
         return $prefix . DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $normalized);
     }
-    if (str_starts_with($path, DIRECTORY_SEPARATOR)) {
+    if (substr($path, 0, strlen(DIRECTORY_SEPARATOR)) === DIRECTORY_SEPARATOR) {
         $parts = preg_split('/[\\\\\/]+/', ltrim($path, '\\/'));
         $normalized = [];
         foreach ($parts as $part) {
@@ -68,7 +68,7 @@ function resolve_download_path() {
     global $root;
     $config = read_config();
     $download_path = $config['download']['path'] ?? './downloads';
-    if (preg_match('/^[A-Za-z]:[\\\\\/]/', $download_path) || str_starts_with($download_path, '/') || str_starts_with($download_path, '\\')) {
+    if (preg_match('/^[A-Za-z]:[\\\\\/]/', $download_path) || substr($download_path, 0, 1) === '/' || substr($download_path, 0, 1) === '\\') {
         return normalize_path($download_path);
     }
     return normalize_path($root . DIRECTORY_SEPARATOR . $download_path);
@@ -77,7 +77,8 @@ function resolve_download_path() {
 function is_path_within($child, $parent) {
     $child = rtrim(strtolower(normalize_path($child)), DIRECTORY_SEPARATOR);
     $parent = rtrim(strtolower(normalize_path($parent)), DIRECTORY_SEPARATOR);
-    return $child === $parent || str_starts_with($child, $parent . DIRECTORY_SEPARATOR);
+    $parent_with_sep = $parent . DIRECTORY_SEPARATOR;
+    return $child === $parent || substr($child, 0, strlen($parent_with_sep)) === $parent_with_sep;
 }
 
 
@@ -104,7 +105,7 @@ function public_gallery_image_url($source, $source_id, $file) {
     if ($source === '' || $source_id === '' || $file === '') return '';
     $public_source_id = str_replace('/', '_', $source_id);
     foreach ([$source, $public_source_id, $file] as $part) {
-        if (str_contains($part, '/') || str_contains($part, '\\') || $part === '.' || $part === '..') return '';
+        if (strpos($part, '/') !== false || strpos($part, '\\') !== false || $part === '.' || $part === '..') return '';
     }
     return 'ehlib_images/' . rawurlencode($source) . '/' . rawurlencode($public_source_id) . '/' . rawurlencode($file);
 }
@@ -329,8 +330,8 @@ function is_crawl_worker_process($pid) {
     $cmdline = @file_get_contents($proc_dir . '/cmdline');
     if ($cmdline === false || $cmdline === '') return true;
     $cmdline = str_replace("\0", ' ', $cmdline);
-    return str_contains($cmdline, 'bg_crawl_worker_pid.sh')
-        || (str_contains($cmdline, 'ehlib') && str_contains($cmdline, 'crawl-worker'));
+    return strpos($cmdline, 'bg_crawl_worker_pid.sh') !== false
+        || (strpos($cmdline, 'ehlib') !== false && strpos($cmdline, 'crawl-worker') !== false);
 }
 
 function run_python_locked($args, $timeout = 120) {
@@ -365,6 +366,66 @@ function run_python_locked($args, $timeout = 120) {
         @fclose($lock);
     }
 }
+
+function translate_search_preset_name($query) {
+    global $root;
+    $query = trim((string)$query);
+    if ($query === '') return '';
+    static $loaded = false;
+    static $ns_map = [];
+    static $ns_alias = ['category' => 'reclass'];
+    static $ns_display = [
+        'artist' => '作者',
+        'character' => '角色',
+        'cosplayer' => 'Coser',
+        'female' => '女性',
+        'group' => '社团',
+        'language' => '语言',
+        'male' => '男性',
+        'mixed' => '混合',
+        'other' => '其他',
+        'parody' => '原作',
+        'reclass' => '分类',
+        'category' => '分类',
+    ];
+
+    if (!$loaded) {
+        $loaded = true;
+        $db_path = $root . '/data/eh_tag_translation.json';
+        if (is_file($db_path)) {
+            $raw = @json_decode((string)@file_get_contents($db_path), true);
+            $entries = is_array($raw) && isset($raw['data']) && is_array($raw['data']) ? $raw['data'] : $raw;
+            if (is_array($entries)) {
+                foreach ($entries as $entry) {
+                    $ns_name = $entry['namespace'] ?? '';
+                    $ns_data = $entry['data'] ?? null;
+                    if (!$ns_name || !is_array($ns_data)) continue;
+                    $tag_map = [];
+                    foreach ($ns_data as $tag_key => $tag_val) {
+                        if (is_array($tag_val) && !empty($tag_val['name'])) {
+                            $tag_map[strtolower((string)$tag_key)] = (string)$tag_val['name'];
+                        }
+                    }
+                    $ns_map[$ns_name] = $tag_map;
+                }
+            }
+        }
+    }
+
+    return preg_replace_callback('/(?<!\S)(-?)([a-zA-Z_]+):(?:"([^"]+)"|(\S+))/', function ($m) use ($ns_map, $ns_alias, $ns_display) {
+        $ns = $m[2];
+        $raw_name = $m[3] !== '' ? $m[3] : $m[4];
+        $name = substr($raw_name, -1) === '$' ? substr($raw_name, 0, -1) : $raw_name;
+        $lookup_ns = $ns_alias[$ns] ?? $ns;
+        $translated = $ns_map[$lookup_ns][strtolower($name)] ?? null;
+        $label = $ns_display[$ns] ?? ($ns_display[$lookup_ns] ?? $ns);
+        if (!$translated && $label === $ns) {
+            return $m[0];
+        }
+        return $m[1] . $label . ':' . ($translated ?: $name);
+    }, $query);
+}
+
 function read_config() {
     global $root;
     $path = $root . '/config.yaml';
@@ -1187,7 +1248,7 @@ try {
             try {
                 $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
                 if ($scope === 'failed') {
-                    $stmt = $pdo->prepare("DELETE FROM crawl_jobs WHERE status='failed'");
+                    $stmt = $pdo->prepare("DELETE FROM crawl_jobs WHERE status IN ('failed','cancelled')");
                 } else {
                     $stmt = $pdo->prepare("DELETE FROM crawl_jobs WHERE status IN ('completed','failed','cancelled')");
                 }
@@ -1195,6 +1256,11 @@ try {
                 $deleted = $stmt->rowCount();
                 json_exit(['message' => '已清理 ' . $deleted . ' 条爬取历史', 'deleted' => $deleted]);
             } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'translate_search_preset_name':
+            $query = trim($_POST['query'] ?? $_GET['query'] ?? '');
+            json_exit(['name' => $query === '' ? '' : translate_search_preset_name($query)]);
             break;
 
         case 'stop_crawl':
@@ -1394,12 +1460,15 @@ try {
             break;
 
         case 'save_search_preset':
-            $name = $_POST['name'] ?? '';
-            $keyword = $_POST['keyword'] ?? '';
+            $name = trim($_POST['name'] ?? '');
+            $keyword = trim($_POST['keyword'] ?? '');
             $categories_raw = $_POST['categories'] ?? '';
             $languages_raw = $_POST['languages'] ?? '';
             $force = !empty($_POST['force']);
             if (!$name) error_exit('名称不能为空');
+            if ($keyword !== '' && ($name === $keyword || $name === '未命名')) {
+                $name = translate_search_preset_name($keyword);
+            }
             $categories = '';
             if ($categories_raw !== '') {
                 $parsed = json_decode($categories_raw, true);
