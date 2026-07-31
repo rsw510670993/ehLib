@@ -1,5 +1,6 @@
 import gzip
 import json
+import re
 import shutil
 from pathlib import Path
 from urllib.request import urlopen, Request
@@ -10,6 +11,10 @@ TRANSLATION_DB_PATH = TRANSLATION_DB_DIR / "eh_tag_translation.json"
 
 
 class TagTranslator:
+    QUERY_TOKEN_RE = re.compile(
+        r'(?<!\S)(?P<neg>-?)(?P<ns>[a-zA-Z_]+):(?:"(?P<quoted>[^"]+)"|(?P<plain>\S+))'
+    )
+
     def __init__(self, db_path: str | Path | None = None):
         self._db_path = Path(db_path) if db_path else TRANSLATION_DB_PATH
         self._ns_map: dict[str, dict[str, str]] = {}
@@ -44,6 +49,21 @@ class TagTranslator:
         "category": "reclass",
     }
 
+    NS_DISPLAY = {
+        "artist": "作者",
+        "character": "角色",
+        "cosplayer": "Coser",
+        "female": "女性",
+        "group": "社团",
+        "language": "语言",
+        "male": "男性",
+        "mixed": "混合",
+        "other": "其他",
+        "parody": "原作",
+        "reclass": "分类",
+        "category": "分类",
+    }
+
     def translate(self, ns: str, name: str) -> str | None:
         if not self._loaded:
             return None
@@ -73,6 +93,23 @@ class TagTranslator:
             return tags_json
         except Exception:
             return tags_json
+
+    def translate_query_label(self, query: str) -> str:
+        if not query or not self._loaded:
+            return query
+
+        def replace(match: re.Match[str]) -> str:
+            neg = match.group("neg") or ""
+            ns = match.group("ns")
+            raw_name = match.group("quoted") if match.group("quoted") is not None else (match.group("plain") or "")
+            name = raw_name[:-1] if raw_name.endswith("$") else raw_name
+            label = self.NS_DISPLAY.get(ns, self.NS_DISPLAY.get(self.NS_ALIAS.get(ns, ns), ns))
+            translated = self.translate(ns, name)
+            if not translated and label == ns:
+                return match.group(0)
+            return f"{neg}{label}:{translated or name}"
+
+        return self.QUERY_TOKEN_RE.sub(replace, query).strip()
 
 
 def download_latest(output_path: str | Path | None = None) -> str:

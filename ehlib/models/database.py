@@ -4,11 +4,14 @@ import aiosqlite
 from pathlib import Path
 
 from ehlib.models.schemas import Gallery, Tag
+from ehlib.translate.tag_translator import TagTranslator
 from ehlib.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 DB_PATH = Path("data/ehlib.db")
+_QUERY_LABEL_TRANSLATOR = TagTranslator()
+_QUERY_LABEL_TRANSLATOR_LOADED = None
 
 CREATE_GALLERIES = """
 CREATE TABLE IF NOT EXISTS galleries (
@@ -130,10 +133,49 @@ CREATE_INDEXES = [
 ]
 
 
+def build_query_display_name(query: str) -> str:
+    query = (query or "").strip()
+    if not query:
+        return "未命名"
+
+    global _QUERY_LABEL_TRANSLATOR_LOADED
+    if _QUERY_LABEL_TRANSLATOR_LOADED is None:
+        _QUERY_LABEL_TRANSLATOR_LOADED = _QUERY_LABEL_TRANSLATOR.load()
+
+    if _QUERY_LABEL_TRANSLATOR_LOADED:
+        translated = _QUERY_LABEL_TRANSLATOR.translate_query_label(query).strip()
+        if translated:
+            return translated
+    return query
+
+
 class Database:
     def __init__(self, db_path: str | None = None):
         self._db_path = str(db_path or DB_PATH)
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+
+    async def _resolve_saved_search_name(
+        self,
+        db: aiosqlite.Connection,
+        query: str,
+        categories: str = "",
+        languages: str = "",
+        force_crawl: int | bool = 0,
+    ) -> str:
+        normalized_query = (query or "").strip()
+        normalized_categories = categories or ""
+        normalized_languages = languages or ""
+        normalized_force = 1 if force_crawl else 0
+        cursor = await db.execute(
+            """SELECT name FROM search_presets
+               WHERE keyword=? AND categories=? AND COALESCE(languages,'')=? AND force_crawl=?
+               ORDER BY id DESC LIMIT 1""",
+            (normalized_query, normalized_categories, normalized_languages, normalized_force),
+        )
+        row = await cursor.fetchone()
+        if row and row[0]:
+            return str(row[0])
+        return build_query_display_name(normalized_query)
 
     async def init(self) -> None:
         async with aiosqlite.connect(self._db_path) as db:
@@ -518,14 +560,93 @@ class Database:
             job = await cursor.fetchone()
             if job is None or job["refresh_target_id"] is not None:
                 return False
+            name = await self._resolve_saved_search_name(
+                db,
+                job["query"],
+                job["categories"],
+                job["languages"],
+                job["force_crawl"],
+            )
             cursor = await db.execute(
                 """INSERT OR IGNORE INTO refresh_targets
                    (preset_id,origin_job_id,name,query,categories,languages,force_crawl,completed_at,enabled,created_at)
                    VALUES (NULL,?,?,?,?,?,?,?,1,?)""",
-                (job["id"], f"任务 #{job['id']}", job["query"], job["categories"], job["languages"], job["force_crawl"], datetime.now().isoformat(), datetime.now().isoformat()),
+                (job["id"], name, job["query"], job["categories"], job["languages"], job["force_crawl"], datetime.now().isoformat(), datetime.now().isoformat()),
             )
             await db.commit()
             return cursor.rowcount > 0
+
+    async def register_completed_crawl_job(self, job_id: int) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT id, query, categories, languages, force_crawl, refresh_target_id, status
+                   FROM crawl_jobs
+                   WHERE id=?""",
+                (job_id,),
+            )
+            job = await cursor.fetchone()
+            if job is None or job["refresh_target_id"] is not None or job["status"] != "completed":
+                return False
+            name = await self._resolve_saved_search_name(
+                db,
+                job["query"],
+                job["categories"],
+                job["languages"],
+                job["force_crawl"],
+            )
+            cursor = await db.execute(
+                """INSERT OR IGNORE INTO refresh_targets
+                   (preset_id,origin_job_id,name,query,categories,languages,force_crawl,completed_at,enabled,created_at)
+                   VALUES (NULL,?,?,?,?,?,?,?,1,?)""",
+                (
+                    job["id"],
+                    name,
+                    job["query"],
+                    job["categories"],
+                    job["languages"],
+                    job["force_crawl"],
+                    datetime.now().isoformat(),
+                    datetime.now().isoformat(),
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def backfill_search_and_refresh_names(self) -> dict[str, int]:
+        stats = {"search_presets": 0, "refresh_targets": 0}
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            preset_rows = await (await db.execute(
+                "SELECT id, keyword FROM search_presets ORDER BY id"
+            )).fetchall()
+            for row in preset_rows:
+                name = build_query_display_name(row["keyword"] or "")
+                cursor = await db.execute(
+                    "UPDATE search_presets SET name=? WHERE id=? AND COALESCE(name,'')<>?",
+                    (name, row["id"], name),
+                )
+                stats["search_presets"] += cursor.rowcount
+
+            target_rows = await (await db.execute(
+                "SELECT id, query, categories, languages, force_crawl FROM refresh_targets ORDER BY id"
+            )).fetchall()
+            for row in target_rows:
+                name = await self._resolve_saved_search_name(
+                    db,
+                    row["query"],
+                    row["categories"],
+                    row["languages"],
+                    row["force_crawl"],
+                )
+                cursor = await db.execute(
+                    "UPDATE refresh_targets SET name=? WHERE id=? AND COALESCE(name,'')<>?",
+                    (name, row["id"], name),
+                )
+                stats["refresh_targets"] += cursor.rowcount
+
+            await db.commit()
+        return stats
     async def search_cache_exists(self, source: str, source_id: str) -> bool:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(

@@ -386,6 +386,10 @@ async def cmd_crawl_worker(_args: argparse.Namespace, config: Config, db: Databa
             status = await db.get_crawl_job_status(job_id)
             final_status = "cancelled" if status == "cancel_requested" else "completed"
             await db.finish_crawl_job(job_id, final_status)
+            if final_status == "completed" and job.get("refresh_target_id") is None:
+                created = await db.register_completed_crawl_job(job_id)
+                if created:
+                    print(f"Queue job #{job_id} registered as refresh target.")
             print(f"Queue job #{job_id} {final_status}.")
         except Exception as exc:
             await db.finish_crawl_job(job_id, "failed", str(exc))
@@ -781,6 +785,25 @@ async def cmd_translate_tags(args: argparse.Namespace, _config: Config, db: Data
     print(f"Done. {done} entries processed.")
 
 
+async def cmd_translate_query_label(args: argparse.Namespace, _config: Config, _db: Database) -> None:
+    from ehlib.translate.tag_translator import TagTranslator
+
+    translator = TagTranslator()
+    if not translator.load():
+        print(args.query)
+        return
+    print(translator.translate_query_label(args.query) or args.query)
+
+
+async def cmd_backfill_search_names(_args: argparse.Namespace, _config: Config, db: Database) -> None:
+    stats = await db.backfill_search_and_refresh_names()
+    print(
+        "Backfill complete: "
+        f"search_presets={stats['search_presets']}, "
+        f"refresh_targets={stats['refresh_targets']}"
+    )
+
+
 async def cmd_recover_orphans(args: argparse.Namespace, config: Config, db: Database) -> None:
     file_manager = FileManager(config.download.get("path", "./downloads"))
     sources = [args.source] if args.source else ["nhentai", "exhentai"]
@@ -939,6 +962,11 @@ def main() -> None:
     tt = subparsers.add_parser("translate-tags", help="Batch-translate all cached tags using the translation database")
     tt.add_argument("--source", choices=["exhentai", "nhentai"], default="exhentai", help="Source site")
 
+    tql = subparsers.add_parser("translate-query-label", help="Translate search query tokens into a readable preset label")
+    tql.add_argument("query", help="Search query to translate")
+
+    subparsers.add_parser("backfill-search-names", help="Backfill translated names for saved search presets and refresh targets")
+
     recover = subparsers.add_parser("recover-orphans", help="Scan download dirs and recover galleries with no DB record")
     recover.add_argument("--source", choices=["nhentai", "exhentai"], help="Limit scan to a specific source")
     recover.add_argument("--dry-run", action="store_true", help="List orphaned dirs without recovering")
@@ -973,6 +1001,8 @@ def main() -> None:
             "update-artists": cmd_update_artists,
             "update-translations": cmd_update_translations,
             "translate-tags": cmd_translate_tags,
+            "translate-query-label": cmd_translate_query_label,
+            "backfill-search-names": cmd_backfill_search_names,
             "recover-orphans": cmd_recover_orphans,
         }
         handler = commands.get(args.command)
