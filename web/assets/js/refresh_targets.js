@@ -319,16 +319,38 @@ async function syncFavoriteAuthors() {
         if (stageEl) stageEl.textContent = label + (isFinal ? '（完成）' : '…');
 
         const progressEvts = events.filter(function (e) { return e && e.__kind === 'progress'; });
-        const lastEvt = progressEvts.length ? progressEvts[progressEvts.length - 1] : null;
         const waitEvts = events.filter(function (e) { return e && e.__kind === 'wait'; });
         const lastWait = waitEvts.length ? waitEvts[waitEvts.length - 1] : null;
 
-        let cur = 0, total = 0;
-        if (lastEvt) {
+        function _lastProgressByStage(stage) {
+            const matches = progressEvts.filter(function (e) { return String(e.stage || '') === String(stage); });
+            if (!matches.length) return null;
+            const subPref = matches.filter(function (e) {
+                const s = String(e.sub || '');
+                return s === 'ok' || s === 'skip' || s === 'fail' || s === 'error';
+            });
+            return (subPref.length ? subPref : matches)[(subPref.length ? subPref : matches).length - 1];
+        }
+        const lastEvtByStage = _lastProgressByStage(currentStage);
+        const prevDetailEvt = String(currentStage) !== 'detail' ? _lastProgressByStage('detail') : null;
+        const lastEvt = lastEvtByStage || (progressEvts.length ? progressEvts[progressEvts.length - 1] : null);
+
+        let cur = 0, total = 0, pct = 0;
+        if (String(currentStage) === 'aggregate' || String(currentStage) === 'upsert') {
+            const det = prevDetailEvt || _lastProgressByStage('detail');
+            if (det) {
+                const dc = parseInt(det.current, 10) || 0;
+                const dt = parseInt(det.total, 10) || 0;
+                cur = dc; total = dt;
+                pct = (dt > 0) ? Math.max(0, Math.min(99, Math.round(dc / dt * 100))) : 99;
+            } else {
+                pct = 99;
+            }
+        } else if (lastEvt) {
             cur = parseInt(lastEvt.current, 10) || 0;
             total = parseInt(lastEvt.total, 10) || 0;
+            pct = (total > 0) ? Math.max(0, Math.min(99, Math.round(cur / total * 100))) : 0;
         }
-        const pct = (total > 0) ? Math.max(0, Math.min(100, Math.round(cur / total * 100))) : 0;
         if (pctEl) pctEl.textContent = pct + '%';
         if (barEl) barEl.style.width = pct + '%';
         if (barEl) {
@@ -375,17 +397,24 @@ async function syncFavoriteAuthors() {
                     let evt = null;
                     try { evt = JSON.parse(raw); } catch (_) { evt = null; }
                     if (evt && typeof evt === 'object') {
-                        tailArr.push('<span class="text-secondary">' + escapeHtml(_formatEventLine(evt)) + '</span>');
+                        const kind = String(evt.__kind || 'event');
+                        if (kind === 'error') {
+                            tailArr.push('<span class="text-danger">' + escapeHtml(_formatEventLine(evt)) + '</span>');
+                        } else if (kind === 'wait') {
+                            tailArr.push('<span class="text-muted">' + escapeHtml(_formatEventLine(evt)) + '</span>');
+                        } else {
+                            tailArr.push('<span class="text-body">' + escapeHtml(_formatEventLine(evt)) + '</span>');
+                        }
                         _evtIdx++;
                         continue;
                     }
                     raw = _decodeUnicode(raw);
-                    tailArr.push('<span class="text-secondary">' + escapeHtml(raw) + '</span>');
+                    tailArr.push('<span class="text-body">' + escapeHtml(raw) + '</span>');
                     continue;
                 }
-                tailArr.push(escapeHtml(_decodeUnicode(ln)));
+                tailArr.push('<span class="text-body">' + escapeHtml(_decodeUnicode(ln)) + '</span>');
             }
-            outEl.innerHTML = '<span class="info">' + tailArr.join('<br>') + '</span>';
+            outEl.innerHTML = '<div class="p-3 bg-light border rounded-2 small text-body" style="white-space:pre-wrap;max-height:320px;overflow:auto">' + tailArr.join('<br>') + '</div>';
             try { outEl.scrollTop = outEl.scrollHeight; } catch (_) {}
         }
     }
@@ -456,7 +485,7 @@ async function syncFavoriteAuthors() {
                 '</div></div>';
         }
         const outHtml = (data && data.output ? '<details class="mb-2"><summary class="small cursor-pointer fw-bold"><i class="fas fa-terminal text-muted me-1"></i>原始 stdout/stderr 完整输出</summary>' +
-            '<pre class="mt-2 p-3 bg-light border rounded-2 small mb-0" style="white-space:pre-wrap;max-height:260px;overflow:auto">' + escapeHtml(String(data.output)) + '</pre></details>' : '');
+            '<pre class="mt-2 p-3 bg-light border rounded-2 small mb-0 text-dark" style="color:#111;white-space:pre-wrap;max-height:260px;overflow:auto">' + escapeHtml(String(data.output)) + '</pre></details>' : '');
         if (outEl) {
             outEl.classList.add('show');
             outEl.innerHTML = summaryHtml + perArtist + errors + outHtml;
