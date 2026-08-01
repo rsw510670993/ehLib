@@ -121,6 +121,31 @@ CREATE TABLE IF NOT EXISTS crawl_jobs (
 )
 """
 
+CREATE_REMOTE_FAVORITES = """
+CREATE TABLE IF NOT EXISTS remote_favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL DEFAULT 'exhentai',
+    source_id TEXT NOT NULL,
+    favcat INTEGER NOT NULL,
+    title_en TEXT DEFAULT '',
+    title_jp TEXT DEFAULT '',
+    artists_json TEXT DEFAULT '',
+    category TEXT DEFAULT '',
+    added_at TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    thumbnail_url TEXT DEFAULT '',
+    synced_at TEXT NOT NULL DEFAULT '',
+    is_removed INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(source, source_id, favcat)
+)
+"""
+
+REMOTE_FAVORITE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_remote_favorites_favcat ON remote_favorites(favcat)",
+    "CREATE INDEX IF NOT EXISTS idx_remote_favorites_synced ON remote_favorites(synced_at)",
+    "CREATE INDEX IF NOT EXISTS idx_remote_favorites_source_id ON remote_favorites(source, source_id)",
+]
+
 CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_galleries_source ON galleries(source, source_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_type_name ON tags(type, name)",
@@ -188,7 +213,10 @@ class Database:
             await db.execute(CREATE_SEARCH_PRESETS)
             await db.execute(CREATE_CRAWL_JOBS)
             await db.execute(CREATE_REFRESH_TARGETS)
+            await db.execute(CREATE_REMOTE_FAVORITES)
             for index_sql in CREATE_INDEXES:
+                await db.execute(index_sql)
+            for index_sql in REMOTE_FAVORITE_INDEXES:
                 await db.execute(index_sql)
             # 兼容旧库：添加可能缺失的列
             for col in ["uploaded_at TEXT DEFAULT ''", "language TEXT DEFAULT ''", "group_name TEXT DEFAULT ''", "tags TEXT DEFAULT ''", "tags_cn TEXT DEFAULT ''"]:
@@ -213,7 +241,23 @@ class Database:
                 await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_job_id INTEGER DEFAULT NULL")
             except Exception:
                 pass
+            try:
+                await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_kind TEXT DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_artist TEXT DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_favcats TEXT DEFAULT ''")
+            except Exception:
+                pass
             await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_targets_origin_job ON refresh_targets(origin_job_id) WHERE origin_job_id IS NOT NULL")
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_refresh_targets_origin_kind_artist "
+                "ON refresh_targets(origin_kind, origin_artist)"
+            )
             await db.commit()
 
     async def gallery_exists(self, source: str, source_id: str) -> bool:
@@ -932,3 +976,291 @@ class Database:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         logger.info("Exported %d galleries to %s", len(result), output_path)
+
+    async def upsert_remote_favorites(
+        self,
+        items: list[dict],
+        favcat: int,
+        synced_at: str,
+    ) -> tuple[set[str], int]:
+        """对单个 favcat 的一页列表做快照 upsert。
+        返回 (当前 favcat 本轮已见到的 source_id 集合, updated_count)。
+        """
+        now = synced_at or datetime.now().isoformat()
+        seen: set[str] = set()
+        updated = 0
+        if not items:
+            return seen, 0
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("PRAGMA synchronous=OFF")
+            for r in items:
+                source = (r.get("source") or "exhentai").strip() or "exhentai"
+                source_id = (r.get("source_id") or "").strip()
+                if not source_id:
+                    continue
+                seen.add(source_id)
+                title = (r.get("title") or r.get("title_en") or "").strip()
+                title_jp = (r.get("title_jp") or "").strip()
+                artists_json_raw = r.get("artists_json")
+                if artists_json_raw is None:
+                    artists_list = r.get("artists") or []
+                    artists_json = json.dumps(artists_list, ensure_ascii=False) if artists_list else ""
+                elif isinstance(artists_json_raw, list):
+                    artists_json = json.dumps(artists_json_raw, ensure_ascii=False)
+                else:
+                    artists_json = str(artists_json_raw)
+                category = (r.get("category") or "").strip()
+                added_at = (r.get("added_at") or "").strip()
+                note = (r.get("note") or "").strip()
+                thumb = (r.get("thumbnail_url") or r.get("thumbnail") or "").strip()
+                cursor = await db.execute(
+                    """
+                    INSERT INTO remote_favorites
+                      (source, source_id, favcat, title_en, title_jp, artists_json,
+                       category, added_at, note, thumbnail_url, synced_at, is_removed)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,0)
+                    ON CONFLICT(source, source_id, favcat) DO UPDATE SET
+                        title_en=excluded.title_en,
+                        title_jp=CASE WHEN excluded.title_jp<>'' THEN excluded.title_jp ELSE remote_favorites.title_jp END,
+                        artists_json=CASE WHEN excluded.artists_json<>'' THEN excluded.artists_json ELSE remote_favorites.artists_json END,
+                        category=excluded.category,
+                        added_at=CASE WHEN excluded.added_at<>'' THEN excluded.added_at ELSE remote_favorites.added_at END,
+                        note=excluded.note,
+                        thumbnail_url=CASE WHEN excluded.thumbnail_url<>'' THEN excluded.thumbnail_url ELSE remote_favorites.thumbnail_url END,
+                        synced_at=excluded.synced_at,
+                        is_removed=0
+                    """,
+                    (
+                        source, source_id, int(favcat),
+                        title, title_jp, artists_json,
+                        category, added_at, note, thumb, now,
+                    ),
+                )
+                updated += max(0, cursor.rowcount) if cursor.rowcount is not None else 0
+            await db.commit()
+        return seen, updated
+
+    async def mark_removed_remote_favorites(
+        self,
+        source: str,
+        favcat: int,
+        current_ids: set[str],
+        synced_at: str,
+    ) -> int:
+        """对单个 favcat：没出现在 current_ids 里的条目标记 is_removed=1。
+        返回被标记为移除的行数。
+        """
+        src = (source or "exhentai").strip() or "exhentai"
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT source_id FROM remote_favorites WHERE source=? AND favcat=? AND is_removed=0",
+                (src, int(favcat)),
+            )
+            rows = await cur.fetchall()
+            existing = {row["source_id"] for row in rows}
+            missing = existing - set(current_ids or set())
+            if not missing:
+                return 0
+            placeholders = ",".join("?" for _ in missing)
+            params = [synced_at or datetime.now().isoformat(), src, int(favcat), *list(missing)]
+            cursor = await db.execute(
+                f"UPDATE remote_favorites SET is_removed=1, synced_at=? "
+                f"WHERE source=? AND favcat=? AND source_id IN ({placeholders})",
+                params,
+            )
+            await db.commit()
+            return max(0, cursor.rowcount) if cursor.rowcount is not None else 0
+
+    async def update_remote_favorite_artists(
+        self,
+        source: str,
+        source_id: str,
+        artists: list[str],
+        synced_at: str,
+    ) -> bool:
+        """抓完详情页后，把一本收藏的多作者写回快照表。
+        返回 True 表示更新过。
+        """
+        src = (source or "exhentai").strip() or "exhentai"
+        if not source_id:
+            return False
+        artists_json = json.dumps(list(artists or []), ensure_ascii=False) if artists else ""
+        now = synced_at or datetime.now().isoformat()
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "UPDATE remote_favorites SET artists_json=?, synced_at=? "
+                "WHERE source=? AND source_id=?",
+                (artists_json, now, src, source_id),
+            )
+            await db.commit()
+            count = cursor.rowcount or 0
+            return count > 0
+
+    async def upsert_favorite_artist_refresh_targets(
+        self,
+        artist_favcats_map: dict[str, set[int]],
+        no_upsert_name: bool = False,
+    ) -> dict:
+        """根据聚合好的 {artist: set[favcat, ...]} 生成/更新刷新对象。
+        去重键：origin_kind='favorite_artist' AND origin_artist=?
+        返回统计 dict：
+          created, updated, name_skipped_user_custom, skipped_unchanged,
+          skipped_duplicate_existing（完全一致的老对象，跳过）,
+          origin_backfilled（老对象 origin_kind 空，被我们补了 origin 字段）,
+          total_unique_artists
+        """
+        stats = {
+            "created": 0,
+            "updated": 0,
+            "name_skipped_user_custom": 0,
+            "skipped_unchanged": 0,
+            "skipped_duplicate_existing": 0,
+            "origin_backfilled": 0,
+            "total_unique_artists": len(artist_favcats_map or {}),
+        }
+        if not artist_favcats_map:
+            return stats
+
+        DEFAULT_LANGS = "japanese,chinese,speechless,text cleaned"
+        now = datetime.now().isoformat()
+
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            for artist, favcats_set in (artist_favcats_map or {}).items():
+                artist_clean = str(artist or "").strip()
+                if not artist_clean:
+                    continue
+                query = f'artist:"{artist_clean}$"'
+                categories = "Doujinshi,Manga,Artist CG,Game CG,Image Set"
+                languages = DEFAULT_LANGS
+                force_crawl = 0
+                enabled_target = 1
+                system_computed_name = await self._resolve_saved_search_name(
+                    db, query, categories, languages, force_crawl
+                )
+                origin_favcats_csv = ",".join(
+                    str(c) for c in sorted({int(c) for c in (favcats_set or set()) if 0 <= int(c) <= 9})
+                )
+
+                existing = await (await db.execute(
+                    "SELECT * FROM refresh_targets WHERE origin_kind='favorite_artist' AND origin_artist=? LIMIT 1",
+                    (artist_clean,),
+                )).fetchone()
+
+                backfill_hit = False
+                if existing is None:
+                    existing_by_query = await (await db.execute(
+                        """SELECT * FROM refresh_targets
+                           WHERE query=? AND COALESCE(categories,'')=? AND COALESCE(languages,'')=?
+                           AND force_crawl=0 AND (COALESCE(origin_kind,'')='' OR origin_kind='favorite_artist')
+                           LIMIT 1""",
+                        (query, categories, languages),
+                    )).fetchone()
+                    if existing_by_query is not None:
+                        existing = existing_by_query
+                        backfill_hit = True
+
+                if existing is None:
+                    cursor = await db.execute(
+                        """INSERT INTO refresh_targets
+                           (preset_id,origin_job_id,name,query,categories,languages,force_crawl,
+                            completed_at,enabled,created_at,origin_kind,origin_artist,origin_favcats)
+                           VALUES (NULL,NULL,?,?,?,?,?, '',1,?, 'favorite_artist',?, ?)""",
+                        (
+                            system_computed_name, query, categories, languages, force_crawl,
+                            now, artist_clean, origin_favcats_csv,
+                        ),
+                    )
+                    if (cursor.rowcount or 0) > 0:
+                        stats["created"] += 1
+                    continue
+
+                target_id = existing["id"]
+                # UPDATE 保护：避免覆盖用户手动值
+                current_name = str(existing["name"] or "")
+                current_origin_favcats = str(existing["origin_favcats"] or "")
+                current_enabled = 1 if bool(existing["enabled"]) else 0
+                current_origin_kind = str(existing["origin_kind"] or "")
+                current_origin_artist = str(existing["origin_artist"] or "")
+                current_query = str(existing["query"] or "")
+                current_languages = str(existing["languages"] or "")
+                current_categories = str(existing["categories"] or "")
+                current_force_crawl = int(existing["force_crawl"]) if str(existing["force_crawl"]).strip() != "" else 0
+
+                user_changed_name = bool(current_name) and current_name != system_computed_name
+                set_clauses = []
+                params = []
+
+                origin_fields_changed = False
+                if current_origin_kind != "favorite_artist":
+                    set_clauses.append("origin_kind=?")
+                    params.append("favorite_artist")
+                    origin_fields_changed = True
+                if current_origin_artist != artist_clean:
+                    set_clauses.append("origin_artist=?")
+                    params.append(artist_clean)
+                    origin_fields_changed = True
+
+                old_set = {
+                    c.strip() for c in (current_origin_favcats or "").split(",") if c.strip()
+                }
+                new_set = {str(c) for c in sorted({int(c) for c in (favcats_set or set()) if 0 <= int(c) <= 9})}
+                merged_favcats_csv = ",".join(sorted(old_set | new_set, key=lambda x: int(x)))
+                if merged_favcats_csv != current_origin_favcats:
+                    set_clauses.append("origin_favcats=?")
+                    params.append(merged_favcats_csv)
+                    origin_fields_changed = True
+
+                if backfill_hit and origin_fields_changed:
+                    stats["origin_backfilled"] += 1
+
+                if (not current_languages) and languages:
+                    set_clauses.append("languages=?")
+                    params.append(languages)
+                if (not current_categories) and categories:
+                    set_clauses.append("categories=?")
+                    params.append(categories)
+                if (not current_query) and query:
+                    set_clauses.append("query=?")
+                    params.append(query)
+
+                changed_any = bool(set_clauses)
+
+                name_updated = False
+                if not no_upsert_name and not user_changed_name and current_name != system_computed_name:
+                    set_clauses.append("name=?")
+                    params.append(system_computed_name)
+                    name_updated = True
+                elif user_changed_name:
+                    stats["name_skipped_user_custom"] += 1
+
+                exactly_matches = (
+                    current_query == query
+                    and (current_categories or "") == categories
+                    and (current_languages or "") == languages
+                    and current_force_crawl == force_crawl
+                    and current_enabled == enabled_target
+                    and current_name == system_computed_name
+                    and (current_origin_kind or "") == "favorite_artist"
+                    and current_origin_artist == artist_clean
+                    and (current_origin_favcats or "") == origin_favcats_csv
+                )
+
+                if exactly_matches and not changed_any and not name_updated:
+                    stats["skipped_duplicate_existing"] += 1
+                    continue
+
+                if not set_clauses:
+                    stats["skipped_unchanged"] += 1
+                    continue
+
+                params.append(target_id)
+                sql = f"UPDATE refresh_targets SET {', '.join(set_clauses)} WHERE id=?"
+                cursor = await db.execute(sql, params)
+                if (cursor.rowcount or 0) > 0:
+                    stats["updated"] += 1
+
+            await db.commit()
+        return stats
+

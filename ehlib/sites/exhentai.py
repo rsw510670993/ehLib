@@ -770,3 +770,217 @@ class ExhentaiSite(SiteBase):
             if len(collected) >= total_pages:
                 break
         return collected[len(existing_urls):]
+
+    async def fetch_favorites_page(
+        self,
+        favcat: int,
+        page: int = 0,
+    ) -> tuple[list[dict], int]:
+        """抓取收藏夹单页列表。返回 (items, max_page_index)。
+        max_page_index 是 0-based 最大页码（=总页数-1）。
+        """
+        import re
+        if page < 0:
+            page = 0
+        params = {}
+        if favcat is not None and 0 <= favcat <= 9:
+            params["favcat"] = str(favcat)
+        if page > 0:
+            params["page"] = str(page)
+        url = f"{EXHENTAI_BASE}/favorites.php"
+        resp = await self._session.fetch(self.name, url, params=params)
+        if self._session.is_cloudflare_blocked(resp):
+            raise RuntimeError("Cloudflare blocked favorites page. Refresh cookies or try browser mode.")
+        if resp.status_code == 404:
+            return [], 0
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        items = self._parse_favorites_page(soup)
+        max_page = page
+        import re
+        # 先查常见精确父节点（快），查不到再 fallback 扫整页所有带 page= 的 a（防改版）
+        ptt_candidates = list(
+            soup.select(
+                "div.ido a[href], div.ptt a[href], table.ptt a[href], "
+                "div.ptb a[href], table.ptb a[href], div.pagination a[href], "
+                "div.pager a[href]"
+            )
+        )
+        if not ptt_candidates:
+            ptt_candidates = list(soup.find_all("a", href=True))
+        for a in ptt_candidates:
+            href = a.get("href", "")
+            if not href or "favorites.php" not in href and "/favorites.php" not in href:
+                # 允许相对 href："?favcat=0&page=2" 这种不带 host 的
+                if "page=" not in href:
+                    continue
+            m = re.search(r"[?&]page=(\d+)", href)
+            if m:
+                p = int(m.group(1))
+                if p > max_page:
+                    max_page = p
+        if not items:
+            max_page = page
+        return items, max_page
+
+    def _parse_favorites_page(self, soup: BeautifulSoup) -> list[dict]:
+        """解析 favorites.php 单页结构，只提取列表层能拿到的字段。
+        作者解析放到详情页 _extract_artists_from_gallery_html 里做。
+        """
+        import re
+        items: list[dict] = []
+        # 先试紧凑视图（div.itg > div.gl1...），再回退到 table 布局
+        container = soup.select_one("div.itg")
+        if container:
+            for item in container.find_all("div", class_=re.compile(r"^gl1"), recursive=False):
+                link = item.select_one("a[href*='/g/']")
+                if not link:
+                    continue
+                parsed = parse_exhentai_url(link.get("href", ""))
+                if not parsed:
+                    continue
+                gid, token = parsed
+                title_elem = item.select_one(".glink")
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                title_jp = ""
+                title_a = item.select_one("a[href*='/g/']")
+                if title_a:
+                    maybe_jp = title_a.get("title", "").strip()
+                    if maybe_jp and maybe_jp != title:
+                        title_jp = maybe_jp
+                cat_elem = item.select_one(".glcat, .gl3")
+                category = cat_elem.get_text(strip=True) if cat_elem else ""
+                added_at = ""
+                note = ""
+                gl5t = item.select_one(".gl5t")
+                if gl5t:
+                    posted_div = gl5t.select_one("div[id^='posted_']")
+                    if posted_div:
+                        added_at = posted_div.get_text(strip=True)
+                    note_el = gl5t.select_one("div[id^='note_']") or gl5t.select_one(".glnote, .gl5t span[title]")
+                    if note_el:
+                        note = note_el.get("title", note_el.get_text(strip=True)).strip()
+                thumb = ""
+                img = item.select_one(".glthumb img, .gl5t img")
+                if img:
+                    src = img.get("data-src", "") or img.get("src", "")
+                    if src and not src.startswith("data:"):
+                        thumb = src
+                items.append({
+                    "source": "exhentai",
+                    "source_id": f"{gid}/{token}",
+                    "title": title,
+                    "title_jp": title_jp,
+                    "category": category,
+                    "added_at": added_at,
+                    "note": note,
+                    "thumbnail_url": thumb,
+                })
+            if items:
+                return items
+        # table 布局回退
+        table = soup.select_one("table.itg.gltm") or soup.select_one("table.itg.gld") or soup.select_one("table.itg")
+        if table:
+            for row in table.select("tr"):
+                link = row.select_one("td a[href*='/g/']") or row.select_one("a[href*='/g/']")
+                if not link:
+                    continue
+                parsed = parse_exhentai_url(link.get("href", ""))
+                if not parsed:
+                    continue
+                gid, token = parsed
+                title_elem = row.select_one(".glink, .gl3m")
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                title_jp = ""
+                if link:
+                    maybe_jp = link.get("title", "").strip()
+                    if maybe_jp and maybe_jp != title:
+                        title_jp = maybe_jp
+                cat_elem = row.select_one(".glcat")
+                category = cat_elem.get_text(strip=True) if cat_elem else ""
+                added_at = ""
+                note = ""
+                info_cell = row.select_one(".gl2m, .gl4c, td:last-child")
+                if info_cell:
+                    text = info_cell.get_text(" ", strip=True)
+                    m = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", text)
+                    if m:
+                        added_at = m.group(1)
+                img = row.select_one(".glthumb img, img")
+                thumb = ""
+                if img:
+                    src = img.get("data-src", "") or img.get("src", "")
+                    if src and not src.startswith("data:"):
+                        thumb = src
+                items.append({
+                    "source": "exhentai",
+                    "source_id": f"{gid}/{token}",
+                    "title": title,
+                    "title_jp": title_jp,
+                    "category": category,
+                    "added_at": added_at,
+                    "note": note,
+                    "thumbnail_url": thumb,
+                })
+        return items
+
+    async def fetch_gallery_artists(self, source_id: str) -> list[str]:
+        """进入画廊详情页，仅抽取全部 artist 标签（保持顺序去重）。"""
+        gid, token = self._parse_gid_token(source_id)
+        url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
+        resp = await self._session.fetch(self.name, url)
+        if self._session.is_cloudflare_blocked(resp):
+            raise RuntimeError("Cloudflare blocked gallery detail page while extracting artists.")
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        return self._extract_artists_from_gallery_html(resp.text)
+
+    @staticmethod
+    def _extract_artists_from_gallery_html(html: str) -> list[str]:
+        """详情页只取 artist 标签，按首次出现顺序去重。"""
+        soup = BeautifulSoup(html, "html.parser")
+        artists: list[str] = []
+        seen: set[str] = set()
+        tag_rows = soup.select("#taglist tr")
+        if not tag_rows:
+            taglist = soup.select_one("#taglist")
+            if taglist:
+                tag_rows = taglist.find_all(["tr", "div", "li", "section"], class_=True) or taglist.find_all("tr")
+        for row in tag_rows:
+            td = row.select_one("td.tc") or row.select_one("td:first-child")
+            if not td:
+                continue
+            tag_type = td.get_text(strip=True).rstrip(":").lower().replace(" ", "_")
+            if tag_type != "artist":
+                continue
+            for tag_div in row.select("div"):
+                tag_link = tag_div.select_one("a")
+                if not tag_link:
+                    continue
+                name = tag_link.get_text(strip=True)
+                if name and name not in seen:
+                    seen.add(name)
+                    artists.append(name)
+            if not seen:
+                for tag_link in row.select("a"):
+                    name = tag_link.get_text(strip=True)
+                    if not name or name == "artist":
+                        continue
+                    if name not in seen:
+                        seen.add(name)
+                        artists.append(name)
+        if artists:
+            return artists
+        # 兜底：按 href =/artist/ 模式扫全部链接
+        TAG_URL_PATTERN = "artist/"
+        for a in soup.select("a[href]"):
+            href = a.get("href", "")
+            if TAG_URL_PATTERN not in href:
+                continue
+            name = a.get_text(strip=True)
+            if name and name not in seen:
+                seen.add(name)
+                artists.append(name)
+        return artists
+

@@ -50,12 +50,102 @@ function confirmDialog(options) {
         okBtn.className = 'btn ' + (options.okClass || 'btn-danger');
 
         var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        var CLOSE_CLICK_MS = 400;
         var settled = false;
+        var _pressStartInDialog = false;
+        var _pressStartInBackdrop = false;
+        var _pressStartTs = 0;
+        function _isConfirmInner(elem) {
+            var el = elem;
+            while (el && el.nodeType === 1) {
+                if (el.getAttribute && el.getAttribute('data-confirm-clickable') === '1') return true;
+                if (el === okBtn || el === cancelBtn) return true;
+                if (el.tagName && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'BUTTON' || el.tagName === 'A')) return true;
+                el = el.parentNode;
+            }
+            return false;
+        }
+        function _isBackdrop(elem) {
+            var el = elem;
+            while (el && el.nodeType === 1) {
+                if (el === modalEl) return true;
+                if (el.classList && el.classList.contains('modal-backdrop') && el.parentNode && el.parentNode === document.body) return true;
+                el = el.parentNode;
+            }
+            return false;
+        }
+        function _onDocMouseDown(e) {
+            if (settled) return;
+            if (e.button != null && e.button !== 0) return;
+            var target = e.target;
+            _pressStartInDialog = _isConfirmInner(target);
+            _pressStartInBackdrop = !_pressStartInDialog && _isBackdrop(target);
+            _pressStartTs = Date.now();
+        }
+        function _onDocMouseUp(e) {
+            if (settled) return;
+            if (e.button != null && e.button !== 0) return;
+            var target = e.target;
+            var insideEnd = _isConfirmInner(target);
+            var endBackdrop = !insideEnd && _isBackdrop(target);
+            var dur = Date.now() - _pressStartTs;
+            var quick = dur <= CLOSE_CLICK_MS;
+            if (_pressStartInDialog && !insideEnd && !quick) return;
+            if (_pressStartInDialog && endBackdrop && quick) return;
+            if (_pressStartInBackdrop && endBackdrop && quick) {
+                settled = true;
+                cleanup();
+                modal.hide();
+                resolve(false);
+                return;
+            }
+            if (_pressStartInBackdrop && !endBackdrop && !quick) return;
+        }
+        function _onSelStartOrEnd() {
+            if (settled) return;
+            var sel = window.getSelection ? window.getSelection() : null;
+            if (!sel || sel.rangeCount === 0) return;
+            var range = sel.getRangeAt(0);
+            var sc = range.startContainer, ec = range.endContainer;
+            function _s(el) {
+                if (!el) return false;
+                var n = el.nodeType === 1 ? el : el.parentNode;
+                while (n && n.nodeType === 1) {
+                    if (n.getAttribute && n.getAttribute('data-confirm-clickable') === '1') return true;
+                    if (n === modalEl) return false;
+                    n = n.parentNode;
+                }
+                return false;
+            }
+            if (_s(sc) && !_s(ec)) {
+                _pressStartInDialog = true;
+                _pressStartTs = Date.now();
+            }
+        }
+        function _onKey(e) {
+            if (settled) return;
+            if (e.key === 'Escape') {
+                settled = true;
+                cleanup();
+                modal.hide();
+                resolve(false);
+                return;
+            }
+            if (e.key === 'Enter' && !(e.target && e.target.tagName === 'TEXTAREA')) {
+                onOk();
+            }
+        }
         var cleanup = function() {
             okBtn.removeEventListener('click', onOk);
             modalEl.removeEventListener('hidden.bs.modal', onHidden);
+            document.removeEventListener('mousedown', _onDocMouseDown, true);
+            document.removeEventListener('mouseup', _onDocMouseUp, true);
+            document.removeEventListener('keydown', _onKey, true);
+            document.removeEventListener('selectstart', _onSelStartOrEnd, true);
+            document.removeEventListener('selectend', _onSelStartOrEnd, true);
         };
         var onOk = function() {
+            if (settled) return;
             settled = true;
             cleanup();
             modal.hide();
@@ -67,6 +157,11 @@ function confirmDialog(options) {
         };
         okBtn.addEventListener('click', onOk);
         modalEl.addEventListener('hidden.bs.modal', onHidden, { once: true });
+        document.addEventListener('mousedown', _onDocMouseDown, true);
+        document.addEventListener('mouseup', _onDocMouseUp, true);
+        document.addEventListener('keydown', _onKey, true);
+        document.addEventListener('selectstart', _onSelStartOrEnd, true);
+        document.addEventListener('selectend', _onSelStartOrEnd, true);
         modal.show();
     });
 }
@@ -90,13 +185,89 @@ function promptDialog(options) {
         cancelBtn.textContent = options.cancelText || '取消';
 
         var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        var CLOSE_CLICK_MS = 400;
         var settled = false;
+        var _pressStartInDialog = false;
+        var _pressStartInBackdrop = false;
+        var _pressStartTs = 0;
+        function _isPromptInner(elem) {
+            var el = elem;
+            while (el && el.nodeType === 1) {
+                if (el.getAttribute && el.getAttribute('data-prompt-clickable') === '1') return true;
+                if (el === okBtn || el === cancelBtn || el === inputEl) return true;
+                if (el.tagName && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'BUTTON' || el.tagName === 'A')) return true;
+                el = el.parentNode;
+            }
+            return false;
+        }
+        function _isBackdrop(elem) {
+            var el = elem;
+            while (el && el.nodeType === 1) {
+                if (el === modalEl) return true;
+                if (el.classList && el.classList.contains('modal-backdrop') && el.parentNode && el.parentNode === document.body) return true;
+                el = el.parentNode;
+            }
+            return false;
+        }
+        function _onDocMouseDown(e) {
+            if (settled) return;
+            if (e.button != null && e.button !== 0) return;
+            var target = e.target;
+            _pressStartInDialog = _isPromptInner(target);
+            _pressStartInBackdrop = !_pressStartInDialog && _isBackdrop(target);
+            _pressStartTs = Date.now();
+        }
+        function _onDocMouseUp(e) {
+            if (settled) return;
+            if (e.button != null && e.button !== 0) return;
+            var target = e.target;
+            var insideEnd = _isPromptInner(target);
+            var endBackdrop = !insideEnd && _isBackdrop(target);
+            var dur = Date.now() - _pressStartTs;
+            var quick = dur <= CLOSE_CLICK_MS;
+            if (_pressStartInDialog && !insideEnd && !quick) return;
+            if (_pressStartInDialog && endBackdrop && quick) return;
+            if (_pressStartInBackdrop && endBackdrop && quick) {
+                settled = true;
+                cleanup();
+                modal.hide();
+                resolve(null);
+                return;
+            }
+            if (_pressStartInBackdrop && !endBackdrop && !quick) return;
+        }
+        function _onSelStartOrEnd() {
+            if (settled) return;
+            var sel = window.getSelection ? window.getSelection() : null;
+            if (!sel || sel.rangeCount === 0) return;
+            var range = sel.getRangeAt(0);
+            var sc = range.startContainer, ec = range.endContainer;
+            function _s(el) {
+                if (!el) return false;
+                var n = el.nodeType === 1 ? el : el.parentNode;
+                while (n && n.nodeType === 1) {
+                    if (n.getAttribute && n.getAttribute('data-prompt-clickable') === '1') return true;
+                    if (n === modalEl) return false;
+                    n = n.parentNode;
+                }
+                return false;
+            }
+            if (_s(sc) && !_s(ec)) {
+                _pressStartInDialog = true;
+                _pressStartTs = Date.now();
+            }
+        }
         var cleanup = function() {
             okBtn.removeEventListener('click', onOk);
             modalEl.removeEventListener('hidden.bs.modal', onHidden);
             inputEl.removeEventListener('keydown', onKeydown);
+            document.removeEventListener('mousedown', _onDocMouseDown, true);
+            document.removeEventListener('mouseup', _onDocMouseUp, true);
+            document.removeEventListener('selectstart', _onSelStartOrEnd, true);
+            document.removeEventListener('selectend', _onSelStartOrEnd, true);
         };
         var onOk = function() {
+            if (settled) return;
             settled = true;
             cleanup();
             modal.hide();
@@ -112,6 +283,10 @@ function promptDialog(options) {
         okBtn.addEventListener('click', onOk);
         modalEl.addEventListener('hidden.bs.modal', onHidden, { once: true });
         inputEl.addEventListener('keydown', onKeydown);
+        document.addEventListener('mousedown', _onDocMouseDown, true);
+        document.addEventListener('mouseup', _onDocMouseUp, true);
+        document.addEventListener('selectstart', _onSelStartOrEnd, true);
+        document.addEventListener('selectend', _onSelStartOrEnd, true);
         modal.show();
         setTimeout(function() { inputEl.focus(); }, 100);
     });

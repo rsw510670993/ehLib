@@ -204,6 +204,8 @@ function run_python($args, $timeout = 120) {
     $done = false;
     $exit_code = -1;
     $stall_count = 0;
+    $chunk_callback = isset($GLOBALS['RUN_PYTHON_CHUNK_HOOK']) && is_callable($GLOBALS['RUN_PYTHON_CHUNK_HOOK'])
+        ? $GLOBALS['RUN_PYTHON_CHUNK_HOOK'] : null;
 
     while (!$done) {
         if (time() - $start > $timeout) {
@@ -237,6 +239,17 @@ function run_python($args, $timeout = 120) {
                 if ($data === false || $data === '') continue;
                 if ($pipe === $pipes[1]) $stdout .= $data;
                 else $stderr .= $data;
+                if ($chunk_callback) {
+                    try {
+                        call_user_func($chunk_callback, [
+                            'stream' => ($pipe === $pipes[1]) ? 'stdout' : 'stderr',
+                            'chunk' => $data,
+                            'stdout_so_far' => $stdout,
+                            'stderr_so_far' => $stderr,
+                        ]);
+                    } catch (Throwable $_t) {
+                    }
+                }
             }
         } elseif ($sel === false) {
             $stall_count++;
@@ -334,7 +347,7 @@ function is_crawl_worker_process($pid) {
         || (strpos($cmdline, 'ehlib') !== false && strpos($cmdline, 'crawl-worker') !== false);
 }
 
-function run_python_locked($args, $timeout = 120) {
+function run_python_locked($args, $timeout = 120, $chunk_callback = null) {
     global $root;
     $data_dir = $root . '/data';
     if (!is_dir($data_dir)) mkdir($data_dir, 0755, true);
@@ -360,6 +373,19 @@ function run_python_locked($args, $timeout = 120) {
         ];
     }
     try {
+        if (is_callable($chunk_callback)) {
+            $prev_hook = isset($GLOBALS['RUN_PYTHON_CHUNK_HOOK']) && is_callable($GLOBALS['RUN_PYTHON_CHUNK_HOOK']) ? $GLOBALS['RUN_PYTHON_CHUNK_HOOK'] : null;
+            $GLOBALS['RUN_PYTHON_CHUNK_HOOK'] = $chunk_callback;
+            try {
+                return run_python($args, $timeout);
+            } finally {
+                if ($prev_hook !== null) {
+                    $GLOBALS['RUN_PYTHON_CHUNK_HOOK'] = $prev_hook;
+                } else {
+                    unset($GLOBALS['RUN_PYTHON_CHUNK_HOOK']);
+                }
+            }
+        }
         return run_python($args, $timeout);
     } finally {
         @flock($lock, LOCK_UN);
@@ -1003,6 +1029,135 @@ try {
             json_exit(['message' => '下载任务已终止'], true);
             break;
 
+        case 'sync_favorite_authors':
+            $favcats_raw = trim((string)($_POST['favcats'] ?? '0,1,9'));
+            $pages_per_cat = max(0, (int)($_POST['pages_per_cat'] ?? 0));
+            $max_detail = max(0, (int)($_POST['max_detail'] ?? 0));
+            $dry_run = !empty($_POST['dry_run']);
+            $no_upsert_name = !empty($_POST['no_upsert_name']);
+            $force_metadata = !empty($_POST['force_metadata']);
+
+            $favcats = [];
+            if ($favcats_raw !== '') {
+                foreach (explode(',', $favcats_raw) as $c) {
+                    $c = (int)trim($c);
+                    if ($c >= 0 && $c <= 9) $favcats[] = $c;
+                }
+            }
+            $favcats = array_values(array_unique($favcats));
+            if (empty($favcats)) $favcats = [0, 1, 9];
+
+            $args = ['sync-exhentai-favorite-authors'];
+            $args[] = '--favcats';
+            $args[] = implode(',', $favcats);
+            if ($pages_per_cat > 0) { $args[] = '--pages-per-cat'; $args[] = (string)$pages_per_cat; }
+            if ($max_detail > 0) { $args[] = '--max-detail'; $args[] = (string)$max_detail; }
+            if ($dry_run) $args[] = '--dry-run';
+            if ($no_upsert_name) $args[] = '--no-upsert-name';
+            if ($force_metadata) $args[] = '--force-metadata';
+
+            $timeout = 3600;
+            $snapshot_path = $root . '/data/sync_fav_snapshot.json';
+            $stream = !empty($_POST['stream']);
+            $chunk_hook = null;
+            if ($stream) {
+                @file_put_contents($snapshot_path, json_encode([
+                    'started_at' => date('c'),
+                    'stage' => 'starting',
+                    'last_line' => null,
+                    'log_lines' => [],
+                    'events' => [],
+                    'finished' => false,
+                ], JSON_UNESCAPED_UNICODE));
+                $chunk_hook = function ($info) use ($snapshot_path) {
+                    $chunk = isset($info['chunk']) ? (string)$info['chunk'] : '';
+                    if ($chunk === '') return;
+                    $snap = @json_decode(@file_get_contents($snapshot_path), true);
+                    if (!is_array($snap)) $snap = ['log_lines' => [], 'events' => [], 'stage' => 'running'];
+                    if (!isset($snap['log_lines']) || !is_array($snap['log_lines'])) $snap['log_lines'] = [];
+                    if (!isset($snap['events']) || !is_array($snap['events'])) $snap['events'] = [];
+                    $buf = isset($snap['_buf']) ? (string)$snap['_buf'] : '';
+                    $buf .= $chunk;
+                    $parts = explode("\n", str_replace("\r\n", "\n", $buf));
+                    $buf = (string)array_pop($parts);
+                    foreach ($parts as $ln) {
+                        $ln = rtrim($ln, "\r");
+                        if ($ln === '') continue;
+                        $snap['last_line'] = $ln;
+                        $first = substr($ln, 0, 1);
+                        if ($first === '{') {
+                            $decoded = @json_decode($ln, true);
+                            if (is_array($decoded) && isset($decoded['__kind'])) {
+                                $snap['events'][] = $decoded;
+                                if (count($snap['events']) > 400) {
+                                    $snap['events'] = array_slice($snap['events'], -300);
+                                }
+                                if (isset($decoded['stage'])) $snap['stage'] = (string)$decoded['stage'];
+                            }
+                        }
+                        $snap['log_lines'][] = $ln;
+                        if (count($snap['log_lines']) > 500) {
+                            $snap['log_lines'] = array_slice($snap['log_lines'], -400);
+                        }
+                    }
+                    $snap['_buf'] = $buf;
+                    @file_put_contents($snapshot_path, json_encode($snap, JSON_UNESCAPED_UNICODE));
+                };
+            }
+            try {
+                $result = $chunk_hook ? run_python_locked($args, $timeout, $chunk_hook) : run_python_locked($args, $timeout);
+            } finally {
+                if ($stream && is_file($snapshot_path)) {
+                    $snap = @json_decode(@file_get_contents($snapshot_path), true);
+                    if (!is_array($snap)) $snap = [];
+                    $snap['finished'] = true;
+                    $snap['finished_at'] = date('c');
+                    @file_put_contents($snapshot_path, json_encode($snap, JSON_UNESCAPED_UNICODE));
+                }
+            }
+            $stdout = (string)($result['stdout'] ?? '');
+            $stderr = (string)($result['stderr'] ?? '');
+            $combined = trim($stdout) !== '' ? $stdout : $stderr;
+            $summary = null;
+            if (trim($stdout) !== '') {
+                $lines = explode("\n", str_replace("\r\n", "\n", $stdout));
+                for ($i = count($lines) - 1; $i >= 0; $i--) {
+                    $line = trim($lines[$i]);
+                    if ($line === '') continue;
+                    $first = substr($line, 0, 1);
+                    if ($first === '{' || $first === '[') {
+                        $decoded = @json_decode($line, true);
+                        if (is_array($decoded) && empty($decoded['__kind'])) { $summary = $decoded; break; }
+                    }
+                }
+            }
+            $ok = !empty($result['ok']);
+            $resp = [
+                'ok' => $ok,
+                'output' => $combined,
+                'exit_code' => $result['exit_code'] ?? -1,
+                'summary' => $summary,
+            ];
+            if (!$ok && !empty($result['error'])) $resp['error'] = $result['error'];
+            json_exit($resp, $ok);
+            break;
+
+        case 'get_sync_fav_progress':
+            $snapshot_path = $root . '/data/sync_fav_snapshot.json';
+            $snap = is_file($snapshot_path) ? @json_decode(@file_get_contents($snapshot_path), true) : null;
+            json_exit([
+                'ok' => true,
+                'snapshot' => is_array($snap) ? $snap : null,
+                'exists' => is_file($snapshot_path),
+            ], true);
+            break;
+
+        case 'clear_sync_fav_progress':
+            $snapshot_path = $root . '/data/sync_fav_snapshot.json';
+            if (is_file($snapshot_path)) @unlink($snapshot_path);
+            json_exit(['ok' => true], true);
+            break;
+
         case 'cache_search':
             $source = $_GET['source'] ?? 'exhentai';
             $artist = $_GET['artist'] ?? '';
@@ -1420,8 +1575,32 @@ try {
                 $pdo = new PDO('sqlite:' . $root . '/data/ehlib.db');
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
                 $pdo->exec("CREATE TABLE IF NOT EXISTS refresh_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, preset_id INTEGER UNIQUE, name TEXT NOT NULL, query TEXT NOT NULL, categories TEXT DEFAULT '', languages TEXT DEFAULT '', force_crawl INTEGER DEFAULT 0, completed_at TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '')");
-                $targets = $pdo->query('SELECT id,preset_id,name,query,categories,languages,force_crawl,completed_at,enabled FROM refresh_targets ORDER BY completed_at DESC,id DESC')->fetchAll();
-                json_exit(['targets' => $targets]);
+                try { $pdo->exec("ALTER TABLE refresh_targets ADD COLUMN origin_kind TEXT DEFAULT ''"); } catch (Exception $eA) {}
+                try { $pdo->exec("ALTER TABLE refresh_targets ADD COLUMN origin_artist TEXT DEFAULT ''"); } catch (Exception $eB) {}
+                try { $pdo->exec("ALTER TABLE refresh_targets ADD COLUMN origin_favcats TEXT DEFAULT ''"); } catch (Exception $eC) {}
+
+                $page = max(1, (int)($_GET['page'] ?? 1));
+                $per_page = (int)($_GET['per_page'] ?? 50);
+                if ($per_page <= 0) $per_page = 50;
+                if ($per_page > 500) $per_page = 500;
+                $offset = ($page - 1) * $per_page;
+
+                $total_row = $pdo->query("SELECT COUNT(*) AS c FROM refresh_targets")->fetch(PDO::FETCH_ASSOC);
+                $total = (int)($total_row['c'] ?? 0);
+                $total_pages = (int)ceil($total / $per_page);
+
+                $stmt = $pdo->prepare('SELECT id,preset_id,name,query,categories,languages,force_crawl,completed_at,enabled,origin_kind,origin_artist,origin_favcats FROM refresh_targets ORDER BY completed_at DESC,id DESC LIMIT ? OFFSET ?');
+                $stmt->bindValue(1, $per_page, PDO::PARAM_INT);
+                $stmt->bindValue(2, $offset, PDO::PARAM_INT);
+                $stmt->execute();
+                $targets = $stmt->fetchAll();
+                json_exit([
+                    'targets' => $targets,
+                    'page' => $page,
+                    'per_page' => $per_page,
+                    'total' => $total,
+                    'total_pages' => $total_pages,
+                ]);
             } catch (Exception $e) { error_exit($e->getMessage()); }
             break;
 
