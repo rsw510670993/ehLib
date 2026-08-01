@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import random
+import re as _re
 import sys
 import time
 from asyncio import sleep
@@ -804,6 +805,695 @@ async def cmd_backfill_search_names(_args: argparse.Namespace, _config: Config, 
     )
 
 
+async def cmd_sync_exhentai_favorite_authors(args: argparse.Namespace, config: Config, db: Database) -> None:
+    """扫 exhentai 收藏夹 favcat (默认 0/1/9)，按作者维度生成 refresh_targets。"""
+    import random as random_module
+    from datetime import datetime as datetime_module
+    import aiosqlite as _aiosqlite
+
+    t_start = time.time()
+    summary: dict = {
+        "cookies_ok": False,
+        "favcats_requested": [],
+        "favcats_visited": [],
+        "favorites_list_pages_fetched": 0,
+        "favorite_items_seen": 0,
+        "favorite_items_detail_succeeded": 0,
+        "favorite_items_detail_skipped": 0,
+        "favorite_items_detail_failed": 0,
+        "unique_artists": 0,
+        "refresh_targets_created": 0,
+        "refresh_targets_updated": 0,
+        "refresh_targets_name_skipped_user_custom": 0,
+        "refresh_targets_skipped_unchanged": 0,
+        "refresh_targets_skipped_duplicate_existing": 0,
+        "refresh_targets_origin_backfilled": 0,
+        "removed_items_marked": 0,
+        "errors": [],
+        "request_timings": {
+            "total_elapsed_s": 0.0,
+            "list_avg_interval_s": 0.0,
+            "detail_avg_interval_s": 0.0,
+            "total_detail_requests": 0,
+        },
+    }
+
+    # 1. 校验 cookies
+    cookies_map = (config.cookies or {}).get("exhentai") or {}
+    ipb_member_id = str(cookies_map.get("ipb_member_id") or "").strip()
+    ipb_pass_hash = str(cookies_map.get("ipb_pass_hash") or "").strip()
+    cookies_ok = bool(ipb_member_id and ipb_pass_hash)
+    if not cookies_ok:
+        summary["errors"].append("cookies_missing")
+        summary["cookies_ok"] = False
+        summary["request_timings"]["total_elapsed_s"] = round(time.time() - t_start, 3)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        print("Error: exhentai ipb_member_id / ipb_pass_hash not configured. Cannot access favorites.php.", file=sys.stderr)
+        return
+    summary["cookies_ok"] = True
+
+    # 2. 解析参数
+    favcats_raw = [s for s in str(getattr(args, "favcats", "0,1,9") or "0,1,9").split(",") if s.strip()]
+    favcats: list[int] = []
+    for raw in favcats_raw:
+        try:
+            c = int(raw.strip())
+            if 0 <= c <= 9:
+                favcats.append(c)
+        except Exception:
+            pass
+    favcats = list(dict.fromkeys(favcats)) or [0, 1, 9]
+    summary["favcats_requested"] = list(favcats)
+
+    pages_per_cat = getattr(args, "pages_per_cat", None)
+    try:
+        pages_per_cat_int = int(pages_per_cat) if pages_per_cat not in (None, "", "0") else None
+        if pages_per_cat_int is not None and pages_per_cat_int <= 0:
+            pages_per_cat_int = None
+    except Exception:
+        pages_per_cat_int = None
+
+    max_detail = getattr(args, "max_detail", None)
+    try:
+        max_detail_int = int(max_detail) if max_detail not in (None, "", "0") else None
+        if max_detail_int is not None and max_detail_int <= 0:
+            max_detail_int = None
+    except Exception:
+        max_detail_int = None
+
+    dry_run = bool(getattr(args, "dry_run", False))
+    no_upsert_name = bool(getattr(args, "no_upsert_name", False))
+    force_metadata = bool(getattr(args, "force_metadata", False))
+
+    delay_sec_raw = (config.request or {}).get("delay_between_requests")
+    try:
+        delay_sec = int(float(delay_sec_raw)) if delay_sec_raw is not None and str(delay_sec_raw).strip() != "" else 3
+    except (TypeError, ValueError):
+        delay_sec = 3
+    LIST_DELAY_MIN = max(1, delay_sec * 2) + 1.0
+    LIST_DELAY_MAX = max(1, delay_sec * 2) + 2.0
+    DETAIL_DELAY_MIN = max(1, delay_sec * 3) + 2.0
+    DETAIL_DELAY_MAX = max(1, delay_sec * 3) + 5.0
+    BATCH_INTERVAL_MIN = 30.0
+    BATCH_INTERVAL_MAX = 60.0
+    BATCH_SIZE = 20
+
+    synced_at = datetime_module.now().isoformat()
+    list_intervals: list[float] = []
+    detail_intervals: list[float] = []
+    artist_favcats: dict[str, set[int]] = {}
+
+    import io as _io_io
+    import os as _pyos
+    import traceback as _tb_io
+
+    def _stdout_safe_write(text_line: str) -> None:
+        line_bytes = (str(text_line or "") + "\n").encode("utf-8", errors="replace")
+        try:
+            buf = getattr(sys.stdout, "buffer", None)
+            if buf is not None:
+                buf.write(line_bytes)
+                try: sys.stdout.flush()
+                except Exception: pass
+                try: buf.flush()
+                except Exception: pass
+                return
+        except Exception:
+            pass
+        try:
+            sys.stdout.write(str(text_line) + "\n")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+    _unhandled_log_path = None
+    try:
+        _eh_data_dir = _pyos.environ.get("EHLIB_DATA_DIR") or str(getattr(db, "_db_path", "") or "")
+        if _eh_data_dir:
+            _eh_data_dir = _pyos.path.dirname(_eh_data_dir) or "."
+        if not _eh_data_dir or not _pyos.path.isdir(_eh_data_dir):
+            _eh_data_dir = "."
+        _unhandled_log_path = _pyos.path.join(_eh_data_dir, "sync_fav_last_crash.log")
+    except Exception:
+        _unhandled_log_path = None
+
+    def _dump_unhandled(exc: BaseException) -> None:
+        if not _unhandled_log_path:
+            return
+        try:
+            import datetime as _dt_internal
+            chunks = []
+            chunks.append("===== sync_exhentai_favorite_authors unhandled " + _dt_internal.datetime.now().isoformat(timespec="seconds") + " =====")
+            chunks.append("".join(_tb_io.format_exception(type(exc), exc, exc.__traceback__)))
+            chunks.append("summary_so_far=" + json.dumps(summary, ensure_ascii=True, default=str))
+            chunks.append("")
+            with _io_io.open(_unhandled_log_path, "a", encoding="utf-8") as fp:
+                fp.write("\n".join(chunks))
+        except Exception:
+            pass
+
+    def _emit_event(payload: dict) -> None:
+        import copy as _copy
+        d = _copy.deepcopy(dict(payload or {}))
+        if "__kind" not in d or not isinstance(d["__kind"], str):
+            d["__kind"] = d.pop("kind", "event") if isinstance(d.get("kind"), str) else "event"
+        if "ts" not in d:
+            d["ts"] = time.time()
+        def _sanitize(node):
+            if isinstance(node, dict):
+                return {str(k): _sanitize(v) for k, v in node.items()}
+            if isinstance(node, (list, tuple)):
+                return [_sanitize(v) for v in node]
+            if isinstance(node, (set, frozenset)):
+                return [_sanitize(v) for v in node]
+            if isinstance(node, (str, int, float, bool)) or node is None:
+                return node
+            try:
+                s = json.dumps(node, ensure_ascii=False, default=str)
+            except Exception:
+                s = repr(node)
+            return s
+        try:
+            d = _sanitize(d)
+        except Exception:
+            d = {"__kind": d.get("__kind", "event"), "ts": time.time(), "sanitize_failed": True}
+        # 策略：先尝试 UTF-8 明文（ensure_ascii=False + 直接 buffer 写 utf-8 bytes），如果写失败或 encoder 不支持，
+        # 再兜底用 ensure_ascii=True（ASCII \uXXXX 兼容模式，保证不抛 UnicodeEncodeError）。
+        line = None
+        for use_ascii in (False, True):
+            try:
+                line = json.dumps(d, ensure_ascii=use_ascii, separators=(",", ":"))
+                break
+            except Exception:
+                line = None
+        if line is None:
+            line = '{"__kind":"event","ts":%s,"ok":false}' % str(int(time.time()))
+        _stdout_safe_write("__EVT__" + line)
+
+    _emit_event({
+        "__kind": "stage",
+        "stage": "initializing",
+        "message": f"cookies_ok={cookies_ok} favcats={favcats} dry_run={dry_run}",
+        "dry_run": dry_run,
+        "cookies_ok": cookies_ok,
+        "favcats_requested": list(favcats),
+    })
+
+    session = SessionManager(config)
+    try:
+        site = ExhentaiSite(config, session)
+
+        all_items: list[dict] = []
+        seen_ids_by_favcat: dict[int, set[str]] = {}
+
+        _emit_event({
+            "__kind": "stage",
+            "stage": "list",
+            "message": "开始抓取列表页",
+        })
+        list_plan_total_pages_by_favcat: dict[int, int] = {int(c): 1 for c in favcats}
+
+        for favcat in favcats:
+            page = 0
+            visited_max = -1
+            visited_any = False
+            cat_seen: set[str] = set()
+            while True:
+                if pages_per_cat_int is not None and page >= pages_per_cat_int:
+                    break
+                t_before = time.time()
+                try:
+                    page_items, max_page_idx = await site.fetch_favorites_page(favcat, page=page)
+                except Exception as exc:
+                    summary["errors"].append(f"list_favcat_{favcat}_page_{page}: {type(exc).__name__}: {exc}")
+                    print(f"[favcat={favcat}] page {page} FAILED: {exc}", file=sys.stderr)
+                    _emit_event({
+                        "__kind": "error",
+                        "stage": "list",
+                        "scope": f"favcat_{favcat}",
+                        "sub": f"page_{page}",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                    break
+                finally:
+                    t_after = time.time()
+                    list_intervals.append(t_after - t_before)
+                summary["favorites_list_pages_fetched"] += 1
+                visited_any = True
+                if visited_max < 0:
+                    visited_max = max_page_idx
+                visited_max = max(visited_max, max_page_idx)
+                list_plan_total_pages_by_favcat[int(favcat)] = max(1, int(max_page_idx or 0) + 1)
+                if pages_per_cat_int is not None:
+                    list_plan_total_pages_by_favcat[int(favcat)] = min(
+                        list_plan_total_pages_by_favcat[int(favcat)], int(pages_per_cat_int)
+                    )
+
+                total_list_pages_planned = sum(list_plan_total_pages_by_favcat.values())
+                _emit_event({
+                    "__kind": "progress",
+                    "stage": "list",
+                    "scope": f"favcat_{favcat}",
+                    "sub": f"page_{page}",
+                    "current": int(summary["favorites_list_pages_fetched"]),
+                    "total": int(total_list_pages_planned),
+                    "items_in_this_page": int(len(page_items)),
+                    "items_seen": int(summary["favorite_items_seen"] + len(page_items)),
+                    "favcat": int(favcat),
+                    "page": int(page),
+                    "max_page": int(max_page_idx or 0),
+                })
+
+                for it in page_items:
+                    it["favcat"] = favcat
+                    sid = it.get("source_id") or ""
+                    if sid:
+                        cat_seen.add(sid)
+                        all_items.append(dict(it))
+                summary["favorite_items_seen"] += len(page_items)
+
+                if not dry_run:
+                    _seen, updated = await db.upsert_remote_favorites(page_items, favcat, synced_at)
+                    for s in _seen:
+                        cat_seen.add(s)
+                    _ = updated
+
+                if len(page_items) < 25 or page >= max_page_idx:
+                    break
+                page += 1
+                wait = random_module.uniform(LIST_DELAY_MIN, LIST_DELAY_MAX)
+                print(f"[favcat={favcat}] page {page-1}/{max_page_idx} done -> wait {wait:.1f}s")
+                await sleep(wait)
+
+            if visited_any:
+                summary["favcats_visited"].append(int(favcat))
+            seen_ids_by_favcat[favcat] = cat_seen
+
+            if not dry_run:
+                removed = await db.mark_removed_remote_favorites("exhentai", favcat, cat_seen, synced_at)
+                summary["removed_items_marked"] += int(removed or 0)
+
+            if favcat != favcats[-1]:
+                wait = random_module.uniform(DETAIL_DELAY_MIN, DETAIL_DELAY_MAX)
+                print(f"[switch] moving to next favcat after {wait:.1f}s")
+                _emit_event({
+                    "__kind": "wait",
+                    "stage": "list",
+                    "message": f"切换下一个收藏夹前等待 {wait:.1f}s",
+                    "wait_s": float(wait),
+                })
+                await sleep(wait)
+
+        # 4. 详情页：逐本进 gid/token 拿全部作者（带节流和批次间隔）
+        # 【顺序必须先构造 detail_queue，再 emit（否则 len=0 会导致后面空循环+结果为0）】
+        detail_queue: list[dict] = []
+        seen_detail: set[str] = set()
+        in_memory_artists: dict[str, list[str]] = {}
+        for item in all_items:
+            sid = item.get("source_id") or ""
+            if not sid or sid in seen_detail:
+                continue
+            seen_detail.add(sid)
+            detail_queue.append(dict(item))
+
+        if max_detail_int is not None:
+            detail_queue = detail_queue[:max_detail_int]
+
+        _emit_event({
+            "__kind": "stage",
+            "stage": "detail",
+            "message": f"进入详情页阶段，候选 {len(detail_queue)} 本",
+            "detail_queue_size": int(len(detail_queue)),
+            "max_detail_limit": int(max_detail_int or 0),
+        })
+        _emit_event({
+            "__kind": "progress",
+            "stage": "detail",
+            "current": 0,
+            "total": int(len(detail_queue)),
+            "detail_queue_size": int(len(detail_queue)),
+            "max_detail_limit": int(max_detail_int or 0),
+        })
+
+        for i, item in enumerate(detail_queue, 1):
+            sid = item.get("source_id") or ""
+            # 如果 DB 里已经有 artists_json 且不强制重抓，就跳过
+            if not dry_run and not force_metadata:
+                async with _aiosqlite.connect(db._db_path) as _conn:
+                    _conn.row_factory = _aiosqlite.Row
+                    _cur = await _conn.execute(
+                        "SELECT artists_json FROM remote_favorites "
+                        "WHERE source=? AND source_id=? LIMIT 1",
+                        ("exhentai", sid),
+                    )
+                    _row = await _cur.fetchone()
+                    if _row and _row["artists_json"]:
+                        try:
+                            existing_list = json.loads(_row["artists_json"]) if _row["artists_json"] else []
+                        except Exception:
+                            existing_list = []
+                        if isinstance(existing_list, list) and existing_list:
+                            summary["favorite_items_detail_skipped"] += 1
+                            _emit_event({
+                                "__kind": "progress",
+                                "stage": "detail",
+                                "sub": "skip",
+                                "source_id": sid,
+                                "current": int(
+                                    summary["favorite_items_detail_succeeded"]
+                                    + summary["favorite_items_detail_failed"]
+                                    + summary["favorite_items_detail_skipped"]
+                                ),
+                                "total": int(len(detail_queue)),
+                                "detail_queue_size": int(len(detail_queue)),
+                            })
+                            continue
+
+            t_before = time.time()
+            try:
+                artists = await site.fetch_gallery_artists(sid)
+                success = True
+            except Exception as exc:
+                artists = []
+                success = False
+                summary["errors"].append(f"detail_{sid}: {type(exc).__name__}: {exc}")
+                print(f"[detail] {sid} FAILED: {exc}", file=sys.stderr)
+                _emit_event({
+                    "__kind": "error",
+                    "stage": "detail",
+                    "source_id": sid,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            finally:
+                t_after = time.time()
+                detail_intervals.append(t_after - t_before)
+
+            summary["request_timings"]["total_detail_requests"] += 1
+            if success:
+                summary["favorite_items_detail_succeeded"] += 1
+                artists_safe = list(artists or [])
+                if artists_safe:
+                    in_memory_artists[sid] = artists_safe
+                if not dry_run:
+                    await db.update_remote_favorite_artists(
+                        "exhentai", sid, artists_safe, synced_at
+                    )
+                _emit_event({
+                    "__kind": "progress",
+                    "stage": "detail",
+                    "sub": "ok",
+                    "source_id": sid,
+                    "title": str(item.get("title") or item.get("title_jp") or ""),
+                    "artists": list(artists_safe),
+                    "artists_count": int(len(artists_safe)),
+                    "current": int(
+                        summary["favorite_items_detail_succeeded"]
+                        + summary["favorite_items_detail_failed"]
+                        + summary["favorite_items_detail_skipped"]
+                    ),
+                    "total": int(len(detail_queue)),
+                    "detail_queue_size": int(len(detail_queue)),
+                })
+            else:
+                summary["favorite_items_detail_failed"] += 1
+                _emit_event({
+                    "__kind": "progress",
+                    "stage": "detail",
+                    "sub": "fail",
+                    "source_id": sid,
+                    "current": int(
+                        summary["favorite_items_detail_succeeded"]
+                        + summary["favorite_items_detail_failed"]
+                        + summary["favorite_items_detail_skipped"]
+                    ),
+                    "total": int(len(detail_queue)),
+                    "detail_queue_size": int(len(detail_queue)),
+                })
+
+            if i % BATCH_SIZE == 0 and i < len(detail_queue):
+                wait = random_module.uniform(BATCH_INTERVAL_MIN, BATCH_INTERVAL_MAX)
+                next_run = datetime_module.fromtimestamp(time.time() + wait).strftime("%H:%M:%S")
+                print(f"[detail] batch {i}/{len(detail_queue)} done -> long wait {wait:.0f}s until {next_run}")
+                _emit_event({
+                    "__kind": "wait",
+                    "stage": "detail",
+                    "message": f"批次 {i}/{len(detail_queue)} 完成，长等待 {wait:.0f}s 至 {next_run}",
+                    "wait_s": float(wait),
+                    "batch_done": int(i),
+                    "total": int(len(detail_queue)),
+                })
+                await sleep(wait)
+                continue
+
+            if i < len(detail_queue):
+                wait = random_module.uniform(DETAIL_DELAY_MIN, DETAIL_DELAY_MAX)
+                await sleep(wait)
+
+        # 5. 聚合：{artist_tagkey: set[favcat, ...]}
+        #   - artist 字符串统一从「显示别名」规范化到「tag key」：
+        #       * 优先 regex 取 `artist:"<KEY>$"` 内部的 KEY（如果之前 query 形式）
+        #       * 再去掉「puyocha | yo」显示文本里的别名分隔及其后部分，变成 puyocha
+        #       * 小写 trim，方便去重
+        #   - 兼容 remote_favorites.artists_json 旧版本中保存的是显示别名的情况
+        _ARTIST_TAGKEY_FROM_QUERY = _re.compile(r'^artist\s*:\s*"([^"$]+)\$?"\s*$', _re.IGNORECASE)
+        def _normalize_artist_tagkey(raw) -> str:
+            s = str(raw or "").strip()
+            if not s: return ""
+            m = _ARTIST_TAGKEY_FROM_QUERY.match(s)
+            if m: s = m.group(1).strip()
+            if "|" in s:
+                s = s.split("|", 1)[0].strip()
+            # 去结尾 $（兼容直接写 artist:"xxx$" 的行尾）
+            s = s.rstrip("$").strip()
+            # unquote 兜底（%xx 编码）
+            if "%" in s:
+                try:
+                    from urllib.parse import unquote as _unquote
+                    s = _unquote(s)
+                except Exception:
+                    pass
+            return s.strip()
+
+        _emit_event({
+            "__kind": "stage",
+            "stage": "aggregate",
+            "message": "按作者 tagkey 维度聚合（规范化别名）",
+        })
+        artist_favcats.clear()
+        _sid_favcats: dict[str, set[int]] = {}
+        for _it in all_items:
+            _sid = _it.get("source_id") or ""
+            if not _sid:
+                continue
+            _fc = int(_it.get("favcat") or 0)
+            if _sid not in _sid_favcats:
+                _sid_favcats[_sid] = set()
+            _sid_favcats[_sid].add(_fc)
+
+        if dry_run:
+            # dry_run：仅用内存结果聚合（不连 DB）
+            for _sid, _fcs in _sid_favcats.items():
+                for _a in in_memory_artists.get(_sid) or []:
+                    _a_key = _normalize_artist_tagkey(_a)
+                    if not _a_key:
+                        continue
+                    if _a_key not in artist_favcats:
+                        artist_favcats[_a_key] = set()
+                    artist_favcats[_a_key].update(_fcs)
+        else:
+            # 正式模式：先 DB 聚合
+            _fc_tuple = tuple(int(c) for c in favcats)
+            _db_artists: dict[str, list[str]] = {}
+            if _fc_tuple:
+                _placeholders = ",".join("?" for _ in _fc_tuple)
+                async with _aiosqlite.connect(db._db_path) as _conn:
+                    _conn.row_factory = _aiosqlite.Row
+                    _cur = await _conn.execute(
+                        "SELECT source_id, favcat, artists_json FROM remote_favorites "
+                        "WHERE source='exhentai' AND is_removed=0 "
+                        "AND COALESCE(artists_json,'')<>'' "
+                        "AND favcat IN (" + _placeholders + ")",
+                        list(_fc_tuple),
+                    )
+                    _rows = await _cur.fetchall()
+                for _r in _rows:
+                    _sid_v = str(_r["source_id"] or "")
+                    if not _sid_v:
+                        continue
+                    try:
+                        _arr = json.loads(_r["artists_json"]) if _r["artists_json"] else []
+                    except Exception:
+                        _arr = []
+                    if not isinstance(_arr, list):
+                        continue
+                    # 旧版本 remote_favorites 里存的是显示别名，这里统一转 tagkey 再入缓存
+                    _normed = []
+                    _seen_n = set()
+                    for _x in _arr:
+                        n = _normalize_artist_tagkey(_x)
+                        if n and n not in _seen_n:
+                            _seen_n.add(n); _normed.append(n)
+                    if _normed:
+                        _db_artists[_sid_v] = _normed
+
+            # 合并内存结果（本轮详情页抓到的）兜底：某些条目可能 DB 里还没写入（=空串）但内存里有
+            for _sid, _alist in in_memory_artists.items():
+                if not _alist:
+                    continue
+                # 内存结果（新）是 tagkey 已保证，这里做一次统一 normalize 再 merge
+                _normed = []; _seen_n = set()
+                for _x in _alist:
+                    n = _normalize_artist_tagkey(_x)
+                    if n and n not in _seen_n:
+                        _seen_n.add(n); _normed.append(n)
+                if _normed and not _db_artists.get(_sid):
+                    _db_artists[_sid] = _normed
+
+            for _sid, _fcs in _sid_favcats.items():
+                for _a in _db_artists.get(_sid) or []:
+                    _a_key = _normalize_artist_tagkey(_a)
+                    if not _a_key:
+                        continue
+                    if _a_key not in artist_favcats:
+                        artist_favcats[_a_key] = set()
+                    artist_favcats[_a_key].update(_fcs)
+
+        summary["unique_artists"] = len(artist_favcats)
+        summary["artists_tagkeys"] = sorted(artist_favcats.keys())
+        _emit_event({
+            "__kind": "progress",
+            "stage": "aggregate",
+            "unique_artists": int(len(artist_favcats)),
+            "artists_tagkeys": sorted(artist_favcats.keys()),
+        })
+
+        # 诊断：如果跑了详情但没抽到任何作者，抛一条诊断错误到 summary（便于排查详情页 selector 失效）
+        _detail_processed = (
+            int(summary.get("favorite_items_detail_succeeded") or 0)
+            + int(summary.get("favorite_items_detail_failed") or 0)
+            + int(summary.get("favorite_items_detail_skipped") or 0)
+        )
+        if _detail_processed > 0 and int(summary["unique_artists"]) == 0:
+            summary["errors"].append(
+                f"diagnostic: detail_processed={_detail_processed} but unique_artists=0. "
+                "Likely gallery detail page artist selector (#taglist tr) doesn't match your layout."
+            )
+
+        # 6. 生成/更新 refresh_targets
+        if not dry_run:
+            _emit_event({
+                "__kind": "stage",
+                "stage": "upsert",
+                "message": f"写入 refresh_targets（{len(artist_favcats)} 位作者）",
+                "unique_artists": int(len(artist_favcats)),
+            })
+            stats = await db.upsert_favorite_artist_refresh_targets(
+                artist_favcats, no_upsert_name=no_upsert_name
+            )
+            summary["refresh_targets_created"] += int(stats.get("created") or 0)
+            summary["refresh_targets_updated"] += int(stats.get("updated") or 0)
+            summary["refresh_targets_name_skipped_user_custom"] += int(stats.get("name_skipped_user_custom") or 0)
+            summary["refresh_targets_skipped_unchanged"] += int(stats.get("skipped_unchanged") or 0)
+            summary["refresh_targets_skipped_duplicate_existing"] += int(stats.get("skipped_duplicate_existing") or 0)
+            summary["refresh_targets_origin_backfilled"] += int(stats.get("origin_backfilled") or 0)
+            _emit_event({
+                "__kind": "progress",
+                "stage": "upsert",
+                "created": int(summary["refresh_targets_created"]),
+                "updated": int(summary["refresh_targets_updated"]),
+                "name_skipped_user_custom": int(summary["refresh_targets_name_skipped_user_custom"]),
+                "skipped_unchanged": int(summary["refresh_targets_skipped_unchanged"]),
+                "skipped_duplicate_existing": int(summary["refresh_targets_skipped_duplicate_existing"]),
+                "origin_backfilled": int(summary["refresh_targets_origin_backfilled"]),
+            })
+
+    except KeyboardInterrupt:
+        summary["errors"].append("keyboard_interrupt")
+        print("Sync cancelled by user.", file=sys.stderr)
+        _emit_event({
+            "__kind": "error",
+            "stage": summary.get("stage") or "running",
+            "error": "keyboard_interrupt",
+        })
+    except BaseException as _top_level_exc:
+        summary["errors"].append(f"unhandled:{type(_top_level_exc).__name__}:{_top_level_exc}")
+        try:
+            _dump_unhandled(_top_level_exc)
+        except Exception:
+            pass
+        print(f"[sync-fav-authors] unhandled {type(_top_level_exc).__name__}: {_top_level_exc}", file=sys.stderr)
+        raise
+    finally:
+        try:
+            await session.close()
+        except Exception:
+            pass
+
+    total_elapsed = time.time() - t_start
+    summary["request_timings"]["total_elapsed_s"] = round(total_elapsed, 3)
+    if list_intervals:
+        summary["request_timings"]["list_avg_interval_s"] = round(sum(list_intervals) / len(list_intervals), 3)
+    if detail_intervals:
+        summary["request_timings"]["detail_avg_interval_s"] = round(sum(detail_intervals) / len(detail_intervals), 3)
+
+    # ===== 构造 Web 前端友好的输出字段（保留原字段保证向后兼容） =====
+    # 总数别名
+    summary["total_favorite_items"] = int(summary.get("favorite_items_seen") or 0)
+    summary["detail_fetched"] = int(
+        (summary.get("favorite_items_detail_succeeded") or 0)
+        + (summary.get("favorite_items_detail_failed") or 0)
+    )
+    summary["detail_errors"] = int(summary.get("favorite_items_detail_failed") or 0)
+    summary["detail_skipped"] = int(summary.get("favorite_items_detail_skipped") or 0)
+    summary["created"] = int(summary.get("refresh_targets_created") or 0)
+    summary["updated"] = int(summary.get("refresh_targets_updated") or 0)
+    summary["skipped"] = int(
+        (summary.get("refresh_targets_name_skipped_user_custom") or 0)
+        + (summary.get("refresh_targets_skipped_unchanged") or 0)
+        + (summary.get("refresh_targets_skipped_duplicate_existing") or 0)
+    )
+    summary["skipped_duplicate_existing"] = int(summary.get("refresh_targets_skipped_duplicate_existing") or 0)
+    summary["origin_backfilled"] = int(summary.get("refresh_targets_origin_backfilled") or 0)
+    summary["scanned_favcats"] = list(summary.get("favcats_visited") or summary.get("favcats_requested") or [])
+    summary["dry_run"] = bool(dry_run)
+    summary["no_upsert_name"] = bool(no_upsert_name)
+    summary["force_metadata"] = bool(force_metadata)
+
+    # 作者 → 收藏夹集合 映射（JSON 可序列化：set→list）
+    _artist_favcats_serializable = {}
+    if artist_favcats:
+        for _k, _v in artist_favcats.items():
+            try:
+                _artist_favcats_serializable[str(_k)] = sorted(int(x) for x in _v)
+            except Exception:
+                pass
+    summary["artist_favcats_map"] = _artist_favcats_serializable
+
+    # 失败条目列表（从扁平 errors 字符串里尽量还原成结构化，前端兼容旧 strings）
+    _failed_items: list[dict] = []
+    if summary.get("errors") and isinstance(summary["errors"], list):
+        for _err in summary["errors"]:
+            try:
+                _err_str = str(_err or "")
+            except Exception:
+                _err_str = ""
+            if not _err_str:
+                continue
+            if _err_str.startswith("detail_"):
+                _rest = _err_str[len("detail_"):]
+                if ": " in _rest:
+                    _sid, _msg = _rest.split(": ", 1)
+                    _failed_items.append({"source_id": _sid, "error": _msg})
+                    continue
+            if _err_str.startswith("list_favcat_"):
+                _failed_items.append({"title": _err_str, "error": _err_str})
+                continue
+            _failed_items.append({"error": _err_str})
+    summary["failed_items"] = _failed_items
+    # ===== Web 友好输出结束 =====
+
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
 async def cmd_recover_orphans(args: argparse.Namespace, config: Config, db: Database) -> None:
     file_manager = FileManager(config.download.get("path", "./downloads"))
     sources = [args.source] if args.source else ["nhentai", "exhentai"]
@@ -967,6 +1657,17 @@ def main() -> None:
 
     subparsers.add_parser("backfill-search-names", help="Backfill translated names for saved search presets and refresh targets")
 
+    sync_fav = subparsers.add_parser(
+        "sync-exhentai-favorite-authors",
+        help="Sync exhentai favorites favcats (0/1/9) and create/update author-level periodic refresh targets",
+    )
+    sync_fav.add_argument("--favcats", default="0,1,9", help="Comma-separated favorite categories to sync (0-9). Default: 0,1,9")
+    sync_fav.add_argument("--pages-per-cat", default=None, help="Max pages per favcat. Omit/empty = full scan.")
+    sync_fav.add_argument("--max-detail", default=None, help="Max gallery detail pages to fetch for author extraction (smoke test).")
+    sync_fav.add_argument("--dry-run", action="store_true", help="Do not write DB; only print what would be done.")
+    sync_fav.add_argument("--no-upsert-name", action="store_true", help="Never overwrite the refresh_target name (protect user-customized names).")
+    sync_fav.add_argument("--force-metadata", action="store_true", help="Force re-fetching gallery detail even if a cached artists_json already exists in remote_favorites.")
+
     recover = subparsers.add_parser("recover-orphans", help="Scan download dirs and recover galleries with no DB record")
     recover.add_argument("--source", choices=["nhentai", "exhentai"], help="Limit scan to a specific source")
     recover.add_argument("--dry-run", action="store_true", help="List orphaned dirs without recovering")
@@ -1003,6 +1704,7 @@ def main() -> None:
             "translate-tags": cmd_translate_tags,
             "translate-query-label": cmd_translate_query_label,
             "backfill-search-names": cmd_backfill_search_names,
+            "sync-exhentai-favorite-authors": cmd_sync_exhentai_favorite_authors,
             "recover-orphans": cmd_recover_orphans,
         }
         handler = commands.get(args.command)

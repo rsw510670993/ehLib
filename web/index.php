@@ -40,36 +40,36 @@ $base = rtrim(dirname($scriptName), '/');
         <!-- ═══ Toast ═══ -->
         <div class="toast-container" id="toast_container"></div>
 
-        <div class="modal fade" id="confirm_modal" tabindex="-1" aria-hidden="true">
+        <div class="modal fade" id="confirm_modal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
             <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
-                <div class="modal-content">
+                <div class="modal-content" data-confirm-clickable="1">
                     <div class="modal-header">
                         <h5 class="modal-title" id="confirm_modal_title">确认操作</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
-                    <div class="modal-body" id="confirm_modal_body"></div>
-                    <div class="modal-footer">
+                    <div class="modal-body" id="confirm_modal_body" data-confirm-clickable="1"></div>
+                    <div class="modal-footer" data-confirm-clickable="1">
                         <button type="button" class="btn btn-outline-secondary" id="confirm_modal_cancel" data-bs-dismiss="modal">取消</button>
-                        <button type="button" class="btn btn-danger" id="confirm_modal_ok">确认</button>
+                        <button type="button" class="btn btn-danger" id="confirm_modal_ok" data-confirm-clickable="1">确认</button>
                     </div>
                 </div>
             </div>
         </div>
 
-        <div class="modal fade" id="prompt_modal" tabindex="-1" aria-hidden="true">
+        <div class="modal fade" id="prompt_modal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
             <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
-                <div class="modal-content">
+                <div class="modal-content" data-prompt-clickable="1">
                     <div class="modal-header">
                         <h5 class="modal-title" id="prompt_modal_title">输入</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
-                    <div class="modal-body">
-                        <div id="prompt_modal_message" class="mb-2"></div>
-                        <input type="text" class="form-control form-control-sm" id="prompt_modal_input">
+                    <div class="modal-body" data-prompt-clickable="1">
+                        <div id="prompt_modal_message" class="mb-2" data-prompt-clickable="1"></div>
+                        <input type="text" class="form-control form-control-sm" id="prompt_modal_input" data-prompt-clickable="1">
                     </div>
-                    <div class="modal-footer">
+                    <div class="modal-footer" data-prompt-clickable="1">
                         <button type="button" class="btn btn-outline-secondary" id="prompt_modal_cancel" data-bs-dismiss="modal">取消</button>
-                        <button type="button" class="btn btn-primary" id="prompt_modal_ok">确定</button>
+                        <button type="button" class="btn btn-primary" id="prompt_modal_ok" data-prompt-clickable="1">确定</button>
                     </div>
                 </div>
             </div>
@@ -541,6 +541,32 @@ $base = rtrim(dirname($scriptName), '/');
         <div id="page_crawl-history" class="page-section section-hidden">
             <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="fas fa-arrows-rotate me-1"></i>定期刷新对象</span>
+                    <div class="d-flex gap-1">
+                        <button class="btn btn-sm btn-outline-info" id="sync_fav_btn" onclick="syncFavoriteAuthors()" title="从远程收藏夹扫描，将作者批量注册为刷新对象（节流：列表×2+抖动、详情×3+抖动，每20本详情再批次间隔30~60s）"><i class="fas fa-cloud-arrow-down me-1"></i>从远程收藏同步作者刷新</button>
+                        <button class="btn btn-sm btn-outline-danger d-none" id="sync_fav_cancel_btn" onclick="cancelSyncFavoriteAuthors()" title="终止当前同步任务（写 download_cancel.flag，约 1s 内生效）"><i class="fas fa-stop me-1"></i>终止同步</button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="loadRefreshTargets()" title="刷新列表"><i class="fas fa-sync"></i></button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small">定时任务只会将已开启的项目加入普通爬取队列，由单一 worker 顺序执行。</p>
+                    <div id="refresh_targets_list" class="text-muted">加载中...</div>
+                    <div id="refresh_targets_pagination" class="mt-2"></div>
+                    <div id="sync_fav_progress" class="d-none mt-3">
+                        <div class="d-flex justify-content-between align-items-center small mb-1">
+                            <span id="sync_fav_stage" class="text-muted">准备中…</span>
+                            <span id="sync_fav_pct" class="text-muted fw-bold">0%</span>
+                        </div>
+                        <div class="progress" style="height:8px;background:#475569;border-radius:4px;overflow:hidden">
+                            <div id="sync_fav_bar" class="progress-bar bg-info" role="progressbar" style="width:0%;transition:width .3s"></div>
+                        </div>
+                        <div id="sync_fav_stats" class="d-flex flex-wrap gap-3 small text-muted mt-2"></div>
+                    </div>
+                    <div id="sync_fav_output" class="output-box mt-2"></div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
                     <span><i class="fas fa-clock-rotate-left me-1"></i>已结束的爬取任务</span>
                     <div class="d-flex gap-1">
                         <button class="btn btn-sm btn-outline-warning" onclick="clearCrawlHistory('failed')" title="清空失败/取消记录"><i class="fas fa-eraser me-1"></i>清空失败/取消</button>
@@ -551,16 +577,6 @@ $base = rtrim(dirname($scriptName), '/');
                 <div class="card-body">
                     <div id="crawl_history_list" class="text-muted">加载中...</div>
                     <div id="crawl_history_pagination" class="mt-2"></div>
-                </div>
-            </div>
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><i class="fas fa-arrows-rotate me-1"></i>定期刷新对象</span>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="loadRefreshTargets()" title="刷新列表"><i class="fas fa-sync"></i></button>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted small">定时任务只会将已开启的项目加入普通爬取队列，由单一 worker 顺序执行。</p>
-                    <div id="refresh_targets_list" class="text-muted">加载中...</div>
                 </div>
             </div>
         </div>
