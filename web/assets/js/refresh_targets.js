@@ -2,6 +2,53 @@ let _crawlHistoryPage = 1;
 const CRAWL_HISTORY_PER_PAGE = 50;
 let _refreshTargetsPage = 1;
 const REFRESH_TARGETS_PER_PAGE = 50;
+let _ehTagTranslationMap = null;
+
+async function loadEhTagTranslationMap() {
+    if (_ehTagTranslationMap !== null) return _ehTagTranslationMap;
+    try {
+        const resp = await fetch('data/eh_tag_translation.json', { cache: 'no-cache' });
+        if (!resp.ok) { _ehTagTranslationMap = false; return null; }
+        const raw = await resp.json();
+        const entries = (raw && typeof raw === 'object' && Array.isArray(raw.data)) ? raw.data : (Array.isArray(raw) ? raw : null);
+        if (!entries) { _ehTagTranslationMap = false; return null; }
+        const map = {};
+        const NS_ALIAS = { category: 'reclass' };
+        for (const entry of entries) {
+            let ns = (entry && typeof entry === 'object') ? String(entry.namespace || '') : '';
+            const data = (entry && typeof entry === 'object') ? entry.data : null;
+            if (!ns || !data || typeof data !== 'object') continue;
+            ns = NS_ALIAS[ns] || ns;
+            const nsMap = {};
+            for (const k of Object.keys(data)) {
+                const v = data[k];
+                const cn = (v && typeof v === 'object') ? String(v.name || '') : '';
+                if (cn) nsMap[String(k).toLowerCase()] = cn;
+            }
+            if (Object.keys(nsMap).length) map[ns] = nsMap;
+        }
+        _ehTagTranslationMap = map;
+        return map;
+    } catch (_) { _ehTagTranslationMap = false; return null; }
+}
+function translateArtistKey(keyRaw) {
+    const raw = String(keyRaw || '').trim();
+    if (!raw) return '';
+    const name = raw.endsWith('$') ? raw.substring(0, raw.length - 1) : raw;
+    const mp = _ehTagTranslationMap && typeof _ehTagTranslationMap === 'object' ? _ehTagTranslationMap : null;
+    const nsMap = (mp && mp.artist) ? mp.artist : null;
+    if (!nsMap) return '';
+    const cn = nsMap[name.toLowerCase()] || null;
+    return cn || '';
+}
+function formatArtistDisplay(keyRaw) {
+    const key = String(keyRaw || '').trim();
+    if (!key) return '';
+    const cn = translateArtistKey(key);
+    if (!cn) return escapeHtml(key);
+    if (cn === key) return escapeHtml(cn);
+    return escapeHtml(cn) + ' <span class="text-muted small ms-1">(' + escapeHtml(key) + ')</span>';
+}
 
 function loadCrawlHistoryPage() {
     loadCrawlHistory(1);
@@ -101,20 +148,24 @@ async function loadRefreshTargets(page) {
         return;
     }
     el.innerHTML = '<div class="table-responsive"><table class="table table-sm table-hover align-middle">' +
-        '<thead><tr><th>刷新</th><th>任务</th><th>检索条件</th><th>语言</th><th>完成时间</th><th>来源</th></tr></thead><tbody>' +
+        '<thead><tr><th>刷新</th><th>任务</th><th>检索条件</th><th>完成时间</th><th>来源</th></tr></thead><tbody>' +
         targets.map(target => {
-            const isFavArtist = String(target.origin_kind || '') === 'favorite_artist';
-            const originInfo = isFavArtist
-                ? '<span class="badge bg-light text-dark border"><i class="fas fa-user me-1"></i>' + escapeHtml(String(target.origin_artist || '')) + '</span>' +
-                    (String(target.origin_favcats || '').trim() ? '<div class="small text-muted mt-1 text-break">favcat: ' + escapeHtml(String(target.origin_favcats)) + '</div>' : '')
-                : ((target.preset_id != null && target.preset_id !== '') ? '<span class="badge bg-light text-dark border">预设</span>' : '<span class="badge bg-light text-dark border">手动</span>');
+            const displayName = String(target.query_label || target.name || '').trim();
+            const favcats = String(target.origin_favcats || '').trim();
+            let originInfo;
+            if (favcats) {
+                originInfo = '<span class="badge bg-light text-dark border"><i class="fas fa-sync me-1"></i>同步</span>' +
+                    '<span class="small text-muted ms-2 text-nowrap">favcat: ' + escapeHtml(favcats) + '</span>';
+            } else {
+                originInfo = '<span class="badge bg-light text-dark border"><i class="fas fa-pen me-1"></i>手动</span>';
+            }
+            const queryCell = '<code class="text-break">' + escapeHtml(target.query || '') + '</code>';
             return '<tr>' +
                 '<td><div class="form-check form-switch"><input class="form-check-input" type="checkbox" ' + (parseInt(target.enabled, 10) ? 'checked ' : '') + 'onchange="toggleRefreshTarget(' + target.id + ',this.checked,this)"></div></td>' +
-                '<td>' + escapeHtml(target.name || '') + '</td>' +
-                '<td class="text-break"><code>' + escapeHtml(target.query || '') + '</code></td>' +
-                '<td class="text-break">' + escapeHtml(target.languages || '全部') + '</td>' +
+                '<td class="text-break">' + (displayName ? escapeHtml(displayName) : '<span class="text-muted small">（未命名）</span>') + '</td>' +
+                '<td class="text-break">' + queryCell + '</td>' +
                 '<td class="text-nowrap">' + escapeHtml(formatCrawlHistoryTime(target.completed_at || '')) + '</td>' +
-                '<td class="text-break small">' + originInfo + '</td>' +
+                '<td class="text-nowrap small">' + originInfo + '</td>' +
                 '</tr>';
         }).join('') + '</tbody></table></div>';
     renderRefreshTargetsPagination(parseInt(data.page, 10) || 1, parseInt(data.total, 10) || 0, parseInt(data.per_page, 10) || REFRESH_TARGETS_PER_PAGE);
@@ -342,50 +393,70 @@ async function syncFavoriteAuthors() {
     function renderFinal(data, elapsed) {
         const s = (data && data.summary) || {};
         const summaryHtml =
-            '<div class="row g-2 mb-2 text-center small">' +
-            '<div class="col"><div class="p-2 border rounded"><div class="fw-bold">' + (s.total_favorite_items ?? 0) + '</div><div class="text-muted">收藏条目</div></div></div>' +
-            '<div class="col"><div class="p-2 border rounded"><div class="fw-bold">' + (s.detail_fetched ?? 0) + '</div><div class="text-muted">详情页抓取</div></div></div>' +
-            '<div class="col"><div class="p-2 border rounded"><div class="fw-bold text-success">' + (s.unique_artists ?? 0) + '</div><div class="text-muted">去重作者</div></div></div>' +
-            '<div class="col"><div class="p-2 border rounded"><div class="fw-bold text-primary">' + (s.created ?? 0) + '</div><div class="text-muted">新建刷新</div></div></div>' +
-            '<div class="col"><div class="p-2 border rounded"><div class="fw-bold text-info">' + (s.updated ?? 0) + '</div><div class="text-muted">更新刷新</div></div></div>' +
-            '<div class="col"><div class="p-2 border rounded"><div class="fw-bold text-warning">' + (s.skipped ?? 0) + '</div><div class="text-muted">跳过</div></div></div>' +
-            ((typeof s.skipped_duplicate_existing === 'number' && s.skipped_duplicate_existing > 0) ? '<div class="col"><div class="p-2 border rounded"><div class="fw-bold text-secondary">' + s.skipped_duplicate_existing + '</div><div class="text-muted">跳过完全重复</div></div></div>' : '') +
-            ((typeof s.origin_backfilled === 'number' && s.origin_backfilled > 0) ? '<div class="col"><div class="p-2 border rounded"><div class="fw-bold text-success">' + s.origin_backfilled + '</div><div class="text-muted">回填旧对象</div></div></div>' : '') +
-            '<div class="col"><div class="p-2 border rounded"><div class="fw-bold text-danger">' + (s.detail_errors ?? 0) + '</div><div class="text-muted">详情失败</div></div></div>' +
+            '<div class="row g-2 mb-3 text-center small">' +
+            '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5">' + (s.total_favorite_items ?? 0) + '</div><div class="text-muted small mt-1">收藏条目</div></div></div>' +
+            '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5">' + (s.detail_fetched ?? 0) + '</div><div class="text-muted small mt-1">详情页抓取</div></div></div>' +
+            '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5 text-success">' + (s.unique_artists ?? 0) + '</div><div class="text-muted small mt-1">去重作者</div></div></div>' +
+            '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5 text-primary">' + (s.created ?? 0) + '</div><div class="text-muted small mt-1">新建刷新</div></div></div>' +
+            '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5 text-info">' + (s.updated ?? 0) + '</div><div class="text-muted small mt-1">更新刷新</div></div></div>' +
+            '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5 text-warning">' + (s.skipped ?? 0) + '</div><div class="text-muted small mt-1">跳过</div></div></div>' +
+            ((typeof s.skipped_duplicate_existing === 'number' && s.skipped_duplicate_existing > 0) ? '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5 text-secondary">' + s.skipped_duplicate_existing + '</div><div class="text-muted small mt-1">跳过完全重复</div></div></div>' : '') +
+            ((typeof s.origin_backfilled === 'number' && s.origin_backfilled > 0) ? '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5 text-success">' + s.origin_backfilled + '</div><div class="text-muted small mt-1">回填旧对象</div></div></div>' : '') +
+            '<div class="col"><div class="p-2 border rounded-2 bg-white shadow-sm"><div class="fw-bold fs-5 text-danger">' + (s.detail_errors ?? 0) + '</div><div class="text-muted small mt-1">详情失败</div></div></div>' +
             '</div>' +
-            '<div class="small text-muted mb-2">耗时：' + elapsed + 's' +
-            (s.scanned_favcats ? ' · 收藏夹：' + escapeHtml(String(s.scanned_favcats)) : '') +
-            (s.dry_run ? ' · <span class="text-warning fw-bold">DRY-RUN 预览</span>' : '') +
+            '<div class="small mb-3 text-center">' +
+            '<span class="me-3"><i class="fas fa-clock text-muted me-1"></i>耗时：' + elapsed + 's</span>' +
+            (s.scanned_favcats ? '<span class="me-3"><i class="fas fa-folder-open text-muted me-1"></i>收藏夹：' + escapeHtml(String(s.scanned_favcats)) + '</span>' : '') +
+            (s.dry_run ? '<span class="text-warning fw-bold"><i class="fas fa-eye me-1"></i>DRY-RUN 预览</span>' : '') +
             '</div>';
         let perArtist = '';
         if (s.artist_favcats_map && typeof s.artist_favcats_map === 'object') {
             const keys = Object.keys(s.artist_favcats_map).sort();
             if (keys.length) {
-                perArtist = '<div class="mb-2"><div class="small fw-bold mb-1">作者（前50）→ 所在收藏夹：</div>' +
-                    '<div class="p-2 bg-light border small" style="max-height:240px;overflow:auto"><table class="table table-sm mb-0"><tbody>' +
+                const placeId = 'sync_fav_per_artist_' + (Date.now() + '_' + Math.floor(Math.random() * 1e6));
+                perArtist = '<div class="mb-3"><div class="small fw-bold mb-2"><i class="fas fa-user-group text-muted me-1"></i>作者（前50）→ 所在收藏夹：</div>' +
+                    '<div class="p-2 bg-white border rounded-2 shadow-sm small" style="max-height:240px;overflow:auto" id="' + placeId + '"><table class="table table-sm mb-0"><tbody>' +
                     keys.slice(0, 50).map(k => '<tr><td class="text-break"><code>artist:&quot;' + escapeHtml(k) + '$&quot;</code></td><td class="text-nowrap">' +
-                        (Array.isArray(s.artist_favcats_map[k]) ? s.artist_favcats_map[k].map(n => '<span class="badge bg-secondary me-1">' + n + '</span>').join('') : '') +
+                        (Array.isArray(s.artist_favcats_map[k]) ? s.artist_favcats_map[k].map(n => '<span class="badge bg-secondary me-1">' + escapeHtml(String(n)) + '</span>').join('') : '') +
                         '</td></tr>').join('') +
                     '</tbody></table></div></div>';
+                Promise.resolve().then(async function () {
+                    try {
+                        if (typeof loadEhTagTranslationMap === 'function') {
+                            try { await loadEhTagTranslationMap(); } catch (_e1) {}
+                        }
+                        const holder = document.getElementById(placeId);
+                        if (!holder) return;
+                        const rows = keys.slice(0, 50).map(function (k) {
+                            const favs = Array.isArray(s.artist_favcats_map[k]) ? s.artist_favcats_map[k] : [];
+                            const labelHtml = (typeof formatArtistDisplay === 'function') ? formatArtistDisplay(k) : '<code>artist:"' + escapeHtml(k) + '$"</code>';
+                            return '<tr><td class="text-break">' + labelHtml + '</td><td class="text-nowrap">' +
+                                favs.map(function (n) { return '<span class="badge bg-secondary me-1">' + escapeHtml(String(n)) + '</span>'; }).join('') +
+                                '</td></tr>';
+                        }).join('');
+                        const tb = holder.querySelector('tbody');
+                        if (tb) tb.innerHTML = rows;
+                    } catch (_e) {}
+                }).catch(function () {});
             }
         }
         let errors = '';
         if (Array.isArray(s.failed_items) && s.failed_items.length) {
-            errors = '<div class="mb-2"><div class="small fw-bold mb-1 text-danger">失败条目：</div>' +
-                '<div class="p-2 bg-light border small" style="max-height:160px;overflow:auto">' +
+            errors = '<div class="mb-3"><div class="small fw-bold mb-2 text-danger"><i class="fas fa-triangle-exclamation me-1"></i>失败条目：</div>' +
+                '<div class="p-2 bg-white border rounded-2 shadow-sm small" style="max-height:160px;overflow:auto">' +
                 s.failed_items.slice(0, 50).map(f =>
                     '<div class="text-break"><b>' + escapeHtml((f && (f.title || f.source_id)) ? (f.title || f.source_id) : String(f)) + '</b>' +
                     (f && f.error ? '<div class="text-danger ms-2 small">' + escapeHtml(String(f.error)) + '</div>' : '') + '</div>'
                 ).join('') +
                 '</div></div>';
         } else if (Array.isArray(s.errors) && s.errors.length) {
-            errors = '<div class="mb-2"><div class="small fw-bold mb-1 text-danger">运行中错误：</div>' +
-                '<div class="p-2 bg-light border small" style="max-height:160px;overflow:auto">' +
+            errors = '<div class="mb-3"><div class="small fw-bold mb-2 text-danger"><i class="fas fa-triangle-exclamation me-1"></i>运行中错误：</div>' +
+                '<div class="p-2 bg-white border rounded-2 shadow-sm small" style="max-height:160px;overflow:auto">' +
                 s.errors.slice(0, 50).map(m => '<div class="text-danger text-break">' + escapeHtml(String(m)) + '</div>').join('') +
                 '</div></div>';
         }
-        const outHtml = (data && data.output ? '<details class="mb-2"><summary class="small cursor-pointer fw-bold">原始 stdout/stderr 完整输出</summary>' +
-            '<pre class="mt-1 p-2 bg-light border small mb-0" style="white-space:pre-wrap;max-height:220px;overflow:auto">' + escapeHtml(String(data.output)) + '</pre></details>' : '');
+        const outHtml = (data && data.output ? '<details class="mb-2"><summary class="small cursor-pointer fw-bold"><i class="fas fa-terminal text-muted me-1"></i>原始 stdout/stderr 完整输出</summary>' +
+            '<pre class="mt-2 p-3 bg-light border rounded-2 small mb-0" style="white-space:pre-wrap;max-height:260px;overflow:auto">' + escapeHtml(String(data.output)) + '</pre></details>' : '');
         if (outEl) {
             outEl.classList.add('show');
             outEl.innerHTML = summaryHtml + perArtist + errors + outHtml;

@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import random
+import re as _re
 import sys
 import time
 from asyncio import sleep
@@ -958,7 +959,6 @@ async def cmd_sync_exhentai_favorite_authors(args: argparse.Namespace, config: C
             d["__kind"] = d.pop("kind", "event") if isinstance(d.get("kind"), str) else "event"
         if "ts" not in d:
             d["ts"] = time.time()
-        # Drop any non-serializable values (e.g. set, bytes) defensively
         def _sanitize(node):
             if isinstance(node, dict):
                 return {str(k): _sanitize(v) for k, v in node.items()}
@@ -969,7 +969,7 @@ async def cmd_sync_exhentai_favorite_authors(args: argparse.Namespace, config: C
             if isinstance(node, (str, int, float, bool)) or node is None:
                 return node
             try:
-                s = json.dumps(node, ensure_ascii=True, default=str)
+                s = json.dumps(node, ensure_ascii=False, default=str)
             except Exception:
                 s = repr(node)
             return s
@@ -977,10 +977,16 @@ async def cmd_sync_exhentai_favorite_authors(args: argparse.Namespace, config: C
             d = _sanitize(d)
         except Exception:
             d = {"__kind": d.get("__kind", "event"), "ts": time.time(), "sanitize_failed": True}
-        try:
-            # Always ASCII-safe to avoid UnicodeEncodeError on ASCII-stdout envs (Synology proc_open LANG=C)
-            line = json.dumps(d, ensure_ascii=True, separators=(",", ":"))
-        except Exception:
+        # 策略：先尝试 UTF-8 明文（ensure_ascii=False + 直接 buffer 写 utf-8 bytes），如果写失败或 encoder 不支持，
+        # 再兜底用 ensure_ascii=True（ASCII \uXXXX 兼容模式，保证不抛 UnicodeEncodeError）。
+        line = None
+        for use_ascii in (False, True):
+            try:
+                line = json.dumps(d, ensure_ascii=use_ascii, separators=(",", ":"))
+                break
+            except Exception:
+                line = None
+        if line is None:
             line = '{"__kind":"event","ts":%s,"ok":false}' % str(int(time.time()))
         _stdout_safe_write("__EVT__" + line)
 
@@ -1243,15 +1249,36 @@ async def cmd_sync_exhentai_favorite_authors(args: argparse.Namespace, config: C
                 wait = random_module.uniform(DETAIL_DELAY_MIN, DETAIL_DELAY_MAX)
                 await sleep(wait)
 
-        # 5. 聚合：{artist: set[favcat, ...]}
+        # 5. 聚合：{artist_tagkey: set[favcat, ...]}
+        #   - artist 字符串统一从「显示别名」规范化到「tag key」：
+        #       * 优先 regex 取 `artist:"<KEY>$"` 内部的 KEY（如果之前 query 形式）
+        #       * 再去掉「puyocha | yo」显示文本里的别名分隔及其后部分，变成 puyocha
+        #       * 小写 trim，方便去重
+        #   - 兼容 remote_favorites.artists_json 旧版本中保存的是显示别名的情况
+        _ARTIST_TAGKEY_FROM_QUERY = _re.compile(r'^artist\s*:\s*"([^"$]+)\$?"\s*$', _re.IGNORECASE)
+        def _normalize_artist_tagkey(raw) -> str:
+            s = str(raw or "").strip()
+            if not s: return ""
+            m = _ARTIST_TAGKEY_FROM_QUERY.match(s)
+            if m: s = m.group(1).strip()
+            if "|" in s:
+                s = s.split("|", 1)[0].strip()
+            # 去结尾 $（兼容直接写 artist:"xxx$" 的行尾）
+            s = s.rstrip("$").strip()
+            # unquote 兜底（%xx 编码）
+            if "%" in s:
+                try:
+                    from urllib.parse import unquote as _unquote
+                    s = _unquote(s)
+                except Exception:
+                    pass
+            return s.strip()
+
         _emit_event({
             "__kind": "stage",
             "stage": "aggregate",
-            "message": "按作者维度聚合",
+            "message": "按作者 tagkey 维度聚合（规范化别名）",
         })
-        # 思路：以 all_items 的 sid→favcat 关系为基础，作者来源分两类：
-        #   - dry_run=True：只能用内存里的 in_memory_artists（这轮详情抓到的）
-        #   - dry_run=False：优先 DB remote_favorites.artists_json，缺失的作者信息用内存本轮结果兜底
         artist_favcats.clear()
         _sid_favcats: dict[str, set[int]] = {}
         for _it in all_items:
@@ -1267,12 +1294,12 @@ async def cmd_sync_exhentai_favorite_authors(args: argparse.Namespace, config: C
             # dry_run：仅用内存结果聚合（不连 DB）
             for _sid, _fcs in _sid_favcats.items():
                 for _a in in_memory_artists.get(_sid) or []:
-                    _a_clean = str(_a or "").strip()
-                    if not _a_clean:
+                    _a_key = _normalize_artist_tagkey(_a)
+                    if not _a_key:
                         continue
-                    if _a_clean not in artist_favcats:
-                        artist_favcats[_a_clean] = set()
-                    artist_favcats[_a_clean].update(_fcs)
+                    if _a_key not in artist_favcats:
+                        artist_favcats[_a_key] = set()
+                    artist_favcats[_a_key].update(_fcs)
         else:
             # 正式模式：先 DB 聚合
             _fc_tuple = tuple(int(c) for c in favcats)
@@ -1299,27 +1326,45 @@ async def cmd_sync_exhentai_favorite_authors(args: argparse.Namespace, config: C
                         _arr = []
                     if not isinstance(_arr, list):
                         continue
-                    _db_artists[_sid_v] = list(_arr)
+                    # 旧版本 remote_favorites 里存的是显示别名，这里统一转 tagkey 再入缓存
+                    _normed = []
+                    _seen_n = set()
+                    for _x in _arr:
+                        n = _normalize_artist_tagkey(_x)
+                        if n and n not in _seen_n:
+                            _seen_n.add(n); _normed.append(n)
+                    if _normed:
+                        _db_artists[_sid_v] = _normed
 
             # 合并内存结果（本轮详情页抓到的）兜底：某些条目可能 DB 里还没写入（=空串）但内存里有
             for _sid, _alist in in_memory_artists.items():
-                if _alist and not _db_artists.get(_sid):
-                    _db_artists[_sid] = list(_alist)
+                if not _alist:
+                    continue
+                # 内存结果（新）是 tagkey 已保证，这里做一次统一 normalize 再 merge
+                _normed = []; _seen_n = set()
+                for _x in _alist:
+                    n = _normalize_artist_tagkey(_x)
+                    if n and n not in _seen_n:
+                        _seen_n.add(n); _normed.append(n)
+                if _normed and not _db_artists.get(_sid):
+                    _db_artists[_sid] = _normed
 
             for _sid, _fcs in _sid_favcats.items():
                 for _a in _db_artists.get(_sid) or []:
-                    _a_clean = str(_a or "").strip()
-                    if not _a_clean:
+                    _a_key = _normalize_artist_tagkey(_a)
+                    if not _a_key:
                         continue
-                    if _a_clean not in artist_favcats:
-                        artist_favcats[_a_clean] = set()
-                    artist_favcats[_a_clean].update(_fcs)
+                    if _a_key not in artist_favcats:
+                        artist_favcats[_a_key] = set()
+                    artist_favcats[_a_key].update(_fcs)
 
         summary["unique_artists"] = len(artist_favcats)
+        summary["artists_tagkeys"] = sorted(artist_favcats.keys())
         _emit_event({
             "__kind": "progress",
             "stage": "aggregate",
             "unique_artists": int(len(artist_favcats)),
+            "artists_tagkeys": sorted(artist_favcats.keys()),
         })
 
         # 诊断：如果跑了详情但没抽到任何作者，抛一条诊断错误到 summary（便于排查详情页 selector 失效）

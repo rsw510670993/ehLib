@@ -1001,14 +1001,48 @@ class Database:
                 seen.add(source_id)
                 title = (r.get("title") or r.get("title_en") or "").strip()
                 title_jp = (r.get("title_jp") or "").strip()
+                artists_raw_list = None
                 artists_json_raw = r.get("artists_json")
                 if artists_json_raw is None:
-                    artists_list = r.get("artists") or []
-                    artists_json = json.dumps(artists_list, ensure_ascii=False) if artists_list else ""
+                    artists_raw_list = list(r.get("artists") or [])
                 elif isinstance(artists_json_raw, list):
-                    artists_json = json.dumps(artists_json_raw, ensure_ascii=False)
+                    artists_raw_list = list(artists_json_raw)
                 else:
-                    artists_json = str(artists_json_raw)
+                    try:
+                        parsed = json.loads(str(artists_json_raw))
+                        artists_raw_list = list(parsed) if isinstance(parsed, list) else None
+                    except Exception:
+                        artists_raw_list = None
+                normalized_artists: list[str] = []
+                _seen_norm = set()
+                if artists_raw_list is not None:
+                    _ARTIST_TAGKEY_FROM_QUERY_RE = None
+                    for _ar in artists_raw_list:
+                        s = str(_ar or "").strip()
+                        if not s:
+                            continue
+                        if _ARTIST_TAGKEY_FROM_QUERY_RE is None:
+                            import re as _re
+                            _ARTIST_TAGKEY_FROM_QUERY_RE = _re.compile(
+                                r'^artist\s*:\s*"([^"$]+)\$?"\s*$', _re.IGNORECASE
+                            )
+                        m = _ARTIST_TAGKEY_FROM_QUERY_RE.match(s)
+                        if m:
+                            s = m.group(1).strip()
+                        if "|" in s:
+                            s = s.split("|", 1)[0].strip()
+                        s = s.rstrip("$").strip()
+                        if "%" in s:
+                            try:
+                                from urllib.parse import unquote as _unquote
+                                s = _unquote(s)
+                            except Exception:
+                                pass
+                        s = s.strip()
+                        if s and s.lower() not in _seen_norm:
+                            _seen_norm.add(s.lower())
+                            normalized_artists.append(s)
+                artists_json = json.dumps(normalized_artists, ensure_ascii=False) if normalized_artists else ""
                 category = (r.get("category") or "").strip()
                 added_at = (r.get("added_at") or "").strip()
                 note = (r.get("note") or "").strip()
@@ -1124,11 +1158,28 @@ class Database:
 
         DEFAULT_LANGS = "japanese,chinese,speechless,text cleaned"
         now = datetime.now().isoformat()
+        import re as _re
+        _ARTIST_TAGKEY_FROM_QUERY = _re.compile(r'^artist\s*:\s*"([^"$]+)\$?"\s*$', _re.IGNORECASE)
+        def _normalize_artist_tagkey(raw) -> str:
+            s = str(raw or "").strip()
+            if not s: return ""
+            m = _ARTIST_TAGKEY_FROM_QUERY.match(s)
+            if m: s = m.group(1).strip()
+            if "|" in s:
+                s = s.split("|", 1)[0].strip()
+            s = s.rstrip("$").strip()
+            if "%" in s:
+                try:
+                    from urllib.parse import unquote as _unquote
+                    s = _unquote(s)
+                except Exception:
+                    pass
+            return s.strip()
 
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             for artist, favcats_set in (artist_favcats_map or {}).items():
-                artist_clean = str(artist or "").strip()
+                artist_clean = _normalize_artist_tagkey(artist)
                 if not artist_clean:
                     continue
                 query = f'artist:"{artist_clean}$"'

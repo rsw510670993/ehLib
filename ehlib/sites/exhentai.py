@@ -938,10 +938,35 @@ class ExhentaiSite(SiteBase):
 
     @staticmethod
     def _extract_artists_from_gallery_html(html: str) -> list[str]:
-        """详情页只取 artist 标签，按首次出现顺序去重。"""
+        """详情页只取 artist 标签。优先用 <a id='ta_artist:TAGKEY'> / href=/tag/artist:TAGKEY 里的 TAGKEY（真正的 tag 主键，
+        而不是 <a> 内显示的「puyocha | yo」别名），取不到再兜底用显示文本。保持顺序去重。
+        """
+        import re as _re
+        _ID_ARTIST = _re.compile(r"^ta_artist:(.+)$", _re.IGNORECASE)
+        _HREF_ARTIST = _re.compile(r"[/=]artist:([^&?#/]+)", _re.IGNORECASE)
         soup = BeautifulSoup(html, "html.parser")
         artists: list[str] = []
         seen: set[str] = set()
+
+        def _pick(tag_link) -> str | None:
+            raw_id = (tag_link.get("id") or "").strip()
+            m = _ID_ARTIST.match(raw_id)
+            if m:
+                v = m.group(1).strip()
+                if v: return v
+            href = (tag_link.get("href") or "").strip()
+            m2 = _HREF_ARTIST.search(href)
+            if m2:
+                raw = m2.group(1).strip()
+                try:
+                    from urllib.parse import unquote as _unquote
+                    v = _unquote(raw).strip()
+                except Exception:
+                    v = raw
+                if v: return v
+            text = tag_link.get_text(strip=True)
+            return text.strip() or None
+
         tag_rows = soup.select("#taglist tr")
         if not tag_rows:
             taglist = soup.select_one("#taglist")
@@ -958,29 +983,45 @@ class ExhentaiSite(SiteBase):
                 tag_link = tag_div.select_one("a")
                 if not tag_link:
                     continue
-                name = tag_link.get_text(strip=True)
+                name = _pick(tag_link)
                 if name and name not in seen:
                     seen.add(name)
                     artists.append(name)
             if not seen:
                 for tag_link in row.select("a"):
-                    name = tag_link.get_text(strip=True)
-                    if not name or name == "artist":
+                    name = _pick(tag_link)
+                    if not name or name.lower() == "artist":
                         continue
                     if name not in seen:
                         seen.add(name)
                         artists.append(name)
         if artists:
             return artists
-        # 兜底：按 href =/artist/ 模式扫全部链接
-        TAG_URL_PATTERN = "artist/"
-        for a in soup.select("a[href]"):
+        # 兜底：扫整页所有 <a id^='ta_artist:' href=/tag/artist:>
+        TAG_URL_PATTERN = "/tag/artist:"
+        ID_PREFIX = "ta_artist:"
+        for a in soup.select("a"):
+            raw_id = (a.get("id") or "").strip()
+            if raw_id.startswith(ID_PREFIX):
+                v = raw_id[len(ID_PREFIX):].strip()
+                if v and v not in seen:
+                    seen.add(v); artists.append(v)
+                    continue
             href = a.get("href", "")
-            if TAG_URL_PATTERN not in href:
-                continue
-            name = a.get_text(strip=True)
-            if name and name not in seen:
-                seen.add(name)
-                artists.append(name)
+            if TAG_URL_PATTERN in href:
+                m2 = _HREF_ARTIST.search(href)
+                if m2:
+                    from urllib.parse import unquote as _unquote
+                    try:
+                        v = _unquote(m2.group(1)).strip()
+                    except Exception:
+                        v = m2.group(1).strip()
+                    if v and v not in seen:
+                        seen.add(v); artists.append(v)
+                        continue
+                name = a.get_text(strip=True)
+                if name and name not in seen:
+                    seen.add(name)
+                    artists.append(name)
         return artists
 

@@ -1120,14 +1120,46 @@ try {
             $combined = trim($stdout) !== '' ? $stdout : $stderr;
             $summary = null;
             if (trim($stdout) !== '') {
+                $buf = '';
+                $depth = 0;
+                $inStr = false;
+                $esc = false;
                 $lines = explode("\n", str_replace("\r\n", "\n", $stdout));
                 for ($i = count($lines) - 1; $i >= 0; $i--) {
-                    $line = trim($lines[$i]);
-                    if ($line === '') continue;
-                    $first = substr($line, 0, 1);
-                    if ($first === '{' || $first === '[') {
-                        $decoded = @json_decode($line, true);
-                        if (is_array($decoded) && empty($decoded['__kind'])) { $summary = $decoded; break; }
+                    $rawLine = $lines[$i];
+                    for ($j = strlen($rawLine) - 1; $j >= 0; $j--) {
+                        $ch = $rawLine[$j];
+                        if ($esc) { $buf = $ch . $buf; $esc = false; continue; }
+                        if ($ch === '\\') { $buf = $ch . $buf; $esc = true; continue; }
+                        if ($inStr) { if ($ch === '"') $inStr = false; $buf = $ch . $buf; continue; }
+                        if ($ch === '"') { $inStr = true; $buf = $ch . $buf; continue; }
+                        if ($ch === '{' || $ch === '[') { $depth++; $buf = $ch . $buf; }
+                        elseif ($ch === '}' || $ch === ']') { $depth--; $buf = $ch . $buf; }
+                        else { $buf = $ch . $buf; }
+                        if ($depth === 0 && ($ch === '{' || $ch === ']')) {
+                            $decoded = @json_decode(trim($buf), true);
+                            if (is_array($decoded) && empty($decoded['__kind'])) { $summary = $decoded; break 2; }
+                            $buf = '';
+                        }
+                    }
+                }
+                if ($summary === null) {
+                    for ($i = count($lines) - 1; $i >= 0; $i--) {
+                        $line = trim($lines[$i]);
+                        if ($line === '') continue;
+                        $first = substr($line, 0, 1);
+                        if ($first === '{' || $first === '[') {
+                            $decoded = @json_decode($line, true);
+                            if (is_array($decoded) && empty($decoded['__kind'])) { $summary = $decoded; break; }
+                        }
+                    }
+                }
+                if ($summary === null) {
+                    $cleaned = preg_replace('/^__EVT__.*$/m', '', $stdout);
+                    $cleaned = trim((string)$cleaned);
+                    if ($cleaned !== '') {
+                        $decoded = @json_decode($cleaned, true);
+                        if (is_array($decoded) && empty($decoded['__kind'])) { $summary = $decoded; }
                     }
                 }
             }
@@ -1594,6 +1626,83 @@ try {
                 $stmt->bindValue(2, $offset, PDO::PARAM_INT);
                 $stmt->execute();
                 $targets = $stmt->fetchAll();
+
+                $ns_alias = ['category' => 'reclass'];
+                $trans_ns_map = null;
+                $trans_loaded = false;
+                function _ensure_translation(&$root, &$ns_alias, &$trans_ns_map, &$trans_loaded) {
+                    if ($trans_loaded) return;
+                    $trans_loaded = true;
+                    $trans_ns_map = [];
+                    $db_path = $root . '/data/eh_tag_translation.json';
+                    if (!is_file($db_path)) return;
+                    $raw = @json_decode((string)@file_get_contents($db_path), true);
+                    $entries = is_array($raw) && isset($raw['data']) && is_array($raw['data']) ? $raw['data'] : $raw;
+                    if (!is_array($entries)) return;
+                    foreach ($entries as $entry) {
+                        $ns_name = $entry['namespace'] ?? '';
+                        $ns_data = $entry['data'] ?? null;
+                        if (!$ns_name || !is_array($ns_data)) continue;
+                        $tag_map = [];
+                        foreach ($ns_data as $tag_key => $tag_val) {
+                            if (is_array($tag_val) && !empty($tag_val['name'])) {
+                                $tag_map[strtolower((string)$tag_key)] = (string)$tag_val['name'];
+                            }
+                        }
+                        $trans_ns_map[$ns_name] = $tag_map;
+                    }
+                }
+                function _translate_ns_name(&$root, &$ns_alias, &$trans_ns_map, &$trans_loaded, $ns, $name_raw) {
+                    _ensure_translation($root, $ns_alias, $trans_ns_map, $trans_loaded);
+                    if (!$trans_ns_map || $name_raw === null || $name_raw === '') return null;
+                    $name = (string)$name_raw;
+                    if (substr($name, -1) === '$') $name = substr($name, 0, -1);
+                    $lookup_ns = $ns_alias[$ns] ?? $ns;
+                    $ns_map = $trans_ns_map[$lookup_ns] ?? null;
+                    if (!$ns_map) return null;
+                    return $ns_map[strtolower($name)] ?? null;
+                }
+
+                $QUERY_TOKEN_RE = '/(?<!\S)(-?)([a-zA-Z_]+):(?:"([^"]+)"|(\S+))/';
+                $NS_DISPLAY = [
+                    'artist' => '作者', 'character' => '角色', 'cosplayer' => 'Coser',
+                    'female' => '女性', 'group' => '社团', 'language' => '语言',
+                    'male' => '男性', 'mixed' => '混合', 'other' => '其他',
+                    'parody' => '原作', 'reclass' => '分类', 'category' => '分类',
+                ];
+                foreach ($targets as &$t) {
+                    $query_label = null;
+                    if (!empty($t['query'])) {
+                        $query_label = preg_replace_callback($QUERY_TOKEN_RE, function ($m) use (&$root, &$ns_alias, &$trans_ns_map, &$trans_loaded, &$NS_DISPLAY) {
+                            $neg = $m[1];
+                            $ns = $m[2];
+                            $raw_name = $m[3] !== '' ? $m[3] : $m[4];
+                            $name = substr($raw_name, -1) === '$' ? substr($raw_name, 0, -1) : $raw_name;
+                            $lookup_ns = $ns_alias[$ns] ?? $ns;
+                            $translated = _translate_ns_name($root, $ns_alias, $trans_ns_map, $trans_loaded, $ns, $name);
+                            $label = $NS_DISPLAY[$ns] ?? ($NS_DISPLAY[$lookup_ns] ?? $ns);
+                            $any = $translated !== null || $label !== $ns;
+                            if (!$any) return $m[0];
+                            return $neg . $label . ':' . ($translated ?? $name);
+                        }, $t['query']);
+                    }
+                    $t['query_label'] = $query_label !== null ? (string)$query_label : '';
+                    if (!empty($t['origin_kind']) && $t['origin_kind'] === 'favorite_artist' && !empty($t['origin_artist'])) {
+                        $cn = _translate_ns_name($root, $ns_alias, $trans_ns_map, $trans_loaded, 'artist', $t['origin_artist']);
+                        $t['origin_artist_cn'] = $cn !== null ? (string)$cn : '';
+                        if (empty($t['query_label'])) {
+                            $label = $cn !== null ? ('作者:' . $cn) : ('作者:' . $t['origin_artist']);
+                            $t['query_label'] = $label;
+                        }
+                    } else {
+                        $t['origin_artist_cn'] = '';
+                    }
+                    if (empty($t['name']) && !empty($t['query_label'])) {
+                        $t['name'] = $t['query_label'];
+                    }
+                }
+                unset($t);
+
                 json_exit([
                     'targets' => $targets,
                     'page' => $page,
