@@ -415,8 +415,9 @@
                         <div id="cache_search_scope" class="d-inline-flex flex-wrap gap-1 align-middle">
                             <button class="cat-tag active" data-scope="all" onclick="toggleSearchScope(this)" style="--cat-color:#0d6efd">全部</button>
                             <button class="cat-tag active" data-scope="title" onclick="toggleSearchScope(this)" style="--cat-color:#e67e22">标题</button>
-                            <button class="cat-tag active" data-scope="artist" onclick="toggleSearchScope(this)" style="--cat-color:#9b59b6">作者</button>
+                            <button class="cat-tag active" data-scope="author" onclick="toggleSearchScope(this)" style="--cat-color:#9b59b6">作者</button>
                             <button class="cat-tag active" data-scope="tags" onclick="toggleSearchScope(this)" style="--cat-color:#27ae60">标签</button>
+                            <button class="cat-tag active" data-scope="tags_cn" onclick="toggleSearchScope(this)" style="--cat-color:#f59e0b">中文标签</button>
                         </div>
                     </div>
                     <div>

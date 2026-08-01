@@ -21,6 +21,89 @@ function error_exit($msg) {
     json_exit(['error' => $msg], false);
 }
 
+// ─── Word-boundary match helpers v2 ───
+// 核心策略：英文/数字/罗马音 token，用 (?<![A-Za-z0-9_-]) needle (?![A-Za-z0-9_-]) 保证字符级 token 边界
+//       （不会再把 jagayamatarawo 内部 3 字母 gay 当命中）
+//       日文假名/汉字 token，无词边界，直接 IN (包含) 匹配即可，也不会有 3 字母误命中。
+function _has_ascii($s) {
+    return (bool)preg_match('/[A-Za-z0-9]/', (string)$s);
+}
+function _regexp_safe($s) {
+    // 只转义 PCRE 元字符；不碰 Unicode。
+    static $special = ['\\','^','$','.','[',']','|','(',')','?','*','+','{','}','/'];
+    $out = '';
+    foreach (str_split((string)$s) as $c) {
+        $out .= in_array($c, $special, true) ? '\\' . $c : $c;
+    }
+    return $out;
+}
+function _strict_token_safe($needle) {
+    $safe = _regexp_safe(trim((string)$needle));
+    if ($safe === '') return '';
+    if (_has_ascii($needle)) {
+        return '(?<![A-Za-z0-9_\-])' . $safe . '(?![A-Za-z0-9_\-])';
+    }
+    return $safe;
+}
+// sc.artist 列：多值分隔（逗号/分号/竖线/斜杠/空白）
+function _word_boundary_sql_artist_sc($field, $needle, &$params) {
+    $n = trim((string)$needle);
+    if ($n === '') { return '1=1'; }
+    $safe = _regexp_safe($n);
+    $sep = '(?:^|[\s,;&|\/]+)';
+    $params[] = $sep . $safe . '(?=[\s,;&|\/]+|$)';
+    return "$field REGEXP ?";
+}
+// title / title_jp 列
+function _word_boundary_sql_title($field, $needle, &$params) {
+    $n = trim((string)$needle);
+    if ($n === '') { return '1=1'; }
+    $params[] = _strict_token_safe($n);
+    return "$field REGEXP ?";
+}
+// gallery_tags.tags / tags.name 独立 tag 名
+function _word_boundary_sql_tag($field, $needle, &$params) {
+    $n = trim((string)$needle);
+    if ($n === '') { return '1=1'; }
+    $params[] = _strict_token_safe($n);
+    return "$field REGEXP ?";
+}
+// JSON tags/tags_cn → 非命名空间的“内容类”标签：命中 name，但排除 artist / group / cosplayer / language 等非内容命名空间
+function _word_boundary_sql_json_tags($field, $needle, &$params, $exclude_content_namespaces = ['artist','group','cosplayer','language']) {
+    $n = trim((string)$needle);
+    if ($n === '') { return '1=1'; }
+    $safe_n = _strict_token_safe($n);
+    $safe_raw = _regexp_safe($n);
+    // 正向：任意 entry 的 name 字段包含 safe_n（带 token 边界）
+    $positive = '"name"\s*:\s*"[^"]*' . $safe_n . '[^"]*"';
+    // 反向：同一 entry 内同时有 type 属于排除列表 且 name 命中
+    $neg_parts = [];
+    foreach ((array)$exclude_content_namespaces as $t) {
+        $tsafe = _regexp_safe($t);
+        $neg_parts[] = '"type"\s*:\s*"' . $tsafe . '"[^}]{0,220}"name"\s*:\s*"[^"]*' . $safe_raw . '[^"]*"';
+        $neg_parts[] = '"name"\s*:\s*"[^"]*' . $safe_raw . '[^"]*"[^}]{0,220}"type"\s*:\s*"' . $tsafe . '"';
+    }
+    $negative = empty($neg_parts) ? '^$' : ('(?:' . implode('|', $neg_parts) . ')');
+    $params[] = $positive;
+    $params[] = $negative;
+    return "($field REGEXP ? AND $field NOT REGEXP ?)";
+}
+// scope=author：只在 JSON tag entry 的 type=artist 里命中 name（或 sc.artist 列多值分隔）
+function _json_author_boundary_sql($field, $needle, &$params) {
+    $n = trim((string)$needle);
+    if ($n === '') { return '1=1'; }
+    $safe_n = _strict_token_safe($n);
+    $tsafe = _regexp_safe('artist');
+    // 支持两种顺序（type 在 name 前/后）
+    $pattern =
+        '(?:"type"\s*:\s*"' . $tsafe . '"[^}]{0,220}"name"\s*:\s*"[^"]*' . $safe_n . '[^"]*")' .
+        '|' .
+        '(?:"name"\s*:\s*"[^"]*' . $safe_n . '[^"]*"[^}]{0,220}"type"\s*:\s*"' . $tsafe . '")';
+    $params[] = $pattern;
+    return "$field REGEXP ?";
+}
+
+
 function normalize_path($path) {
     $path = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, (string)$path);
     if (preg_match('/^[A-Za-z]:' . preg_quote(DIRECTORY_SEPARATOR, '/') . '/', $path)) {
@@ -573,6 +656,12 @@ try {
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->sqliteCreateFunction('regexp', function ($pattern, $subject) {
+                    if ($pattern === null || $pattern === '') return 0;
+                    $flags = defined('PREG_UTF8') ? PREG_UTF8 : 1;
+                    $p = @preg_match('/' . str_replace('/', '\\/', (string)$pattern) . '/ui' , (string)$subject);
+                    return $p === 1 ? 1 : 0;
+                }, 2);
                 $params = [];
                 $has_tags = !empty($tag_names);
                 $from = $has_tags ? 'galleries g' : 'galleries';
@@ -582,11 +671,16 @@ try {
 
                 if ($has_tags) {
                     $joins = ' JOIN gallery_tags gt ON g.id = gt.gallery_id JOIN tags t ON gt.tag_id = t.id';
-                    $where = 'WHERE (' . implode(' OR ', array_fill(0, count($tag_names), 't.name LIKE ?')) . ')';
-                    foreach ($tag_names as $tag) $params[] = '%' . $tag . '%';
+                    $likes = [];
+                    foreach ($tag_names as $tag) {
+                        $likes[] = _word_boundary_sql_tag('t.name', $tag, $params);
+                    }
+                    $where = 'WHERE (' . implode(' OR ', $likes) . ')';
                 }
                 if ($source) { $where .= ' AND ' . $prefix . 'source=?'; $params[] = $source; }
-                if ($artist) { $where .= ' AND ' . $prefix . 'artist LIKE ?'; $params[] = '%' . $artist . '%'; }
+                if ($artist) {
+                    $where .= ' AND ' . _word_boundary_sql_artist_sc($prefix . 'artist', $artist, $params);
+                }
                 if ($language) {
                     $langs = array_filter(array_map('trim', explode(',', $language)));
                     if (!empty($langs)) {
@@ -1211,30 +1305,54 @@ try {
             try {
                 $pdo = new PDO('sqlite:' . $db_path);
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->sqliteCreateFunction('regexp', function ($pattern, $subject) {
+                    if ($pattern === null || $pattern === '') return 0;
+                    $p = @preg_match('/' . str_replace('/', '\\/', (string)$pattern) . '/ui' , (string)$subject);
+                    return $p === 1 ? 1 : 0;
+                }, 2);
 
-                $search_fields = $_GET['search_fields'] ?? 'all';
+                // Map old scope names to new ones (B.W.C.)
+                $search_fields_raw = $_GET['search_fields'] ?? 'all';
+                if ($search_fields_raw !== 'all') {
+                    $old = array_map('trim', explode(',', $search_fields_raw));
+                    $scope_list = [];
+                    foreach ($old as $s) {
+                        if ($s === 'title') $scope_list[] = 'title';
+                        elseif ($s === 'artist') $scope_list[] = 'author';   // BWC: old 'artist' scope = new 'author' scope
+                        elseif ($s === 'tags') { $scope_list[] = 'tags'; $scope_list[] = 'tags_cn'; }
+                        elseif ($s === 'tags_cn' || $s === 'author') $scope_list[] = $s;
+                    }
+                    $scope_list = array_values(array_unique($scope_list));
+                } else {
+                    $scope_list = ['title','author','tags','tags_cn'];
+                }
+
                 $params = [];
                 $where = 'WHERE 1=1';
                 if ($source) { $where .= ' AND sc.source=?'; $params[] = $source; }
-                if ($artist) { $where .= ' AND sc.artist LIKE ?'; $params[] = '%' . $artist . '%'; }
+                if ($artist) {
+                    // Dedicated "artist" URL param — author match on sc.artist column (broad) + JSON author tokens (strict)
+                    $expr_a = _word_boundary_sql_artist_sc('sc.artist', $artist, $params);
+                    $expr_b = _json_author_boundary_sql('sc.tags', $artist, $params);
+                    $expr_c = _json_author_boundary_sql('sc.tags_cn', $artist, $params);
+                    $where .= " AND ($expr_a OR $expr_b OR $expr_c)";
+                }
                 if ($title) {
                     $field_list = [];
-                    $scope_list = $search_fields === 'all' ? ['title','artist','tags','tags_cn'] : explode(',', $search_fields);
-                    if (in_array('title', $scope_list)) {
-                        $field_list[] = 'sc.title LIKE ?';
-                        $field_list[] = 'sc.title_jp LIKE ?';
-                        $params[] = '%' . $title . '%';
-                        $params[] = '%' . $title . '%';
+                    if (in_array('title', $scope_list, true)) {
+                        $field_list[] = _word_boundary_sql_title('sc.title', $title, $params);
+                        $field_list[] = _word_boundary_sql_title('sc.title_jp', $title, $params);
                     }
-                    if (in_array('artist', $scope_list)) {
-                        $field_list[] = 'sc.artist LIKE ?';
-                        $params[] = '%' . $title . '%';
+                    if (in_array('author', $scope_list, true)) {
+                        $field_list[] = _word_boundary_sql_artist_sc('sc.artist', $title, $params);
+                        $field_list[] = _json_author_boundary_sql('sc.tags', $title, $params);
+                        $field_list[] = _json_author_boundary_sql('sc.tags_cn', $title, $params);
                     }
-                    if (in_array('tags', $scope_list)) {
-                        $field_list[] = 'sc.tags LIKE ?';
-                        $params[] = '%' . $title . '%';
-                        $field_list[] = 'sc.tags_cn LIKE ?';
-                        $params[] = '%' . $title . '%';
+                    if (in_array('tags', $scope_list, true)) {
+                        $field_list[] = _word_boundary_sql_json_tags('sc.tags', $title, $params, true);
+                    }
+                    if (in_array('tags_cn', $scope_list, true)) {
+                        $field_list[] = _word_boundary_sql_json_tags('sc.tags_cn', $title, $params, true);
                     }
                     if (!empty($field_list)) {
                         $where .= ' AND (' . implode(' OR ', $field_list) . ')';
