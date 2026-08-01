@@ -326,3 +326,48 @@ button.cat-tag[data-cat="all"]:not(.active):hover {
     overflow-y: auto;
     box-shadow: 0 .5rem 1rem rgba(0, 0, 0, .15);
 }
+
+/* ─── Sidebar: group labels ─── */
+.nav-group-label {
+    font-size: .72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #64748b;
+    padding: .75rem 1.25rem .25rem;
+    list-style: none;
+}
+
+/* ─── Global Download Pill (top-right header) ─── */
+.download-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .3rem .7rem;
+    background: #0b5ed7;
+    color: #fff;
+    border-radius: 999px;
+    font-size: .82rem;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    box-shadow: 0 1px 3px rgba(11, 94, 215, .35);
+    transition: background .2s, transform .15s;
+}
+.download-pill:hover { background: #0a53bd; transform: translateY(-1px); }
+.download-pill .pill-count { white-space: nowrap; }
+.download-pill .pill-bar {
+    width: 70px;
+    height: 6px;
+    background: rgba(255,255,255,.25);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.download-pill .pill-bar > div {
+    height: 100%;
+    background: #22c55e;
+    border-radius: 3px;
+    transition: width .3s;
+}
+.download-pill.pill-active .pill-bar > div { background: #f1c40f; }
+.download-pill.pill-error  .pill-bar > div { background: #ef4444; }
