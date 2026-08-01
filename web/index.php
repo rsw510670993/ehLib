@@ -12,7 +12,7 @@ $projectPath = realpath(__DIR__ . '/..');
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=16">
+    <link rel="stylesheet" href="assets/css/app.css?v=17">
 </head>
 <body>
 
@@ -21,14 +21,14 @@ $projectPath = realpath(__DIR__ . '/..');
     <ul class="nav flex-column mt-2">
         <li class="nav-group-label">配置</li>
         <li class="nav-item"><a class="nav-link active" href="#" data-page="settings"><i class="fas fa-sliders"></i>系统设置</a></li>
-        <li class="nav-group-label">同步 & 爬取</li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="refresh_targets"><i class="fas fa-arrows-rotate"></i>作者同步 & 刷新</a></li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="cache"><i class="fas fa-database"></i>发现 & 检索</a></li>
-        <li class="nav-group-label">下载</li>
+        <li class="nav-group-label">爬取</li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="sync"><i class="fas fa-arrows-rotate"></i>定时同步</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="crawl"><i class="fas fa-cloud-download-alt"></i>手动爬取</a></li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="download"><i class="fas fa-download"></i>下载中心</a></li>
-        <li class="nav-group-label">本地图库</li>
-        <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>本地图库</a></li>
-        <li class="nav-group-label">工具 & 维护</li>
+        <li class="nav-group-label">库</li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="gallery"><i class="fas fa-images"></i>图库</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" data-page="cache"><i class="fas fa-database"></i>缓存</a></li>
+        <li class="nav-group-label">维护</li>
         <li class="nav-item"><a class="nav-link" href="#" data-page="tools"><i class="fas fa-toolbox"></i>工具 & 维护</a></li>
     </ul>
 </div>
@@ -132,13 +132,13 @@ $projectPath = realpath(__DIR__ . '/..');
 
 <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/js/bootstrap.bundle.min.js"></script>
 <script src="assets/js/core.js"></script>
-<script src="assets/js/navigation.js?v=6"></script>
+<script src="assets/js/navigation.js?v=7"></script>
 <script src="assets/js/config.js"></script>
 <script src="assets/js/download.js?v=3"></script>
 <script src="assets/js/gallery.js?v=8"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=22"></script>
+<script src="assets/js/cache.js?v=23"></script>
 <script src="assets/js/refresh_targets.js?v=4"></script>
 <script src="assets/js/test_verify.js"></script>
 </body>

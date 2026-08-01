@@ -1,11 +1,12 @@
 // ─── Navigation alias map (old → new) ───
 const PAGE_ALIASES = {
-    dashboard:      'tools',
-    config:         'settings',
-    cookies:        'settings',
-    'crawl-history':'refresh_targets',
-    'test-verify':  'tools',
-    export:         'tools',
+    dashboard:        'tools',
+    config:           'settings',
+    cookies:          'settings',
+    refresh_targets:  'sync',
+    'crawl-history':  'sync',
+    'test-verify':    'tools',
+    export:           'tools',
 };
 
 function resolvePage(name) {
@@ -23,12 +24,13 @@ function switchPage(name) {
     if (pageEl) pageEl.classList.remove('section-hidden');
 
     const titles = {
-        settings:        ['系统设置',         'Cookie & 系统参数'],
-        refresh_targets: ['作者同步 & 刷新',  '远程收藏作者 & 爬取队列管理'],
-        cache:           ['发现 & 检索',       '爬取 exhentai & 本地缓存检索'],
-        download:        ['下载中心',         '单本 / 批量 / 重试未完成'],
-        gallery:         ['本地图库',         '已下载的画廊列表'],
-        tools:           ['工具 & 维护',      '仪表盘 / 校对 / 数据导出'],
+        settings: ['系统设置',    'Cookie & 系统参数'],
+        sync:     ['定时同步',    '远程收藏作者 & 已结束任务'],
+        crawl:    ['手动爬取',    '关键词爬取 + 队列'],
+        download: ['下载中心',    '单本 / 批量 / 重试未完成'],
+        gallery:  ['图库',        '已下载的画廊列表'],
+        cache:    ['缓存浏览',    '本地索引检索 + 批量下载'],
+        tools:    ['工具 & 维护', '仪表盘 / 校对 / 数据导出'],
     };
     const t = titles[page] || ['页面', ''];
     const titleEl = document.getElementById('page_title');
@@ -37,11 +39,13 @@ function switchPage(name) {
     if (subEl) subEl.textContent = t[1];
 
     // page-enter initializers
-    if (page === 'settings')        { loadCookies(); loadSettings(); }
-    if (page === 'refresh_targets') { loadCrawlHistoryPage(); }
-    if (page === 'cache')           { loadCacheLanguages(); loadCrawlLanguages(); loadCachePage(1); loadCrawlQueue(); }
-    if (page === 'gallery')         { loadGalleries(); }
-    if (page === 'tools')           {
+    if (page === 'settings') { loadCookies(); loadSettings(); }
+    if (page === 'sync')     { loadCrawlHistoryPage(); }
+    if (page === 'crawl')    { loadCrawlLanguages(); loadSearchPresets(); loadCrawlQueue(); }
+    if (page === 'cache')    { loadCacheLanguages(); loadCachePage(1); }
+    if (page === 'download') { /* 下载中心按需触发，无预加载 */ }
+    if (page === 'gallery')  { loadGalleries(); }
+    if (page === 'tools')    {
         loadDashboard();
         tvLoadList(); pollVerifyStatus();
     }

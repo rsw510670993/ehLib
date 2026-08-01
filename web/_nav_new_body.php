@@ -110,8 +110,8 @@
 
         </div>
 
-        <!-- ═══ 2. 作者同步 & 刷新 ═══ -->
-        <div id="page_refresh_targets" class="page-section section-hidden">
+        <!-- ═══ 2. 定时同步 ═══ -->
+        <div id="page_sync" class="page-section section-hidden">
 
             <ul class="nav nav-tabs mb-3" role="tablist">
                 <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab_rt_list">定期刷新对象</button></li>
@@ -121,7 +121,7 @@
                 <div class="tab-pane fade show active" id="tab_rt_list">
                     <div class="card mb-3">
                         <div class="card-header d-flex justify-content-between align-items-center">
-                            <span><i class="fas fa-arrows-rotate me-1"></i>定期刷新对象</span>
+                            <span><i class="fas fa-arrows-rotate me-1"></i>定时同步</span>
                             <div class="d-flex gap-1">
                                 <button class="btn btn-sm btn-outline-info" id="sync_fav_btn" onclick="syncFavoriteAuthors()" title="从远程收藏夹扫描，将作者批量注册为刷新对象（节流：列表×2+抖动、详情×3+抖动，每20本详情再批次间隔30~60s）"><i class="fas fa-cloud-arrow-down me-1"></i>从远程收藏同步作者刷新</button>
                                 <button class="btn btn-sm btn-outline-danger d-none" id="sync_fav_cancel_btn" onclick="cancelSyncFavoriteAuthors()" title="终止当前同步任务（写 download_cancel.flag，约 1s 内生效）"><i class="fas fa-stop me-1"></i>终止同步</button>
@@ -166,12 +166,14 @@
 
         </div>
 
-        <!-- ═══ 3. 发现 & 检索 ═══ -->
-        <div id="page_cache" class="page-section section-hidden">
+        <!-- ═══ 3. 手动爬取（原 page_cache 上半）═══ -->
+        <div id="page_crawl" class="page-section section-hidden">
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <span>本地缓存索引</span>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="loadCachePage(1)"><i class="fas fa-sync"></i></button>
+                    <span><i class="fas fa-cloud-download-alt me-1"></i>手动爬取</span>
+                    <div class="d-flex gap-1">
+                        <button class="btn btn-sm btn-outline-secondary" onclick="loadCrawlQueue()"><i class="fas fa-sync me-1"></i>刷新队列</button>
+                    </div>
                 </div>
                 <div class="card-body border-bottom bg-light py-2">
                     <div class="row g-2 align-items-end mb-2">
@@ -225,76 +227,12 @@
                         <div class="d-flex justify-content-between align-items-center mb-1"><span class="small text-info"><i class="fas fa-list-ol me-1"></i>爬取队列</span><button class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="loadCrawlQueue()" title="刷新队列"><i class="fas fa-sync"></i></button></div>
                         <div id="crawl_queue_list" class="small text-muted">暂无任务</div>
                     </div>
-                    <hr class="my-2">
-                    <div class="row g-2 align-items-end mb-2">
-                        <div class="col-md-5">
-                            <label class="form-label small mb-1 text-muted"><i class="fas fa-filter me-1"></i>本地检索</label>
-                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索关键词" onkeydown="if(event.key==='Enter')cacheSearch()">
-                        </div>
-                        <div class="col-md-1">
-                            <button class="btn btn-sm btn-outline-primary w-100" onclick="cacheSearch()" title="筛选"><i class="fas fa-filter"></i></button>
-                        </div>
-                        <div class="col-md-1">
-                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
-                        </div>
-                    </div>
-                    <div class="mb-2">
-                        <span class="small text-muted me-2">检索范围:</span>
-                        <div id="cache_search_scope" class="d-inline-flex flex-wrap gap-1 align-middle">
-                            <button class="cat-tag active" data-scope="all" onclick="toggleSearchScope(this)" style="--cat-color:#0d6efd">全部</button>
-                            <button class="cat-tag active" data-scope="title" onclick="toggleSearchScope(this)" style="--cat-color:#e67e22">标题</button>
-                            <button class="cat-tag active" data-scope="artist" onclick="toggleSearchScope(this)" style="--cat-color:#9b59b6">作者</button>
-                            <button class="cat-tag active" data-scope="tags" onclick="toggleSearchScope(this)" style="--cat-color:#27ae60">标签</button>
-                        </div>
-                    </div>
-                    <div>
-                        <span class="small text-muted me-2">分类:</span>
-                        <div id="cache_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
-                            <button class="cat-tag active" data-cat="all" onclick="cacheToggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
-                            <button class="cat-tag" data-cat="Doujinshi" onclick="cacheToggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
-                            <button class="cat-tag" data-cat="Manga" onclick="cacheToggleCategory(this)" style="--cat-color:#3498db">Manga</button>
-                            <button class="cat-tag" data-cat="Artist CG" onclick="crawlToggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
-                            <button class="cat-tag" data-cat="Game CG" onclick="crawlToggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
-                            <button class="cat-tag" data-cat="Western" onclick="crawlToggleCategory(this)" style="--cat-color:#27ae60">Western</button>
-                            <button class="cat-tag" data-cat="Non-H" onclick="crawlToggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
-                            <button class="cat-tag" data-cat="Image Set" onclick="crawlToggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
-                            <button class="cat-tag" data-cat="Cosplay" onclick="crawlToggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
-                            <button class="cat-tag" data-cat="Asian Porn" onclick="crawlToggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
-                            <button class="cat-tag" data-cat="Misc" onclick="crawlToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
-                        </div>
-                    </div>
-                    <div class="mt-1">
-                        <span class="small text-muted me-2">语言:</span>
-                        <div id="cache_language_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
-                            <button class="cat-tag active" data-lang="all" onclick="cacheToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
-                        </div>
-                    </div>
-                    <div class="mt-1" id="cache_batch_bar"></div>
                 </div>
-                <div class="card-body" id="cache_grid_body">
-                    <div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
-                </div>
-                <div class="card-footer" id="cache_pagination"></div>
-            </div>
-
-            <!-- 作品详情弹窗 -->
-            <div class="modal fade" id="cache_detail_modal" tabindex="-1" aria-hidden="true">
-                <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h5 class="modal-title text-truncate" id="cache_detail_title">作品详情</h5>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                        </div>
-                        <div class="modal-body" id="cache_detail_body">
-                            <div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
-                        </div>
-                        <div class="modal-footer">
-                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">关闭</button>
-                        </div>
-                    </div>
+                <div class="card-body">
+                    <div class="small text-muted mb-2"><i class="fas fa-terminal me-1"></i>爬取日志输出</div>
+                    <div id="crawl_output" class="output-box"></div>
                 </div>
             </div>
-
         </div>
 
         <!-- ═══ 4. 下载中心 ═══ -->
@@ -404,11 +342,11 @@
 
         </div>
 
-        <!-- ═══ 5. 本地图库 ═══ -->
+        <!-- ═══ 5. 图库 ═══ -->
         <div id="page_gallery" class="page-section section-hidden">
             <div class="card">
                 <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <span>本地画廊列表</span>
+                    <span>图库</span>
                     <div class="btn-group btn-group-sm">
                         <button class="btn btn-outline-secondary" onclick="loadGalleries()">全部</button>
                         <button class="btn btn-outline-danger" onclick="loadGalleries({source:'nhentai'})">nhentai</button>
@@ -452,7 +390,86 @@
             </div>
         </div>
 
-        <!-- ═══ 6. 工具 & 维护 ═══ -->
+        <!-- ═══ 6. 缓存（本地浏览；原 page_cache 下半）═══ -->
+        <div id="page_cache" class="page-section section-hidden">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span><i class="fas fa-database me-1"></i>缓存浏览</span>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadCachePage(1)"><i class="fas fa-sync"></i></button>
+                </div>
+                <div class="card-body border-bottom bg-light py-2">
+                    <div class="row g-2 align-items-end mb-2">
+                        <div class="col-md-5">
+                            <label class="form-label small mb-1 text-muted"><i class="fas fa-filter me-1"></i>本地检索</label>
+                            <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索关键词" onkeydown="if(event.key==='Enter')cacheSearch()">
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-primary w-100" onclick="cacheSearch()" title="筛选"><i class="fas fa-filter"></i></button>
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <span class="small text-muted me-2">检索范围:</span>
+                        <div id="cache_search_scope" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-scope="all" onclick="toggleSearchScope(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag active" data-scope="title" onclick="toggleSearchScope(this)" style="--cat-color:#e67e22">标题</button>
+                            <button class="cat-tag active" data-scope="artist" onclick="toggleSearchScope(this)" style="--cat-color:#9b59b6">作者</button>
+                            <button class="cat-tag active" data-scope="tags" onclick="toggleSearchScope(this)" style="--cat-color:#27ae60">标签</button>
+                        </div>
+                    </div>
+                    <div>
+                        <span class="small text-muted me-2">分类:</span>
+                        <div id="cache_category_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-cat="all" onclick="cacheToggleCategory(this)" style="--cat-color:#0d6efd">全部</button>
+                            <button class="cat-tag" data-cat="Doujinshi" onclick="cacheToggleCategory(this)" style="--cat-color:#e74c3c">Doujinshi</button>
+                            <button class="cat-tag" data-cat="Manga" onclick="cacheToggleCategory(this)" style="--cat-color:#3498db">Manga</button>
+                            <button class="cat-tag" data-cat="Artist CG" onclick="cacheToggleCategory(this)" style="--cat-color:#9b59b6">Artist CG</button>
+                            <button class="cat-tag" data-cat="Game CG" onclick="cacheToggleCategory(this)" style="--cat-color:#e67e22">Game CG</button>
+                            <button class="cat-tag" data-cat="Western" onclick="cacheToggleCategory(this)" style="--cat-color:#27ae60">Western</button>
+                            <button class="cat-tag" data-cat="Non-H" onclick="cacheToggleCategory(this)" style="--cat-color:#95a5a6">Non-H</button>
+                            <button class="cat-tag" data-cat="Image Set" onclick="cacheToggleCategory(this)" style="--cat-color:#1abc9c">Image Set</button>
+                            <button class="cat-tag" data-cat="Cosplay" onclick="cacheToggleCategory(this)" style="--cat-color:#e91e63">Cosplay</button>
+                            <button class="cat-tag" data-cat="Asian Porn" onclick="cacheToggleCategory(this)" style="--cat-color:#795548">Asian Porn</button>
+                            <button class="cat-tag" data-cat="Misc" onclick="cacheToggleCategory(this)" style="--cat-color:#607d8b">Misc</button>
+                        </div>
+                    </div>
+                    <div class="mt-1">
+                        <span class="small text-muted me-2">语言:</span>
+                        <div id="cache_language_tags" class="d-inline-flex flex-wrap gap-1 align-middle">
+                            <button class="cat-tag active" data-lang="all" onclick="cacheToggleLanguage(this)" style="--cat-color:#0d6efd">全部</button>
+                        </div>
+                    </div>
+                    <div class="mt-1" id="cache_batch_bar"></div>
+                </div>
+                <div class="card-body" id="cache_grid_body">
+                    <div class="text-center text-muted py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
+                </div>
+                <div class="card-footer" id="cache_pagination"></div>
+            </div>
+
+            <!-- 作品详情弹窗 -->
+            <div class="modal fade" id="cache_detail_modal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title text-truncate" id="cache_detail_title">作品详情</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body" id="cache_detail_body">
+                            <div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin me-1"></i>加载中...</div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">关闭</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- ═══ 7. 工具 & 维护 ═══ -->
         <div id="page_tools" class="page-section section-hidden">
 
             <ul class="nav nav-tabs mb-3" role="tablist">
@@ -481,7 +498,7 @@
                                     <div class="d-grid"><button class="btn btn-outline-success" onclick="switchPage('settings')"><i class="fas fa-cookie-bite me-1"></i>配置 Cookie</button></div>
                                 </div>
                                 <div class="col-md-4">
-                                    <div class="d-grid"><button class="btn btn-outline-info" onclick="switchPage('gallery')"><i class="fas fa-images me-1"></i>浏览本地图库</button></div>
+                                    <div class="d-grid"><button class="btn btn-outline-info" onclick="switchPage('gallery')"><i class="fas fa-images me-1"></i>浏览图库</button></div>
                                 </div>
                             </div>
                         </div>
