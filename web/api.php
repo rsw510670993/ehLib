@@ -1402,25 +1402,20 @@ try {
                 }
                 $scope_set = array_flip($scope_list);
 
-                $params = [];
-                $where = 'WHERE 1=1';
-                if ($source) { $where .= ' AND sc.source=?'; $params[] = $source; }
-
-                // ————— Build per-token OR patterns + global AND lookahead (最终 PHP 层一次 preg_match) —————
+                // ————— Build per-token OR patterns + global AND lookahead —————
                 $needles_from_kw = [];
                 if ($artist !== '') $needles_from_kw = array_merge($needles_from_kw, _split_and_tokens($artist));
                 if ($title  !== '') $needles_from_kw = array_merge($needles_from_kw, _split_and_tokens($title));
                 $has_keyword_cond = !empty($needles_from_kw);
 
-                // 对每个 token，根据 scope/类型，生成 5 列的 OR-merged pattern 数组
-                // 最终：对一行拼接串 (title "\x1F" title_jp "\x1F" artist "\x1F" tags "\x1F" tags_cn)
-                //   每个 token = 该 5 列的 OR pattern；多 token 用 AND-lookahead 合并；最终一次 preg_match。
+                // 两阶段过滤（解决 41s 全表慢问题）：
+                //   阶段1. SQL 层用 LIKE 子串做廉价粗过滤 —— C 内建实现，比跨层 REGEXP 快 5-20 倍
+                //   阶段2. PHP 层用严格 strict_token + 非内容命名空间负向前瞻精确匹配，只扫阶段1的小候选集
                 $php_pattern = '';
                 if ($has_keyword_cond) {
                     $token_ors = [];
                     $kw_tokens = [];
                     if ($artist !== '') {
-                        // artist URL param 强制在 author scope
                         foreach (_split_and_tokens($artist) as $tok) $kw_tokens[] = [$tok, ['author']];
                     }
                     if ($title !== '') {
@@ -1459,6 +1454,10 @@ try {
                     $php_pattern = _merge_and_patterns($token_ors);
                 }
 
+                $params = [];
+                $where = ' WHERE 1=1';
+                if ($source !== '') { $where .= ' AND sc.source=?'; $params[] = $source; }
+
                 if ($category) { $where .= ' AND sc.category=?'; $params[] = $category; }
                 if (!empty($categories)) {
                     $where .= ' AND sc.category IN (' . implode(',', array_fill(0, count($categories), '?')) . ')';
@@ -1474,9 +1473,51 @@ try {
                     }
                 }
 
-                // ————— Keyword path: 只 SQL 过滤等值条件 → PHP 层 preg_match 一次 → PHP 层排序分页
+                // ——————— 阶段 1：SQL 廉价 LIKE 粗过滤，把无关行提前砍掉 ———————
+                // 去掉 LOWER / COALESCE：SQLite LIKE 默认 ASCII 大小写不敏感，NULL LIKE X 自动 FALSE
                 if ($has_keyword_cond && $php_pattern !== '') {
-                    // 取候选集全部行（需要 title/title_jp/artist/tags/tags_cn + 排序/分页字段），之后 PHP 层过滤
+                    $like_token_groups = [];
+                    $kw_like_tokens = [];
+                    $escapeLike = function ($s) {
+                        return strtr($s, ['\\' => '\\\\', '%' => '\\%', '_' => '\\_']);
+                    };
+                    if ($artist !== '') {
+                        foreach (_split_and_tokens($artist) as $tok) $kw_like_tokens[] = [$tok, ['author']];
+                    }
+                    if ($title !== '') {
+                        foreach (_split_and_tokens($title) as $tok) $kw_like_tokens[] = [$tok, $scope_list];
+                    }
+                    foreach ($kw_like_tokens as [$tok, $t_scopes]) {
+                        $needle_like = '%' . $escapeLike((string)$tok) . '%';
+                        $t_set = array_flip($t_scopes);
+                        $tok_likes = [];
+                        if (isset($t_set['title'])) {
+                            $tok_likes[] = "sc.title LIKE ?";
+                            $tok_likes[] = "sc.title_jp LIKE ?";
+                            $params[] = $needle_like; $params[] = $needle_like;
+                        }
+                        if (isset($t_set['author'])) {
+                            $tok_likes[] = "sc.artist LIKE ?";
+                            $tok_likes[] = "sc.tags LIKE ?";
+                            $tok_likes[] = "sc.tags_cn LIKE ?";
+                            $params[] = $needle_like; $params[] = $needle_like; $params[] = $needle_like;
+                        }
+                        if (isset($t_set['tags']) || isset($t_set['tags_cn'])) {
+                            if (isset($t_set['tags']))    { $tok_likes[] = "sc.tags LIKE ?";    $params[] = $needle_like; }
+                            if (isset($t_set['tags_cn'])) { $tok_likes[] = "sc.tags_cn LIKE ?"; $params[] = $needle_like; }
+                        }
+                        if (!empty($tok_likes)) {
+                            $like_token_groups[] = '(' . implode(' OR ', $tok_likes) . ')';
+                        }
+                    }
+                    if (!empty($like_token_groups)) {
+                        // 多 token AND 关系：每个 token 至少有一列 LIKE 命中
+                        $where .= ' AND (' . implode(' AND ', $like_token_groups) . ')';
+                    }
+                }
+
+                // ——————— 阶段 2：PHP 层精确过滤（只对小候选集）———————
+                if ($has_keyword_cond && $php_pattern !== '') {
                     $cand_query =
                         "SELECT sc.source_id, sc.title, sc.title_jp, sc.category, sc.language, sc.group_name,
                                 sc.tags, sc.tags_cn, sc.total_pages, sc.artist, sc.uploaded_at,
@@ -1488,7 +1529,6 @@ try {
                     $stmt = $pdo->prepare($cand_query);
                     $stmt->execute($params);
                     $candidates = $stmt->fetchAll();
-                    // PHP 层过滤 + 排序
                     $US = "\x1F";
                     $preg_pattern = '/' . str_replace('/', '\\/', $php_pattern) . '/ui';
                     $filtered = [];
@@ -1501,22 +1541,16 @@ try {
                             ($r['tags_cn'] ?? '');
                         if (@preg_match($preg_pattern, $subject) === 1) $filtered[] = $r;
                     }
-                    // 排序：uploaded_at DESC nulls-last  →  then crawled_at DESC
                     usort($filtered, function ($a, $b) {
                         $ua = (string)($a['uploaded_at'] ?? ''); $ub = (string)($b['uploaded_at'] ?? '');
                         if ($ua === '') $ua = '0000-00-00'; if ($ub === '') $ub = '0000-00-00';
-                        if ($ua !== $ub) return strcmp($ub, $ua); // DESC
+                        if ($ua !== $ub) return strcmp($ub, $ua);
                         $ca = (string)($a['crawled_at'] ?? ''); $cb = (string)($b['crawled_at'] ?? '');
-                        return strcmp($cb, $ca); // DESC
+                        return strcmp($cb, $ca);
                     });
                     $total = count($filtered);
-                    $page_slice = array_slice($filtered, $offset, $per_page);
-                    $rows = [];
-                    foreach ($page_slice as $r) {
-                        $rows[] = $r;
-                    }
+                    $rows = array_slice($filtered, $offset, $per_page);
                 } else {
-                    // No keyword → fast original path (no REGEXP needed)
                     $count_query = "SELECT COUNT(*) FROM search_cache sc $where";
                     $count_stmt = $pdo->prepare($count_query);
                     $count_stmt->execute($params);
