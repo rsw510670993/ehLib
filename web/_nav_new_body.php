@@ -399,7 +399,17 @@
                 </div>
                 <div class="card-body border-bottom bg-light py-2">
                     <div class="row g-2 align-items-end mb-2">
-                        <div class="col-md-5">
+                        <div class="col-md-2">
+                            <label class="form-label small mb-1 text-muted"><i class="fas fa-crosshairs me-1"></i>检索范围</label>
+                            <select id="cache_search_scope" class="form-select form-select-sm">
+                                <option value="all" selected>全部</option>
+                                <option value="title">标题</option>
+                                <option value="author">作者</option>
+                                <option value="tags">标签</option>
+                                <option value="tags_cn">中文标签</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
                             <label class="form-label small mb-1 text-muted"><i class="fas fa-filter me-1"></i>本地检索</label>
                             <input type="text" class="form-control form-control-sm" id="cache_keyword" placeholder="搜索关键词" onkeydown="if(event.key==='Enter')cacheSearch()">
                         </div>
@@ -409,16 +419,6 @@
                         <div class="col-md-1">
                             <button class="btn btn-sm btn-outline-secondary w-100" onclick="cacheClearFilter()" title="清空"><i class="fas fa-times"></i></button>
                         </div>
-                    </div>
-                    <div class="mb-2">
-                        <span class="small text-muted me-2">检索范围:</span>
-                        <select id="cache_search_scope" class="form-select form-select-sm d-inline-block w-auto align-middle" onchange="cacheSearch()">
-                            <option value="all" selected>全部</option>
-                            <option value="title">标题</option>
-                            <option value="author">作者</option>
-                            <option value="tags">标签</option>
-                            <option value="tags_cn">中文标签</option>
-                        </select>
                     </div>
                     <div>
                         <span class="small text-muted me-2">分类:</span>
