@@ -72,8 +72,8 @@ function _split_and_tokens($kw) {
 // ——————— 单 token pattern factory (返回纯 pattern 字符串) ———————
 const _NON_CONTENT_TYPES = ['artist','group','cosplayer','language'];
 /**
- * 内容类 tag pattern: 在一个 JSON entry `{...}` 内，type 不是非内容命名空间 且 name 命中 token
- * 在同一个 entry 里支持 type/name 两种字段顺序
+ * 内容类 tag pattern: 在一个 JSON entry `{...}` 内，type 不是非内容命名空间 且 name 或 name_cn 命中 token
+ * 支持 type 在前或 name/name_cn 在前两种字段顺序
  */
 function _pattern_content_tag($needle) {
     $n = trim((string)$needle);
@@ -81,19 +81,21 @@ function _pattern_content_tag($needle) {
     $ns = _strict_token_safe($n);
     $alt = implode('|', array_map('_regexp_safe', _NON_CONTENT_TYPES));
     $type_ok  = '"type"\s*:\s*"(?!(?:'.$alt.')")[^"]+"';
-    $name_hit = '"name"\s*:\s*"[^"]*' . $ns . '[^"]*"';
+    $name_hit    = '"name"\s*:\s*"[^"]*' . $ns . '[^"]*"';
+    $name_cn_hit = '"name_cn"\s*:\s*"[^"]*' . $ns . '[^"]*"';
+    $any_name = '(?:' . $name_hit . '|' . $name_cn_hit . ')';
     return
         '\{' .
         '(?:' .
-          '[^{}]{0,320}' . $type_ok . '[^{}]{0,320}' . $name_hit .
+          '[^{}]{0,320}' . $type_ok . '[^{}]{0,320}' . $any_name .
           '|' .
-          '[^{}]{0,320}' . $name_hit . '[^{}]{0,320}' . $type_ok .
+          '[^{}]{0,320}' . $any_name . '[^{}]{0,320}' . $type_ok .
         ')' .
         '[^{}]{0,320}' .
         '\}';
 }
 /**
- * 作者 JSON 模式：在一个 entry 内 type=artist 且 name 命中 token
+ * 作者 JSON 模式：在一个 entry 内 type=artist 且 name 或 name_cn 命中 token
  */
 function _pattern_json_author($needle) {
     $n = trim((string)$needle);
@@ -101,12 +103,14 @@ function _pattern_json_author($needle) {
     $ns = _strict_token_safe($n);
     $type_artist = '"type"\s*:\s*"artist"';
     $name_hit    = '"name"\s*:\s*"[^"]*' . $ns . '[^"]*"';
+    $name_cn_hit = '"name_cn"\s*:\s*"[^"]*' . $ns . '[^"]*"';
+    $any_name = '(?:' . $name_hit . '|' . $name_cn_hit . ')';
     return
         '\{' .
         '(?:' .
-          '[^{}]{0,320}' . $type_artist . '[^{}]{0,320}' . $name_hit .
+          '[^{}]{0,320}' . $type_artist . '[^{}]{0,320}' . $any_name .
           '|' .
-          '[^{}]{0,320}' . $name_hit . '[^{}]{0,320}' . $type_artist .
+          '[^{}]{0,320}' . $any_name . '[^{}]{0,320}' . $type_artist .
         ')' .
         '[^{}]{0,320}' .
         '\}';

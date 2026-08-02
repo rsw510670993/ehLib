@@ -423,34 +423,15 @@ function cacheSearch() {
 
 // ─── Search scope toggles ─────────────────────────────
 
-function toggleSearchScope(el) {
-    var allBtn = document.querySelector('#cache_search_scope .cat-tag[data-scope="all"]');
-    if (el.dataset.scope === 'all') {
-        var active = !el.classList.contains('active');
-        document.querySelectorAll('#cache_search_scope .cat-tag').forEach(function(t) {
-            t.classList.toggle('active', active);
-        });
-    } else {
-        el.classList.toggle('active');
-        var scopeBtns = document.querySelectorAll('#cache_search_scope .cat-tag[data-scope]:not([data-scope="all"])');
-        var activeBtns = document.querySelectorAll('#cache_search_scope .cat-tag.active[data-scope]:not([data-scope="all"])');
-        if (allBtn) allBtn.classList.toggle('active', activeBtns.length === scopeBtns.length);
-    }
-    cacheSearch();
-}
-
 function getCacheSearchScope() {
-    var allBtn = document.querySelector('#cache_search_scope .cat-tag[data-scope="all"]');
-    if (allBtn && allBtn.classList.contains('active')) return 'all';
-    var scopes = [];
-    document.querySelectorAll('#cache_search_scope .cat-tag.active[data-scope]').forEach(function(t) {
-        if (t.dataset.scope !== 'all') scopes.push(t.dataset.scope);
-    });
-    return scopes.length > 0 ? scopes.join(',') : 'all';
+    var el = document.getElementById('cache_search_scope');
+    if (!el) return 'all';
+    return (el.value || 'all').trim() || 'all';
 }
 
 function resetSearchScope() {
-    document.querySelectorAll('#cache_search_scope .cat-tag').forEach(function(t) { t.classList.add('active'); });
+    var el = document.getElementById('cache_search_scope');
+    if (el) el.value = 'all';
 }
 
 function cacheClearFilter() {
