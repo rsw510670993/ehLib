@@ -21,15 +21,26 @@ function error_exit($msg) {
     json_exit(['error' => $msg], false);
 }
 
-// ─── Word-boundary match helpers v2 ───
-// 核心策略：英文/数字/罗马音 token，用 (?<![A-Za-z0-9_-]) needle (?![A-Za-z0-9_-]) 保证字符级 token 边界
-//       （不会再把 jagayamatarawo 内部 3 字母 gay 当命中）
-//       日文假名/汉字 token，无词边界，直接 IN (包含) 匹配即可，也不会有 3 字母误命中。
+// ─── Word-boundary match helpers v5 (merge REGEXP calls → 更少的 PCRE 调用) ───
+//
+// 核心设计 (解决之前的「每列多次 REGEXP 导致 scope=all 慢 10x 问题」):
+//   ┌──────────────────────────────────────────────────────────────────────────┐
+//   │ 1. 每个 helper 返回「pattern 字符串」，不直接 push 到 params              │
+//   │ 2. 对「同一个字段」收集所有条件：                                       │
+//   │       * 同一 token 跨多个 scope → OR 合并为 (?:p_a)|(?:p_b)              │
+//   │       * 多个 token AND  → 前瞻合并为 (?s)(?=.*P1)(?=.*P2) ... .*         │
+//   │ 3. 最终每个字段只 push 1 个 REGEXP 调用，SQLite 每行只回调 1 次 PCRE     │
+//   └──────────────────────────────────────────────────────────────────────────┘
+//
+//  词边界 (strict_token):
+//    * 字母/数字/罗马音 token：  (?<![A-Za-z0-9_-])X(?![A-Za-z0-9_-])
+//    * 日文假名/汉字 token：无词边界，直接包含匹配即可
+//
+//  非内容命名空间排除 (tags/tags_cn scope)：用「负向前瞻 + 两种字段顺序」写成一个单正则
 function _has_ascii($s) {
     return (bool)preg_match('/[A-Za-z0-9]/', (string)$s);
 }
 function _regexp_safe($s) {
-    // 只转义 PCRE 元字符；不碰 Unicode。
     static $special = ['\\','^','$','.','[',']','|','(',')','?','*','+','{','}','/'];
     $out = '';
     foreach (str_split((string)$s) as $c) {
@@ -45,60 +56,98 @@ function _strict_token_safe($needle) {
     }
     return $safe;
 }
-// sc.artist 列：多值分隔（逗号/分号/竖线/斜杠/空白）
-function _word_boundary_sql_artist_sc($field, $needle, &$params) {
+/** Split query into AND tokens. Separators: [ , ; ， & ] + 双空格 */
+function _split_and_tokens($kw) {
+    $raw = trim((string)$kw);
+    if ($raw === '') return [];
+    $parts = preg_split('/[\s]*[,;，&][\s]*|[\s]{2,}/u', $raw);
+    $out = [];
+    foreach ($parts as $p) {
+        $t = trim((string)$p);
+        if ($t !== '') $out[] = $t;
+    }
+    if (empty($out)) $out[] = $raw;
+    return array_values(array_unique($out));
+}
+// ——————— 单 token pattern factory (返回纯 pattern 字符串) ———————
+const _NON_CONTENT_TYPES = ['artist','group','cosplayer','language'];
+/**
+ * 内容类 tag pattern: 在一个 JSON entry `{...}` 内，type 不是非内容命名空间 且 name 命中 token
+ * 在同一个 entry 里支持 type/name 两种字段顺序
+ */
+function _pattern_content_tag($needle) {
     $n = trim((string)$needle);
-    if ($n === '') { return '1=1'; }
+    if ($n === '') return '^$';
+    $ns = _strict_token_safe($n);
+    $alt = implode('|', array_map('_regexp_safe', _NON_CONTENT_TYPES));
+    $type_ok  = '"type"\s*:\s*"(?!(?:'.$alt.')")[^"]+"';
+    $name_hit = '"name"\s*:\s*"[^"]*' . $ns . '[^"]*"';
+    return
+        '\{' .
+        '(?:' .
+          '[^{}]{0,320}' . $type_ok . '[^{}]{0,320}' . $name_hit .
+          '|' .
+          '[^{}]{0,320}' . $name_hit . '[^{}]{0,320}' . $type_ok .
+        ')' .
+        '[^{}]{0,320}' .
+        '\}';
+}
+/**
+ * 作者 JSON 模式：在一个 entry 内 type=artist 且 name 命中 token
+ */
+function _pattern_json_author($needle) {
+    $n = trim((string)$needle);
+    if ($n === '') return '^$';
+    $ns = _strict_token_safe($n);
+    $type_artist = '"type"\s*:\s*"artist"';
+    $name_hit    = '"name"\s*:\s*"[^"]*' . $ns . '[^"]*"';
+    return
+        '\{' .
+        '(?:' .
+          '[^{}]{0,320}' . $type_artist . '[^{}]{0,320}' . $name_hit .
+          '|' .
+          '[^{}]{0,320}' . $name_hit . '[^{}]{0,320}' . $type_artist .
+        ')' .
+        '[^{}]{0,320}' .
+        '\}';
+}
+/** sc.artist 列多值分隔匹配 */
+function _pattern_artist_col($needle) {
+    $n = trim((string)$needle);
+    if ($n === '') return '^$';
     $safe = _regexp_safe($n);
     $sep = '(?:^|[\s,;&|\/]+)';
-    $params[] = $sep . $safe . '(?=[\s,;&|\/]+|$)';
-    return "$field REGEXP ?";
+    return $sep . $safe . '(?=[\s,;&|\/]+|$)';
 }
-// title / title_jp 列
-function _word_boundary_sql_title($field, $needle, &$params) {
+/** title / title_jp 列单 pattern */
+function _pattern_title_col($needle) {
     $n = trim((string)$needle);
-    if ($n === '') { return '1=1'; }
-    $params[] = _strict_token_safe($n);
-    return "$field REGEXP ?";
+    if ($n === '') return '^$';
+    return _strict_token_safe($n);
 }
-// gallery_tags.tags / tags.name 独立 tag 名
-function _word_boundary_sql_tag($field, $needle, &$params) {
-    $n = trim((string)$needle);
-    if ($n === '') { return '1=1'; }
-    $params[] = _strict_token_safe($n);
-    return "$field REGEXP ?";
+// ——————— pattern 列表合并 (OR merge / AND lookahead merge) ———————
+/** 多个 patterns 用 OR 合并 → 1 次 REGEXP 调 用 */
+function _merge_or_patterns(array $patterns) {
+    $patterns = array_values(array_filter($patterns, function($p){ return $p !== '' && $p !== null; }));
+    if (count($patterns) === 0) return '';
+    if (count($patterns) === 1)  return $patterns[0];
+    $wrapped = [];
+    foreach ($patterns as $p) $wrapped[] = '(?:' . $p . ')';
+    return implode('|', $wrapped);
 }
-// JSON tags/tags_cn → 非命名空间的“内容类”标签：命中 name，但排除 artist / group / cosplayer / language 等非内容命名空间
-function _word_boundary_sql_json_tags($field, $needle, &$params, $exclude_content_namespaces = ['artist','group','cosplayer','language']) {
-    $n = trim((string)$needle);
-    if ($n === '') { return '1=1'; }
-    $safe_n = _strict_token_safe($n);
-    $safe_raw = _regexp_safe($n);
-    // 正向：任意 entry 的 name 字段包含 safe_n（带 token 边界）
-    $positive = '"name"\s*:\s*"[^"]*' . $safe_n . '[^"]*"';
-    // 反向：同一 entry 内同时有 type 属于排除列表 且 name 命中
-    $neg_parts = [];
-    foreach ((array)$exclude_content_namespaces as $t) {
-        $tsafe = _regexp_safe($t);
-        $neg_parts[] = '"type"\s*:\s*"' . $tsafe . '"[^}]{0,220}"name"\s*:\s*"[^"]*' . $safe_raw . '[^"]*"';
-        $neg_parts[] = '"name"\s*:\s*"[^"]*' . $safe_raw . '[^"]*"[^}]{0,220}"type"\s*:\s*"' . $tsafe . '"';
-    }
-    $negative = empty($neg_parts) ? '^$' : ('(?:' . implode('|', $neg_parts) . ')');
-    $params[] = $positive;
-    $params[] = $negative;
-    return "($field REGEXP ? AND $field NOT REGEXP ?)";
+/** 多个 patterns 用 AND 合并 (前瞻断言) → 仍只 1 次 REGEXP 调用 */
+function _merge_and_patterns(array $patterns) {
+    $patterns = array_values(array_filter($patterns, function($p){ return $p !== '' && $p !== null; }));
+    if (count($patterns) === 0) return '';
+    if (count($patterns) === 1)  return $patterns[0];
+    $lookaheads = '';
+    foreach ($patterns as $p) $lookaheads .= '(?=[\s\S]*' . $p . ')';
+    // 加上任意字符匹配，满足大多数 PCRE 引擎的「主表达式必须匹配内容」
+    return '(?s)' . $lookaheads . '[\s\S]*';
 }
-// scope=author：只在 JSON tag entry 的 type=artist 里命中 name（或 sc.artist 列多值分隔）
-function _json_author_boundary_sql($field, $needle, &$params) {
-    $n = trim((string)$needle);
-    if ($n === '') { return '1=1'; }
-    $safe_n = _strict_token_safe($n);
-    $tsafe = _regexp_safe('artist');
-    // 支持两种顺序（type 在 name 前/后）
-    $pattern =
-        '(?:"type"\s*:\s*"' . $tsafe . '"[^}]{0,220}"name"\s*:\s*"[^"]*' . $safe_n . '[^"]*")' .
-        '|' .
-        '(?:"name"\s*:\s*"[^"]*' . $safe_n . '[^"]*"[^}]{0,220}"type"\s*:\s*"' . $tsafe . '")';
+/** Final SQL helper: $field REGEXP ?  → 把合并好的 pattern push 到 params */
+function _sql_regexp($field, $pattern, &$params) {
+    if ($pattern === '' || $pattern === null) return '';
     $params[] = $pattern;
     return "$field REGEXP ?";
 }
@@ -650,7 +699,17 @@ try {
                     if ($tag !== '') $tag_names[] = $tag;
                 }
             }
-            if ($tag_name !== '' && !$tag_names) $tag_names[] = $tag_name;
+            // 兼容：单 tag=xxx 参数里用 , ; ， & 分隔时视为多 tag AND（自动把 tag_mode 强制 all）
+            if ($tag_name !== '') {
+                $parts = _split_and_tokens($tag_name);
+                if (count($parts) > 1) {
+                    $tag_names = array_merge($tag_names, $parts);
+                    if (!isset($_GET['tag_mode'])) $tag_mode = 'all'; // 仅在用户没显式传 tag_mode 时强制
+                } else {
+                    $tag_names[] = $tag_name;
+                }
+            }
+            $tag_names = array_values(array_unique(array_filter($tag_names, function($x){ return $x !== ''; })));
             $db_path = $root . '/data/ehlib.db';
             if (!is_file($db_path)) error_exit('Database not found');
             try {
@@ -658,7 +717,6 @@ try {
                 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
                 $pdo->sqliteCreateFunction('regexp', function ($pattern, $subject) {
                     if ($pattern === null || $pattern === '') return 0;
-                    $flags = defined('PREG_UTF8') ? PREG_UTF8 : 1;
                     $p = @preg_match('/' . str_replace('/', '\\/', (string)$pattern) . '/ui' , (string)$subject);
                     return $p === 1 ? 1 : 0;
                 }, 2);
@@ -673,13 +731,29 @@ try {
                     $joins = ' JOIN gallery_tags gt ON g.id = gt.gallery_id JOIN tags t ON gt.tag_id = t.id';
                     $likes = [];
                     foreach ($tag_names as $tag) {
-                        $likes[] = _word_boundary_sql_tag('t.name', $tag, $params);
+                        $pattern = _strict_token_safe($tag);
+                        if ($pattern !== '') {
+                            $likes[] = _sql_regexp('t.name', $pattern, $params);
+                        }
                     }
-                    $where = 'WHERE (' . implode(' OR ', $likes) . ')';
+                    $likes = array_filter($likes, function($x){ return $x !== ''; });
+                    $where = empty($likes) ? 'WHERE 1=1' : ('WHERE (' . implode(' OR ', $likes) . ')');
                 }
                 if ($source) { $where .= ' AND ' . $prefix . 'source=?'; $params[] = $source; }
                 if ($artist) {
-                    $where .= ' AND ' . _word_boundary_sql_artist_sc($prefix . 'artist', $artist, $params);
+                    // galleries 的 artist 列支持多作者 AND（, ; ， & 分隔）→ 用 AND-lookahead 合并为单 REGEXP
+                    $artist_tokens = _split_and_tokens($artist);
+                    $token_pats = [];
+                    foreach ($artist_tokens as $a_tok) {
+                        $p = _pattern_artist_col($a_tok);
+                        if ($p !== '') $token_pats[] = $p;
+                    }
+                    if (!empty($token_pats)) {
+                        $merged = _merge_and_patterns($token_pats);
+                        if ($merged !== '') {
+                            $where .= ' AND ' . _sql_regexp($prefix . 'artist', $merged, $params);
+                        }
+                    }
                 }
                 if ($language) {
                     $langs = array_filter(array_map('trim', explode(',', $language)));
@@ -1326,38 +1400,65 @@ try {
                 } else {
                     $scope_list = ['title','author','tags','tags_cn'];
                 }
+                $scope_set = array_flip($scope_list);
 
                 $params = [];
                 $where = 'WHERE 1=1';
                 if ($source) { $where .= ' AND sc.source=?'; $params[] = $source; }
-                if ($artist) {
-                    // Dedicated "artist" URL param — author match on sc.artist column (broad) + JSON author tokens (strict)
-                    $expr_a = _word_boundary_sql_artist_sc('sc.artist', $artist, $params);
-                    $expr_b = _json_author_boundary_sql('sc.tags', $artist, $params);
-                    $expr_c = _json_author_boundary_sql('sc.tags_cn', $artist, $params);
-                    $where .= " AND ($expr_a OR $expr_b OR $expr_c)";
+
+                // ————— Build per-token OR patterns + global AND lookahead (最终 PHP 层一次 preg_match) —————
+                $needles_from_kw = [];
+                if ($artist !== '') $needles_from_kw = array_merge($needles_from_kw, _split_and_tokens($artist));
+                if ($title  !== '') $needles_from_kw = array_merge($needles_from_kw, _split_and_tokens($title));
+                $has_keyword_cond = !empty($needles_from_kw);
+
+                // 对每个 token，根据 scope/类型，生成 5 列的 OR-merged pattern 数组
+                // 最终：对一行拼接串 (title "\x1F" title_jp "\x1F" artist "\x1F" tags "\x1F" tags_cn)
+                //   每个 token = 该 5 列的 OR pattern；多 token 用 AND-lookahead 合并；最终一次 preg_match。
+                $php_pattern = '';
+                if ($has_keyword_cond) {
+                    $token_ors = [];
+                    $kw_tokens = [];
+                    if ($artist !== '') {
+                        // artist URL param 强制在 author scope
+                        foreach (_split_and_tokens($artist) as $tok) $kw_tokens[] = [$tok, ['author']];
+                    }
+                    if ($title !== '') {
+                        foreach (_split_and_tokens($title) as $tok) $kw_tokens[] = [$tok, $scope_list];
+                    }
+                    foreach ($kw_tokens as [$tok, $t_scopes]) {
+                        $cols = [
+                            't'  => [], // sc.title
+                            'tj' => [], // sc.title_jp
+                            'a'  => [], // sc.artist
+                            'ta' => [], // sc.tags
+                            'tc' => [], // sc.tags_cn
+                        ];
+                        $t_set = array_flip($t_scopes);
+                        if (isset($t_set['title'])) {
+                            $cols['t'][]  = _pattern_title_col($tok);
+                            $cols['tj'][] = _pattern_title_col($tok);
+                        }
+                        if (isset($t_set['author'])) {
+                            $cols['a'][]  = _pattern_artist_col($tok);
+                            $cols['ta'][] = _pattern_json_author($tok);
+                            $cols['tc'][] = _pattern_json_author($tok);
+                        }
+                        if (isset($t_set['tags']))     $cols['ta'][] = _pattern_content_tag($tok);
+                        if (isset($t_set['tags_cn']))  $cols['tc'][] = _pattern_content_tag($tok);
+                        $tok_or_patterns = [];
+                        foreach ($cols as $pats) {
+                            $m = _merge_or_patterns($pats);
+                            if ($m !== '') $tok_or_patterns[] = $m;
+                        }
+                        $tok_or_patterns = array_values(array_filter($tok_or_patterns, function($p){ return $p !== ''; }));
+                        if (!empty($tok_or_patterns)) {
+                            $token_ors[] = _merge_or_patterns($tok_or_patterns);
+                        }
+                    }
+                    $php_pattern = _merge_and_patterns($token_ors);
                 }
-                if ($title) {
-                    $field_list = [];
-                    if (in_array('title', $scope_list, true)) {
-                        $field_list[] = _word_boundary_sql_title('sc.title', $title, $params);
-                        $field_list[] = _word_boundary_sql_title('sc.title_jp', $title, $params);
-                    }
-                    if (in_array('author', $scope_list, true)) {
-                        $field_list[] = _word_boundary_sql_artist_sc('sc.artist', $title, $params);
-                        $field_list[] = _json_author_boundary_sql('sc.tags', $title, $params);
-                        $field_list[] = _json_author_boundary_sql('sc.tags_cn', $title, $params);
-                    }
-                    if (in_array('tags', $scope_list, true)) {
-                        $field_list[] = _word_boundary_sql_json_tags('sc.tags', $title, $params, true);
-                    }
-                    if (in_array('tags_cn', $scope_list, true)) {
-                        $field_list[] = _word_boundary_sql_json_tags('sc.tags_cn', $title, $params, true);
-                    }
-                    if (!empty($field_list)) {
-                        $where .= ' AND (' . implode(' OR ', $field_list) . ')';
-                    }
-                }
+
                 if ($category) { $where .= ' AND sc.category=?'; $params[] = $category; }
                 if (!empty($categories)) {
                     $where .= ' AND sc.category IN (' . implode(',', array_fill(0, count($categories), '?')) . ')';
@@ -1373,17 +1474,58 @@ try {
                     }
                 }
 
-                // Count
-                $count_query = "SELECT COUNT(*) FROM search_cache sc $where";
-                $count_stmt = $pdo->prepare($count_query);
-                $count_stmt->execute($params);
-                $total = (int)$count_stmt->fetchColumn();
-
-                // Data
-                $data_query = "SELECT sc.*, CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local FROM search_cache sc LEFT JOIN galleries g ON g.source = sc.source AND g.source_id = sc.source_id $where ORDER BY COALESCE(NULLIF(sc.uploaded_at, ''), '0000-00-00') DESC, sc.crawled_at DESC LIMIT $per_page OFFSET $offset";
-                $stmt = $pdo->prepare($data_query);
-                $stmt->execute($params);
-                $rows = $stmt->fetchAll();
+                // ————— Keyword path: 只 SQL 过滤等值条件 → PHP 层 preg_match 一次 → PHP 层排序分页
+                if ($has_keyword_cond && $php_pattern !== '') {
+                    // 取候选集全部行（需要 title/title_jp/artist/tags/tags_cn + 排序/分页字段），之后 PHP 层过滤
+                    $cand_query =
+                        "SELECT sc.source_id, sc.title, sc.title_jp, sc.category, sc.language, sc.group_name,
+                                sc.tags, sc.tags_cn, sc.total_pages, sc.artist, sc.uploaded_at,
+                                sc.crawled_at, sc.thumb_path, sc.searched_at,
+                                CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local
+                         FROM search_cache sc
+                         LEFT JOIN galleries g ON g.source=sc.source AND g.source_id=sc.source_id
+                         $where";
+                    $stmt = $pdo->prepare($cand_query);
+                    $stmt->execute($params);
+                    $candidates = $stmt->fetchAll();
+                    // PHP 层过滤 + 排序
+                    $US = "\x1F";
+                    $preg_pattern = '/' . str_replace('/', '\\/', $php_pattern) . '/ui';
+                    $filtered = [];
+                    foreach ($candidates as $r) {
+                        $subject =
+                            ($r['title'] ?? '') . $US .
+                            ($r['title_jp'] ?? '') . $US .
+                            ($r['artist'] ?? '') . $US .
+                            ($r['tags'] ?? '') . $US .
+                            ($r['tags_cn'] ?? '');
+                        if (@preg_match($preg_pattern, $subject) === 1) $filtered[] = $r;
+                    }
+                    // 排序：uploaded_at DESC nulls-last  →  then crawled_at DESC
+                    usort($filtered, function ($a, $b) {
+                        $ua = (string)($a['uploaded_at'] ?? ''); $ub = (string)($b['uploaded_at'] ?? '');
+                        if ($ua === '') $ua = '0000-00-00'; if ($ub === '') $ub = '0000-00-00';
+                        if ($ua !== $ub) return strcmp($ub, $ua); // DESC
+                        $ca = (string)($a['crawled_at'] ?? ''); $cb = (string)($b['crawled_at'] ?? '');
+                        return strcmp($cb, $ca); // DESC
+                    });
+                    $total = count($filtered);
+                    $page_slice = array_slice($filtered, $offset, $per_page);
+                    $rows = [];
+                    foreach ($page_slice as $r) {
+                        $rows[] = $r;
+                    }
+                } else {
+                    // No keyword → fast original path (no REGEXP needed)
+                    $count_query = "SELECT COUNT(*) FROM search_cache sc $where";
+                    $count_stmt = $pdo->prepare($count_query);
+                    $count_stmt->execute($params);
+                    $total = (int)$count_stmt->fetchColumn();
+                    $data_query = "SELECT sc.*, CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local FROM search_cache sc LEFT JOIN galleries g ON g.source = sc.source AND g.source_id = sc.source_id $where ORDER BY COALESCE(NULLIF(sc.uploaded_at, ''), '0000-00-00') DESC, sc.crawled_at DESC LIMIT $per_page OFFSET $offset";
+                    $stmt = $pdo->prepare($data_query);
+                    $stmt->execute($params);
+                    $rows = $stmt->fetchAll();
+                }
 
                 $results = [];
                 foreach ($rows as $row) {
@@ -1394,20 +1536,20 @@ try {
                         $thumb_url = 'api.php?action=serve_cache_thumb&source=' . urlencode($source) . '&source_id=' . urlencode($source_id);
                     }
                     $results[] = [
-                        'source' => $row['source'] ?? '',
-                        'source_id' => $row['source_id'] ?? '',
-                        'title' => $row['title'] ?? '',
-                        'title_jp' => $row['title_jp'] ?? '',
-                        'category' => $row['category'] ?? '',
-                        'language' => $row['language'] ?? '',
-                        'group_name' => $row['group_name'] ?? '',
-                        'tags' => $row['tags'] ?? '',
-                        'tags_cn' => $row['tags_cn'] ?? '',
+                        'source'      => $row['source'] ?? $source,
+                        'source_id'   => $source_id,
+                        'title'       => $row['title'] ?? '',
+                        'title_jp'    => $row['title_jp'] ?? '',
+                        'category'    => $row['category'] ?? '',
+                        'language'    => $row['language'] ?? '',
+                        'group_name'  => $row['group_name'] ?? '',
+                        'tags'        => $row['tags'] ?? '',
+                        'tags_cn'     => $row['tags_cn'] ?? '',
                         'total_pages' => (int)($row['total_pages'] ?? 0),
-                        'artist' => $row['artist'] ?? '',
+                        'artist'      => $row['artist'] ?? '',
                         'uploaded_at' => $row['uploaded_at'] ?? '',
-                        'is_local' => (int)($row['is_local'] ?? 0) === 1,
-                        'thumb_url' => $thumb_url,
+                        'is_local'    => (int)($row['is_local'] ?? 0) === 1,
+                        'thumb_url'   => $thumb_url,
                         'searched_at' => $row['searched_at'] ?? '',
                     ];
                 }
