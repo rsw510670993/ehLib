@@ -55,15 +55,40 @@ document.querySelectorAll('.sidebar .nav-link').forEach(a => {
     a.addEventListener('click', e => { e.preventDefault(); switchPage(a.dataset.page); });
 });
 
+// ——— 容量单位自动换算：B / KB / MB / GB / TB（整数 &lt; 1KB 不带小数，其余保留 2 位小数，逗号千分位）———
+function formatBytes(bytes, digits = 2) {
+    if (bytes === null || bytes === undefined || isNaN(bytes)) return '-';
+    let n = Number(bytes);
+    if (!isFinite(n) || n <= 0) return '0 B';
+    const units = ['B','KB','MB','GB','TB','PB'];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    const useFixed = i === 0 ? 0 : (n < 10 && digits > 0 ? digits : (n < 100 ? Math.max(1, digits - 1) : 0));
+    const s = n.toFixed(useFixed);
+    // 千分位
+    const [intPart, decPart] = s.split('.');
+    const withComma = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return decPart ? `${withComma}.${decPart} ${units[i]}` : `${withComma} ${units[i]}`;
+}
+function formatInt(n) {
+    if (n === null || n === undefined || isNaN(n)) return '-';
+    return String(Math.floor(Number(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 // ─── Dashboard (inside Tools tab) ───
 async function loadDashboard() {
     const cards = document.getElementById('stats_cards');
     if (!cards) return;
     const data = await api('get_stats');
-    const g = document.getElementById('stat_galleries'); if (g) g.textContent = data.gallery_count ?? '-';
-    const db = document.getElementById('stat_db'); if (db) { db.textContent = data.db_exists ? '正常' : '未创建'; db.style.color = data.db_exists ? '#22c55e' : '#94a3b8'; }
-    const v = document.getElementById('stat_venv'); if (v) { v.textContent = data.venv_exists ? '就绪' : '缺失'; v.style.color = data.venv_exists ? '#22c55e' : '#ef4444'; }
-    const c = document.getElementById('stat_config'); if (c) { c.textContent = data.config_file ? '已配置' : '未配置'; c.style.color = data.config_file ? '#22c55e' : '#ef4444'; }
+    const g = document.getElementById('stat_galleries'); if (g) g.textContent = formatInt(data?.gallery_count);
+    const db = document.getElementById('stat_db'); if (db) { db.textContent = data?.db_exists ? '正常' : '未创建'; db.style.color = data?.db_exists ? '#22c55e' : '#94a3b8'; }
+    const v = document.getElementById('stat_venv'); if (v) { v.textContent = data?.venv_exists ? '就绪' : '缺失'; v.style.color = data?.venv_exists ? '#22c55e' : '#ef4444'; }
+    const c = document.getElementById('stat_config'); if (c) { c.textContent = data?.config_file ? '已配置' : '未配置'; c.style.color = data?.config_file ? '#22c55e' : '#ef4444'; }
+
+    const sc = document.getElementById('stat_cache_count');  if (sc) sc.textContent = formatInt(data?.search_cache_count);
+    const dbs = document.getElementById('stat_db_size');     if (dbs) dbs.textContent = formatBytes(data?.db_size, 2);
+    const ths = document.getElementById('stat_thumbs_size'); if (ths) ths.textContent = formatBytes(data?.thumbs_size, 2);
+    const dls = document.getElementById('stat_downloads_size'); if (dls) dls.textContent = formatBytes(data?.downloads_size, 2);
 }
 
 // ─── Back-compat: old entrypoints ───

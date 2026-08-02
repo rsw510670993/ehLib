@@ -777,6 +777,38 @@ async function stopVerify() {
     renderVerifyStatus(null);
 }
 
+async function addTagToCacheSearch(type, rawName, nameCn) {
+    // 把 popup 点的标签累加到缓存检索框（AND 关系用逗号分隔），scope 根据标签 type 设定下拉框 → 立即触发检索
+    var input = document.getElementById('cache_keyword');
+    var scopeSel = document.getElementById('cache_search_scope');
+    var value = (nameCn && nameCn.trim()) ? nameCn.trim() : (rawName || '').trim();
+    if (!value) return;
+    // 1) scope 设定（只在当前无 keyword 或用户没手动改过 scope 时覆盖；已经 scope=tags 就保留）
+    if (scopeSel && scopeSel.value === 'all') {
+        // 内容类型标签（male/female/parody/other/mixed/character/...）→ tags/tags_cn 优先匹配 name_cn 中文
+        var CONTENT_TYPES = new Set(['male','female','parody','character','mixed','other','language','category','cosplayer']);
+        if (type === 'artist' || type === 'group') scopeSel.value = 'author';
+        else if (CONTENT_TYPES.has(type)) scopeSel.value = (nameCn && nameCn.trim()) ? 'tags_cn' : 'tags';
+    }
+    // 2) 去重 + 累加（用逗号做 AND 分隔符）
+    var parts = input.value.split(/[\s]*[,;，&][\s]*|[\s]{2,}/).map(function (s) { return s.trim(); }).filter(Boolean);
+    var exists = false;
+    for (var i = 0; i < parts.length; i++) {
+        if (parts[i].toLowerCase() === value.toLowerCase()) { exists = true; break; }
+    }
+    if (!exists) parts.push(value);
+    input.value = parts.join(', ');
+    // 3) 立即触发检索
+    _cachePage = 1;
+    await cacheSearch();
+    // 4) 如果详情弹窗还开着就关掉
+    var m = document.getElementById('cache_detail_modal');
+    if (m && typeof bootstrap !== 'undefined') {
+        var inst = bootstrap.Modal.getInstance(m);
+        if (inst) inst.hide();
+    }
+}
+
 // ─── Detail Popup ─────────────────────────────────────────
 
 function showCacheDetail(idx) {
@@ -815,7 +847,8 @@ function showCacheDetail(idx) {
                     var color = typeColors[type] || '#6b7280';
                     var label = typeLabels[type] || type;
                     var badges = grouped[type].map(function(tag) {
-                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="点击加入爬取关键词" onclick="addTagToCrawlKeyword(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\')">' + escapeHtml(tag.cn || tag.raw) + '</span>';
+                        var nameOrCn = tag.cn || tag.raw;
+                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="点击：累加到缓存检索（AND）并搜索" onclick="addTagToCacheSearch(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\',\'' + escapeAttr(tag.cn) + '\')">' + escapeHtml(nameOrCn) + '</span>';
                     }).join('');
                     return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
                 }).filter(function(s) { return s; }).join('');

@@ -671,6 +671,27 @@ function write_config($data) {
     return true;
 }
 
+// ——— 工具：递归目录大小，带毫秒级超时，超时就返回目前累加值避免 408
+function _dir_total_bytes($dir, $timeout_ms = 3000) {
+    if (!$dir || !is_dir($dir)) return 0;
+    $start = microtime(true);
+    $total = 0;
+    try {
+        $iter = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS | RecursiveDirectoryIterator::CURRENT_AS_FILEINFO | FilesystemIterator::UNIX_PATHS),
+            RecursiveIteratorIterator::LEAVES_ONLY,
+            RecursiveIteratorIterator::CATCH_GET_CHILD
+        );
+        foreach ($iter as $f) {
+            try {
+                if ($f->isFile()) $total += (int)$f->getSize();
+            } catch (Throwable $eI) { /* open_basedir / permission skip */ }
+            if ((microtime(true) - $start) * 1000 > $timeout_ms) break;
+        }
+    } catch (Throwable $e) { return (int)$total; }
+    return (int)$total;
+}
+
 // --- Route actions ---
 try {
     switch ($action) {
@@ -724,6 +745,10 @@ try {
                     $p = @preg_match('/' . str_replace('/', '\\/', (string)$pattern) . '/ui' , (string)$subject);
                     return $p === 1 ? 1 : 0;
                 }, 2);
+
+                // ————— tag_blacklist：下载图库浏览(get_galleries)不生效（用户不会下载被排除对象，且 REGEXP 入 SQL 拖慢），此处仅建表空占位保持一致性
+                $pdo->exec("CREATE TABLE IF NOT EXISTS tag_blacklist (id INTEGER PRIMARY KEY AUTOINCREMENT, tag_type TEXT NOT NULL DEFAULT '', tag_value TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '', UNIQUE(tag_type, tag_value))");
+
                 $params = [];
                 $has_tags = !empty($tag_names);
                 $from = $has_tags ? 'galleries g' : 'galleries';
@@ -1389,6 +1414,45 @@ try {
                     return $p === 1 ? 1 : 0;
                 }, 2);
 
+                // ————— 加载 tag_blacklist：(type, value) 命中任意即被排除（缓存浏览）
+                $pdo->exec("CREATE TABLE IF NOT EXISTS tag_blacklist (id INTEGER PRIMARY KEY AUTOINCREMENT, tag_type TEXT NOT NULL DEFAULT '', tag_value TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '', UNIQUE(tag_type, tag_value))");
+                $bl_rows = $pdo->query("SELECT DISTINCT tag_type, tag_value FROM tag_blacklist")->fetchAll();
+                $bl_content_patterns = [];   // 指定 type 的内容 tag，进入 content-tag pcre
+                $bl_artist_tokens = [];      // 作者黑名单 exact
+                $bl_any_patterns = [];       // 通配 type 兜底 strict match
+                foreach ($bl_rows as $bl) {
+                    $tv = trim($bl['tag_value'] ?? '');
+                    if ($tv === '') continue;
+                    $tt = trim($bl['tag_type'] ?? '');
+                    if ($tt === '' || $tt === '*') {
+                        $bl_artist_tokens[] = $tv;
+                        $p = _strict_token_safe($tv);
+                        if ($p !== '') $bl_any_patterns[] = $p;
+                    } elseif ($tt === 'artist' || $tt === 'group' || $tt === 'author') {
+                        $bl_artist_tokens[] = $tv;
+                    } else {
+                        $safe = _strict_token_safe($tv);
+                        if ($safe === '') continue;
+                        $type_lit = '"type"\s*:\s*"' . preg_quote($tt, '/') . '"';
+                        $name_hit = '"(?:name|name_cn)"\s*:\s*"[^"]*' . $safe . '[^"]*"';
+                        $bl_content_patterns[] = '\{' .
+                            '(?:[^{}]{0,320}' . $type_lit . '[^{}]{0,320}' . $name_hit .
+                            '|[^{}]{0,320}' . $name_hit . '[^{}]{0,320}' . $type_lit .
+                            ')[^{}]{0,320}\}';
+                    }
+                }
+                $bl_artist_regexp = '';
+                if (!empty($bl_artist_tokens)) {
+                    $pats = [];
+                    foreach ($bl_artist_tokens as $at) {
+                        $p = _pattern_artist_col($at);
+                        if ($p !== '') $pats[] = $p;
+                    }
+                    $bl_artist_regexp = _merge_or_patterns($pats);
+                }
+                $bl_content_regexp = _merge_or_patterns($bl_content_patterns);
+                $bl_any_regexp = _merge_or_patterns($bl_any_patterns);
+
                 // Map old scope names to new ones (B.W.C.)
                 $search_fields_raw = $_GET['search_fields'] ?? 'all';
                 if ($search_fields_raw !== 'all') {
@@ -1479,6 +1543,7 @@ try {
 
                 // ——————— 阶段 1：SQL 廉价 LIKE 粗过滤，把无关行提前砍掉 ———————
                 // 去掉 LOWER / COALESCE：SQLite LIKE 默认 ASCII 大小写不敏感，NULL LIKE X 自动 FALSE
+                // 执行顺序严格保证：sc.source=? / sc.category IN ? / sc.language IN ? (等值/IN 可用索引) → LIKE AND (子串廉价 C 实现) → 绝对不把 REGEXP 放进 SQL WHERE
                 if ($has_keyword_cond && $php_pattern !== '') {
                     $like_token_groups = [];
                     $kw_like_tokens = [];
@@ -1536,13 +1601,24 @@ try {
                     $US = "\x1F";
                     $preg_pattern = '/' . str_replace('/', '\\/', $php_pattern) . '/ui';
                     $filtered = [];
+                    $bl_content_preg = $bl_content_regexp !== '' ? '/' . str_replace('/', '\\/', $bl_content_regexp) . '/ui' : '';
+                    $bl_artist_preg  = $bl_artist_regexp  !== '' ? '/' . str_replace('/', '\\/', $bl_artist_regexp)  . '/ui' : '';
+                    $bl_any_preg     = $bl_any_regexp     !== '' ? '/' . str_replace('/', '\\/', $bl_any_regexp)     . '/ui' : '';
                     foreach ($candidates as $r) {
+                        $tags    = (string)($r['tags']    ?? '');
+                        $tags_cn = (string)($r['tags_cn'] ?? '');
+                        $art     = (string)($r['artist']  ?? '');
+                        $hits_bl = false;
+                        if (!$hits_bl && $bl_artist_preg  !== '' && @preg_match($bl_artist_preg, $art) === 1) $hits_bl = true;
+                        if (!$hits_bl && $bl_content_preg !== '' && (@preg_match($bl_content_preg, $tags) === 1 || @preg_match($bl_content_preg, $tags_cn) === 1)) $hits_bl = true;
+                        if (!$hits_bl && $bl_any_preg     !== '' && (@preg_match($bl_any_preg, $tags) === 1 || @preg_match($bl_any_preg, $tags_cn) === 1 || @preg_match($bl_any_preg, $art) === 1)) $hits_bl = true;
+                        if ($hits_bl) continue;
                         $subject =
                             ($r['title'] ?? '') . $US .
                             ($r['title_jp'] ?? '') . $US .
-                            ($r['artist'] ?? '') . $US .
-                            ($r['tags'] ?? '') . $US .
-                            ($r['tags_cn'] ?? '');
+                            $art . $US .
+                            $tags . $US .
+                            $tags_cn;
                         if (@preg_match($preg_pattern, $subject) === 1) $filtered[] = $r;
                     }
                     usort($filtered, function ($a, $b) {
@@ -1555,14 +1631,68 @@ try {
                     $total = count($filtered);
                     $rows = array_slice($filtered, $offset, $per_page);
                 } else {
+                    // 无 keyword（只按 source/category/language 翻页）：只在有黑名单条目时在 PHP 侧拉全页再切，否则保持原 LIMIT/OFFSET 高速路径
                     $count_query = "SELECT COUNT(*) FROM search_cache sc $where";
                     $count_stmt = $pdo->prepare($count_query);
                     $count_stmt->execute($params);
-                    $total = (int)$count_stmt->fetchColumn();
-                    $data_query = "SELECT sc.*, CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local FROM search_cache sc LEFT JOIN galleries g ON g.source = sc.source AND g.source_id = sc.source_id $where ORDER BY COALESCE(NULLIF(sc.uploaded_at, ''), '0000-00-00') DESC, sc.crawled_at DESC LIMIT $per_page OFFSET $offset";
-                    $stmt = $pdo->prepare($data_query);
-                    $stmt->execute($params);
-                    $rows = $stmt->fetchAll();
+                    $total_raw = (int)$count_stmt->fetchColumn();
+                    if (!empty($bl_rows)) {
+                        // 拉 前 (offset + per_page) 行即可（SQL ORDER 已保证 uploaded_at DESC 稳定）
+                        $limit_top = $offset + $per_page;
+                        $all_query = "SELECT sc.source_id, sc.title, sc.title_jp, sc.category, sc.language, sc.group_name,
+                                             sc.tags, sc.tags_cn, sc.total_pages, sc.artist, sc.uploaded_at,
+                                             sc.crawled_at, sc.thumb_path, sc.searched_at,
+                                             CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local
+                                      FROM search_cache sc LEFT JOIN galleries g ON g.source=sc.source AND g.source_id=sc.source_id
+                                      $where
+                                      ORDER BY COALESCE(NULLIF(sc.uploaded_at, ''), '0000-00-00') DESC, sc.crawled_at DESC
+                                      LIMIT $limit_top";
+                        $stmt = $pdo->prepare($all_query);
+                        $stmt->execute($params);
+                        $top_rows = $stmt->fetchAll();
+                        $bl_content_preg = $bl_content_regexp !== '' ? '/' . str_replace('/', '\\/', $bl_content_regexp) . '/ui' : '';
+                        $bl_artist_preg  = $bl_artist_regexp  !== '' ? '/' . str_replace('/', '\\/', $bl_artist_regexp)  . '/ui' : '';
+                        $bl_any_preg     = $bl_any_regexp     !== '' ? '/' . str_replace('/', '\\/', $bl_any_regexp)     . '/ui' : '';
+                        // 我们需要 offset..offset+per_page 这段中"剩余的非黑名单行"，但黑名单命中的会被跳过，实际可能不够一页 → 若不够再继续取下一页补充（最多补 10 页限制）
+                        $kept = [];
+                        $pages_probe = 0;
+                        $probe_offset = 0;
+                        $target_end = $offset + $per_page;
+                        while (count($kept) < $target_end && $pages_probe < 10) {
+                            if (!empty($top_rows)) {
+                                $this_batch = $top_rows;
+                                $top_rows = [];
+                            } else {
+                                $probe_limit = $per_page * 2;
+                                $q = $all_query . " OFFSET $probe_offset";
+                                $stmt2 = $pdo->prepare($q);
+                                $stmt2->execute($params);
+                                $this_batch = $stmt2->fetchAll();
+                                $probe_offset += $probe_limit;
+                            }
+                            if (empty($this_batch)) break;
+                            $pages_probe++;
+                            foreach ($this_batch as $r) {
+                                $tags = (string)($r['tags'] ?? '');
+                                $tags_cn = (string)($r['tags_cn'] ?? '');
+                                $art = (string)($r['artist'] ?? '');
+                                $hits_bl = false;
+                                if ($bl_artist_preg  !== '' && @preg_match($bl_artist_preg, $art) === 1) $hits_bl = true;
+                                if (!$hits_bl && $bl_content_preg !== '' && (@preg_match($bl_content_preg, $tags) === 1 || @preg_match($bl_content_preg, $tags_cn) === 1)) $hits_bl = true;
+                                if (!$hits_bl && $bl_any_preg     !== '' && (@preg_match($bl_any_preg, $tags) === 1 || @preg_match($bl_any_preg, $tags_cn) === 1 || @preg_match($bl_any_preg, $art) === 1)) $hits_bl = true;
+                                if (!$hits_bl) $kept[] = $r;
+                                if (count($kept) >= $target_end) break 2;
+                            }
+                        }
+                        $total = $total_raw; // 不再做全表精确 count（REGEXP 全表代价太高）；若需要精确 total 可在下一次大翻页时做一次
+                        $rows = array_slice($kept, $offset, $per_page);
+                    } else {
+                        $total = $total_raw;
+                        $data_query = "SELECT sc.*, CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local FROM search_cache sc LEFT JOIN galleries g ON g.source = sc.source AND g.source_id = sc.source_id $where ORDER BY COALESCE(NULLIF(sc.uploaded_at, ''), '0000-00-00') DESC, sc.crawled_at DESC LIMIT $per_page OFFSET $offset";
+                        $stmt = $pdo->prepare($data_query);
+                        $stmt->execute($params);
+                        $rows = $stmt->fetchAll();
+                    }
                 }
 
                 $results = [];
@@ -1882,21 +2012,57 @@ try {
             $db_path = $root . '/data/ehlib.db';
             $db_exists = is_file($db_path);
             $count = 0;
+            $search_cache_count = 0;
+            $db_size = 0;
+            $thumbs_size = 0;
+            $downloads_size = 0;
             if ($db_exists) {
                 try {
                     $pdo = new PDO('sqlite:' . $db_path);
+                    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
                     $stmt = $pdo->query('SELECT COUNT(*) as cnt FROM galleries');
-                    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $count = (int)$row['cnt'];
+                    $row = $stmt->fetch();
+                    $count = (int)($row['cnt'] ?? 0);
+                    try {
+                        $stmt2 = $pdo->query('SELECT COUNT(*) as cnt FROM search_cache');
+                        $row2 = $stmt2->fetch();
+                        $search_cache_count = (int)($row2['cnt'] ?? 0);
+                    } catch (Exception $eSC) { $search_cache_count = 0; }
+                    try {
+                        $stmt3 = $pdo->query('SELECT COALESCE(SUM(file_size),0) as sz FROM galleries WHERE file_size IS NOT NULL AND file_size > 0');
+                        $row3 = $stmt3->fetch();
+                        $downloads_size = (int)($row3['sz'] ?? 0);
+                    } catch (Exception $eDS) { $downloads_size = 0; }
                 } catch (Exception $e) {}
+                $db_size = @filesize($db_path);
+                foreach (['-wal', '-shm', '-journal'] as $suf) {
+                    $extra = $db_path . $suf;
+                    if (is_file($extra)) $db_size += @filesize($extra);
+                }
+            }
+            // 封面目录大小（$root/data/thumbs 递归，3s 超时
+            $thumbs_dir = $root . '/data/thumbs';
+            if (is_dir($thumbs_dir)) {
+                $thumbs_size = (int)_dir_total_bytes($thumbs_dir, 3000);
+            }
+            // 若 galleries SUM(file_size)=0 或 不可靠 -> fallback 扫描下载目录
+            if ($downloads_size <= 0) {
+                $dl_dir = $config['download']['path'] ?? ($root . '/downloads');
+                if ($dl_dir && strpos($dl_dir, '/') !== 0 && strpos($dl_dir, ':') === false && strpos($dl_dir, '\\\\') !== 0) {
+                    $dl_dir = $root . '/' . ltrim(str_replace('\\', '/', $dl_dir), '/');
+                }
+                if (is_dir($dl_dir)) $downloads_size = (int)_dir_total_bytes($dl_dir, 4000);
             }
             json_exit([
-                'db_exists' => $db_exists,
-                'gallery_count' => $count,
-                'db_size' => $db_exists ? filesize($db_path) : 0,
-                'config_file' => is_file($root . '/config.yaml'),
-                'venv_exists' => is_dir($root . '/venv'),
-                'download_path' => $config['download']['path'] ?? './downloads',
+                'db_exists'          => $db_exists,
+                'gallery_count'      => $count,
+                'search_cache_count' => $search_cache_count,
+                'db_size'            => $db_size,
+                'thumbs_size'        => $thumbs_size,
+                'downloads_size'     => $downloads_size,
+                'config_file'        => is_file($root . '/config.yaml'),
+                'venv_exists'        => is_dir($root . '/venv'),
+                'download_path'      => $config['download']['path'] ?? './downloads',
             ]);
             break;
 
@@ -2043,6 +2209,51 @@ try {
                 }
             }
             json_exit(['parsed' => $extracted, 'all' => $result]);
+            break;
+
+        // ————— 排除标签黑名单（tag_blacklist 表：tag_type + tag_value 联合唯一）—————
+        case 'list_blacklist_tags':
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) json_exit(['tags' => []]);
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec("CREATE TABLE IF NOT EXISTS tag_blacklist (id INTEGER PRIMARY KEY AUTOINCREMENT, tag_type TEXT NOT NULL DEFAULT '', tag_value TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '', UNIQUE(tag_type, tag_value))");
+                $stmt = $pdo->query("SELECT id, tag_type, tag_value, created_at FROM tag_blacklist ORDER BY tag_type, tag_value");
+                $tags = $stmt ? $stmt->fetchAll() : [];
+                json_exit(['tags' => $tags]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'add_blacklist_tag':
+            $tag_type = trim($_POST['tag_type'] ?? ($_GET['tag_type'] ?? ''));
+            $tag_value = trim($_POST['tag_value'] ?? ($_GET['tag_value'] ?? ''));
+            if ($tag_value === '') error_exit('tag_value 不能为空');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $pdo->exec("CREATE TABLE IF NOT EXISTS tag_blacklist (id INTEGER PRIMARY KEY AUTOINCREMENT, tag_type TEXT NOT NULL DEFAULT '', tag_value TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '', UNIQUE(tag_type, tag_value))");
+                $stmt = $pdo->prepare("INSERT OR IGNORE INTO tag_blacklist (tag_type, tag_value, created_at) VALUES (?, ?, datetime('now','localtime'))");
+                $stmt->execute([$tag_type, $tag_value]);
+                json_exit(['message' => '已加入排除黑名单']);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'delete_blacklist_tag':
+            $id = (int)($_POST['id'] ?? ($_GET['id'] ?? 0));
+            if ($id <= 0) error_exit('id 非法');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = new PDO('sqlite:' . $db_path);
+                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $stmt = $pdo->prepare("DELETE FROM tag_blacklist WHERE id=?");
+                $stmt->execute([$id]);
+                if ($stmt->rowCount() < 1) error_exit('黑名单条目不存在');
+                json_exit(['message' => '已移除']);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
             break;
 
         case 'save_search_preset':

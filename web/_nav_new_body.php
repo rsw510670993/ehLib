@@ -16,6 +16,7 @@
                         <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab_nh_cookies">nhentai Cookie</button></li>
                         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_ex_cookies">ExHentai Cookie</button></li>
                         <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_sys_settings">系统设置</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_blacklist_tags"><i class="fas fa-ban me-1 text-danger"></i>排除标签</button></li>
                     </ul>
                     <div class="tab-content">
                         <div class="tab-pane fade show active" id="tab_nh_cookies">
@@ -94,6 +95,58 @@
                                     </select>
                                     <div class="form-text">Ubuntu 服务器部署时建议开启</div>
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- 排除标签黑名单 -->
+                        <div class="tab-pane fade" id="tab_blacklist_tags">
+                            <div class="alert alert-warning py-2 small mb-3">
+                                <i class="fas fa-triangle-exclamation me-1"></i>
+                                命中下方任意 (类型, 值) 的图库会自动从 <strong>缓存浏览</strong> 与 <strong>已下载图库</strong> 中隐藏（画廊、tag 维度均生效）。
+                            </div>
+                            <div class="row g-2 align-items-end mb-3">
+                                <div class="col-md-3">
+                                    <label class="form-label small text-muted mb-1">类型 (tag_type)</label>
+                                    <select id="bl_tag_type" class="form-select form-select-sm">
+                                        <option value="*">* 通配（任意类型，慎用：值里所有词都会被匹配）</option>
+                                        <option value="artist">artist 作者</option>
+                                        <option value="group">group 社团</option>
+                                        <option value="male">male</option>
+                                        <option value="female">female</option>
+                                        <option value="parody">parody 原作</option>
+                                        <option value="character">character 角色</option>
+                                        <option value="mixed">mixed</option>
+                                        <option value="other">other</option>
+                                        <option value="language">language 语言</option>
+                                        <option value="category">category 分类</option>
+                                        <option value="cosplayer">cosplayer</option>
+                                        <option value="reclass">reclass</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small text-muted mb-1">值 (tag_value, 支持空格多词，如 males only / 巨乳)</label>
+                                    <input type="text" id="bl_tag_value" class="form-control form-control-sm" placeholder="如：males only  /  巨乳  /  someartist" onkeydown="if(event.key==='Enter')addBlacklistTag()">
+                                </div>
+                                <div class="col-md-3 d-flex gap-2">
+                                    <button class="btn btn-sm btn-success flex-grow-1" onclick="addBlacklistTag()"><i class="fas fa-plus me-1"></i>加入排除</button>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="loadBlacklistTags()"><i class="fas fa-rotate me-1"></i>刷新</button>
+                                </div>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-sm align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:60px">#</th>
+                                            <th style="width:160px">类型</th>
+                                            <th>值</th>
+                                            <th style="width:180px">加入时间</th>
+                                            <th style="width:100px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="bl_tags_tbody">
+                                        <tr><td colspan="5" class="text-muted text-center py-4"><i class="fas fa-spinner fa-spin me-1"></i>加载中…</td></tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -487,6 +540,11 @@
                         <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_db">-</div><div class="stat-label">数据库状态</div></div></div>
                         <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_venv">-</div><div class="stat-label">虚拟环境</div></div></div>
                         <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_config">-</div><div class="stat-label">配置文件</div></div></div>
+
+                        <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_cache_count">-</div><div class="stat-label"><i class="fas fa-database me-1"></i>本地缓存数量</div></div></div>
+                        <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_db_size">-</div><div class="stat-label"><i class="fas fa-hdd me-1"></i>DB 占用容量</div></div></div>
+                        <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_thumbs_size">-</div><div class="stat-label"><i class="fas fa-images me-1"></i>封面占用容量</div></div></div>
+                        <div class="col-6 col-lg-3"><div class="card stat-card"><div class="stat-value" id="stat_downloads_size">-</div><div class="stat-label"><i class="fas fa-download me-1"></i>下载漫画占用容量</div></div></div>
                     </div>
                     <div class="card mb-3">
                         <div class="card-header">快捷操作</div>

@@ -80,3 +80,144 @@ async function saveSettings() {
     if (res.ok) showToast('设置已保存', 'success');
     else showToast('保存失败: ' + (res.error || ''), 'danger');
 }
+
+// —————— 排除标签黑名单 tag_blacklist ——————
+async function loadBlacklistTags() {
+    const tbody = document.getElementById('bl_tags_tbody');
+    if (!tbody) return;
+    try {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-muted"><i class="fas fa-spinner fa-spin me-1"></i>加载中…</td></tr>`;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        const url = (window.API || 'api.php') + '?action=list_blacklist_tags';
+        let res;
+        try {
+            const resp = await fetch(url, { signal: ctrl.signal });
+            clearTimeout(t);
+            const text = await resp.text();
+            try { res = JSON.parse(text); } catch(e) { res = { ok: false, error: '响应非 JSON: ' + (text||'').slice(0,80), raw: text.slice(0,200) }; }
+        } catch (fe) {
+            clearTimeout(t);
+            if (fe && fe.name === 'AbortError') res = { ok: false, error: '请求超时（8s）' };
+            else res = { ok: false, error: (fe && fe.message) ? fe.message : String(fe) };
+        }
+        if (!res || res.error || res.ok === false) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-danger">加载失败：${escapeHtml(res?.error || '接口无响应')}</td></tr>`;
+            try { showToast('加载排除列表失败：' + (res?.error || '接口无响应'), 'danger'); } catch(e) { console.error(e); }
+            return;
+        }
+        const tags = Array.isArray(res.tags) ? res.tags : [];
+        if (tags.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-muted">暂无排除项</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = tags.map((t, i) => {
+            const tt = escapeHtml(t.tag_type || '');
+            const tv = escapeHtml(t.tag_value || '');
+            const ca = escapeHtml(t.created_at || '');
+            return `<tr>
+                <td class="text-muted small">${i + 1}</td>
+                <td><code class="small">${tt || '*'}</code></td>
+                <td><span class="text-break">${tv}</span></td>
+                <td class="small text-muted">${ca}</td>
+                <td class="text-end"><button class="btn btn-sm btn-outline-danger" onclick="deleteBlacklistTag(${+t.id})" title="删除"><i class="fas fa-trash"></i></button></td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        console.error('[loadBlacklistTags]', e);
+        const msg = e && e.message ? e.message : String(e);
+        try { tbody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-danger">异常：${escapeHtml(msg)}</td></tr>`; } catch(_) {}
+        try { showToast('加载排除列表异常：' + msg, 'danger'); } catch(_) {}
+    }
+}
+
+async function addBlacklistTag() {
+    const typeSel = document.getElementById('bl_tag_type');
+    const valInp = document.getElementById('bl_tag_value');
+    if (!typeSel || !valInp) return;
+    const tag_value = valInp.value.trim();
+    if (!tag_value) { try { showToast('值不能为空', 'warning'); } catch(_) {} return; }
+    const tag_type = typeSel.value || '*';
+    try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        const url = (window.API || 'api.php') + '?action=add_blacklist_tag';
+        let res;
+        try {
+            const resp = await fetch(url, {
+                method: 'POST',
+                signal: ctrl.signal,
+                body: new URLSearchParams({ tag_type, tag_value })
+            });
+            clearTimeout(t);
+            const text = await resp.text();
+            try { res = JSON.parse(text); } catch(e) { res = { ok:false, error:'响应非 JSON: ' + (text||'').slice(0,80) }; }
+        } catch (fe) {
+            clearTimeout(t);
+            if (fe && fe.name === 'AbortError') res = { ok:false, error:'请求超时（8s）' };
+            else res = { ok:false, error:(fe && fe.message) ? fe.message : String(fe) };
+        }
+        if (!res || res.error || res.ok === false) {
+            try { showToast('添加失败：' + (res?.error || '接口无响应'), 'danger'); } catch(_) {}
+            return;
+        }
+        try { showToast(res.message || '已加入排除', 'success'); } catch(_) {}
+        valInp.value = '';
+        await loadBlacklistTags();
+    } catch (e) {
+        console.error('[addBlacklistTag]', e);
+        try { showToast('添加异常：' + (e.message || String(e)), 'danger'); } catch(_) {}
+    }
+}
+
+async function deleteBlacklistTag(id) {
+    if (!id) return;
+    try {
+        if (!confirm('确认从排除列表移除？')) return;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 8000);
+        const url = (window.API || 'api.php') + '?action=delete_blacklist_tag';
+        let res;
+        try {
+            const resp = await fetch(url, {
+                method: 'POST',
+                signal: ctrl.signal,
+                body: new URLSearchParams({ id: String(+id) })
+            });
+            clearTimeout(t);
+            const text = await resp.text();
+            try { res = JSON.parse(text); } catch(e) { res = { ok:false, error:'响应非 JSON: ' + (text||'').slice(0,80) }; }
+        } catch (fe) {
+            clearTimeout(t);
+            if (fe && fe.name === 'AbortError') res = { ok:false, error:'请求超时（8s）' };
+            else res = { ok:false, error:(fe && fe.message) ? fe.message : String(fe) };
+        }
+        if (!res || res.error || res.ok === false) {
+            try { showToast('删除失败：' + (res?.error || '接口无响应'), 'danger'); } catch(_) {}
+            return;
+        }
+        try { showToast(res.message || '已移除', 'success'); } catch(_) {}
+        await loadBlacklistTags();
+    } catch (e) {
+        console.error('[deleteBlacklistTag]', e);
+        try { showToast('删除异常：' + (e.message || String(e)), 'danger'); } catch(_) {}
+    }
+}
+
+// 保证 inline onclick 能找到（<button onclick="addBlacklistTag()"> 是在 window 作用域查找）
+window.loadBlacklistTags = loadBlacklistTags;
+window.addBlacklistTag = addBlacklistTag;
+window.deleteBlacklistTag = deleteBlacklistTag;
+
+document.addEventListener('shown.bs.tab', async (e) => {
+    try {
+        const target = e.target && typeof e.target.getAttribute === 'function' ? e.target.getAttribute('data-bs-target') : '';
+        if (target === '#tab_blacklist_tags') await loadBlacklistTags();
+    } catch(err) { console.error(err); }
+});
+document.addEventListener('DOMContentLoaded', () => {
+    try {
+        const act = document.querySelector('button[data-bs-target="#tab_blacklist_tags"].active');
+        if (act) loadBlacklistTags();
+    } catch(err) { console.error(err); }
+});
