@@ -54,16 +54,101 @@ body { background: #f5f7fa; }
 .gallery-card-incomplete { border: 1px solid rgba(234,179,8,.7); }
 .gallery-card-incomplete:hover { border-color: rgba(234,179,8,.9); }
 .gallery-status-badge { position: absolute; top: 4px; left: 4px; z-index: 2; font-size: .68rem; }
-.gallery-card .card-img-wrapper { background: #f0f0f0; position: relative; }
-.gallery-card .card-img-wrapper img { width: 100%; height: 100%; object-fit: cover; }
+.gallery-card .card-img-wrapper { background: #f0f0f0; position: relative; aspect-ratio: 3/4; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+/* 显示区域固定为 Wrapper 3:4 不变，图片等比自适应（contain）+ 水平垂直居中，避免横宽/高长封面被 cover 拉伸或裁边 */
+.gallery-card .card-img-wrapper img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain !important; object-position: 50% 50%; display: block; background: #f0f0f0; }
 .gallery-card .card-img-wrapper .delete-overlay { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .15s; z-index: 2; }
 .gallery-card .card-img-wrapper:hover .delete-overlay { opacity: 1; }
-.gallery-card .card-body { display: flex; flex-direction: column; flex-grow: 1; justify-content: space-between; }
+.gallery-card .card-body { display: flex; flex-direction: column; flex-grow: 1; justify-content: space-between; row-gap: 4px; }
 .gallery-card .card-body .title-clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; height: calc(1.35em * 4); flex-shrink: 0; }
+/* 缓存浏览卡片信息：双标题 3 行固定高度（拉满短标题）+ 每行独立 -webkit-line-clamp
+   架构：外层 Flex Column + --title-lh CSS 变量控每行高度
+         有副：主标题 2 行 + 副标题 1 行 = 精确 3 行总高；长标题在自己的盒子里截断
+         无副：:only-child 主标题单独吞 3 行 + clamp:3
+   绕开 Chromium -webkit-line-clamp 跨子元素合并为一行的老坑 */
+.gallery-card .card-body.card-info-body { row-gap: 3px; }
+.gallery-card .card-info-body .card-info-row.card-row-top {
+    display: grid !important;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    align-items: center;
+    gap: 4px;
+}
+.gallery-card .card-info-body .card-info-row.card-row-top > * {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+}
+.gallery-card .card-info-body .card-info-row.card-row-bottom { justify-content: flex-end; }
+.gallery-card .card-info-body .title-double-clamp {
+    --title-lh: 1.25rem;
+    display: flex; flex-direction: column; gap: 0;
+    height: calc(var(--title-lh) * 3);
+    flex-shrink: 0; overflow: hidden;
+}
+.gallery-card .card-info-body .title-double-clamp > .title-primary {
+    font-size: .86rem; line-height: var(--title-lh);
+    /*! autoprefixer: off */
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    /*! autoprefixer: on */
+    overflow: hidden; overflow-wrap: break-word; word-break: break-all; line-break: anywhere; white-space: normal;
+    flex: 0 0 calc(var(--title-lh) * 2);
+    min-height: 0;
+}
+.gallery-card .card-info-body .title-double-clamp > .title-secondary {
+    font-size: .72rem; line-height: var(--title-lh); opacity: .88;
+    /*! autoprefixer: off */
+    display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
+    /*! autoprefixer: on */
+    overflow: hidden; overflow-wrap: break-word; word-break: break-all; line-break: anywhere; white-space: normal;
+    flex: 0 0 var(--title-lh);
+    min-height: 0;
+}
+/* 无副时主标题单独占满 3 行（用户明确要求「短标题也要强行拉满 3 行高使卡片一致」） */
+.gallery-card .card-info-body .title-double-clamp > .title-primary:only-child {
+    /*! autoprefixer: off */
+    -webkit-line-clamp: 3;
+    /*! autoprefixer: on */
+    flex-basis: calc(var(--title-lh) * 3);
+}
+.gallery-card .card-info-body .card-info-row { min-height: calc(1.4em + 2px); }
 .lang-badge { display: inline-block; padding: .35em .65em; font-size: .65rem; font-weight: 600; line-height: 1; border-radius: .375rem; box-shadow: inset 0 0 0 1px; white-space: nowrap; }
-.gallery-flex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .75rem; }
-#cache_grid { grid-template-columns: repeat(5, 1fr); }
+.gallery-flex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: .75rem; }
+.gallery-flex-grid > div, #cache_grid > div { min-width: 0; }
+/* 缓存页：卡片固定最小宽 → 在 max-width:1200px 容器内正好一排放 5 本（5×210 + 4×12 = 1098 < 1200，刚好）；再更大屏也不会 >5 列（通过限制 cache_grid 容器 max-width 实现，而图库是自然铺满） */
+#cache_grid { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+/* 手机：仍然 2 列保持最小可读 */
+@media (max-width: 768px) {
+    .gallery-flex-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+    #cache_grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* 平板 (769-1000)：缓存 4 列 / 图库 3-4 自动；手机 2 列已上 */
+/* 标签内容强制在等分格子内不超出：等分本身保证 min-width:0，badge 再 clip 保证 */
+.gallery-card .card-info-body .card-info-row.card-row-top > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gallery-card .card-info-body .card-info-row.card-row-top .badge,
+.gallery-card .card-info-body .card-info-row.card-row-top .lang-badge {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-inline: .35rem;
+}
+.gallery-card .card-info-body .card-info-row.card-row-top span.small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 #page_cache > .card { max-width: 1200px; margin: 0 auto; }
+#cache_grid { max-width: calc(210px * 5 + .75rem * 4); margin: 0 auto; }
+/* 小屏时取消 5 列最大宽限制，保证 2 列能占满屏 */
+@media (max-width: 768px) {
+    #cache_grid { max-width: 100%; }
+}
 #reader_page { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1050; background: #111; display: flex; flex-direction: column; }
 #reader_page.section-hidden { display: none !important; }
 .reader-header { background: rgba(0,0,0,.85); color: #e2e8f0; flex-shrink: 0; }
@@ -142,6 +227,9 @@ body { background: #f5f7fa; }
     .gallery-card .card-img-wrapper .delete-overlay { opacity: 1; }
     .gallery-card .card-body { padding: .25rem .5rem; }
     .gallery-card .card-body .title-clamp { font-size: .82rem; line-height: 1.3; height: calc(1.3em * 4); }
+    .gallery-card .card-info-body .title-double-clamp { --title-lh: 1.18rem; }
+    .gallery-card .card-info-body .title-double-clamp > .title-primary { font-size: .82rem; }
+    .gallery-card .card-info-body .title-double-clamp > .title-secondary { font-size: .66rem; }
     .gallery-card .badge, .gallery-card .small.text-muted { font-size: .68rem !important; }
     #page_gallery .card-body.border-bottom .row > .col-md-1 { flex: 0 0 calc(50% - .25rem); width: calc(50% - .25rem); }
 

@@ -30,7 +30,7 @@ function cacheToggleCategory(el) {
             allBtn.classList.remove('active');
         }
     }
-    cacheSearch();
+    // 显式触发：移除自动 cacheSearch()，等用户按"筛选"按钮或 Enter（符合 project_memory 偏好显式触发而非自动触发）
 }
 
 function getCacheSelectedCategories() {
@@ -225,7 +225,7 @@ let _cacheLanguages = new Set(LANG_DEFAULTS);
 
 function cacheToggleLanguage(el) {
     _toggleLanguageTag(el, document.getElementById('cache_language_tags'), _cacheLanguages);
-    cacheSearch();
+    // 显式触发：移除自动 cacheSearch()，等用户按"筛选"按钮或 Enter
 }
 
 function getCacheSelectedLanguages() {
@@ -312,18 +312,60 @@ function renderCacheBatchBar() {
         '</div>';
 }
 
-function normalizeCacheTitle(title) {
+function normalizeTitle(title) {
     return String(title || '').replace(/\s+/g, ' ').trim();
 }
+var normalizeCacheTitle = normalizeTitle;
 
-function getCacheDisplayTitles(gallery) {
-    var original = normalizeCacheTitle(gallery.title);
-    var japanese = normalizeCacheTitle(gallery.title_jp);
+// ─── Tooling: ZWSP 强制软换行（Chromium -webkit-box + CJK 不换行老坑）───
+// 在 ① CJK 字符之间 / ② ASCII 与 CJK 相变点 / ③ 连续 8 个以上 ASCII 字母数字之间
+// 插入 U+200B ZERO WIDTH SPACE，保证 -webkit-box 下 word-break:break-all 能真正断行
+function _zwspWrap(s) {
+    if (!s) return '';
+    var zwsp = '\u200b';
+    var out = '';
+    var run = 0;
+    var prevC = '';
+    var prevType = 0; // 0=none, 1=CJK(汉/日/韩/符号), 2=ASCII 字母数字
+    function _type(c) {
+        var code = c.charCodeAt(0);
+        if (!c) return 0;
+        if (code <= 0x20) return -1;
+        if ((code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) return 2;
+        if (code < 0x80) return -1;
+        return 1;
+    }
+    for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i);
+        var t = _type(ch);
+        if (t !== -1) {
+            if (prevType !== 0 && prevC && ((t === 1 && prevType === 1) || (t !== prevType))) {
+                out += zwsp;
+                run = 0;
+            } else if (t === 2 && prevType === 2) {
+                run++;
+                if (run >= 8) { out += zwsp; run = 0; }
+            }
+            prevType = t;
+            prevC = ch;
+        } else {
+            run = 0; prevType = 0; prevC = '';
+        }
+        out += ch;
+    }
+    return out;
+}
+
+function getGalleryDisplayTitles(gallery) {
+    var original = normalizeTitle(gallery.title);
+    var japanese = normalizeTitle(gallery.title_jp);
     return {
         primary: japanese || original || '(无标题)',
-        secondary: japanese && original && japanese !== original ? original : ''
+        secondary: ''
     };
 }
+var getCacheDisplayTitles = getGalleryDisplayTitles;
+
 function renderCacheGrid() {
     const body = document.getElementById('cache_grid_body');
     if (!_cacheResults || _cacheResults.length === 0) {
@@ -335,7 +377,7 @@ function renderCacheGrid() {
     renderCacheBatchBar();
     body.innerHTML = '<div class="gallery-flex-grid" id="cache_grid">' +
         _cacheResults.map(function(g, idx) {
-            var displayTitles = getCacheDisplayTitles(g);
+            var displayTitles = getGalleryDisplayTitles(g);
             var catColor = CAT_COLORS[g.category] || '#6c757d';
             var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(g.category) + '</span>' : '';
             var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
@@ -347,7 +389,7 @@ function renderCacheGrid() {
             var source_id = g.source_id || '';
             var escapedSid = escapeAttr(source_id);
             var downloadBtn = g.is_local
-                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="阅读"><i class="fas fa-book-open"></i></button>'
+                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="本地阅览"><i class="fas fa-book-open"></i></button>'
                 : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
             var sourceBtn = '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>';
             return '<div>' +
@@ -357,17 +399,21 @@ function renderCacheGrid() {
                 thumbHtml +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
-                '<div class="card-body px-2 py-1">' +
-                '<div style="cursor:pointer" title="点击查看详情" onclick="showCacheDetail(' + idx + ')">' +
-                '<div class="small title-clamp" style="color:var(--bs-link-color)">' + escapeHtml(displayTitles.primary) + '</div>' +
-                (displayTitles.secondary ? '<div class="text-muted text-truncate" style="font-size:.7rem" title="' + escapeAttr(displayTitles.secondary) + '">' + escapeHtml(displayTitles.secondary) + '</div>' : '') +
+                '<div class="card-body px-2 py-1 card-info-body">' +
+                // 第 1~3 行：中文标题 + 日语标题，合占严格 3 行（主最多 2 行 / 副 1 行；无副时主占满 3 行）
+                // ZWSP 注入保证 -webkit-box 容器下 CJK/假名/罗马字序列能真正换行
+                '<div class="title-double-clamp" style="cursor:pointer" title="' + escapeAttr(displayTitles.primary + (displayTitles.secondary ? '\n' + displayTitles.secondary : '')) + '" onclick="showCacheDetail(' + idx + ')">' +
+                '<div class="title-primary" style="color:var(--bs-link-color)">' + _zwspWrap(escapeHtml(displayTitles.primary)) + '</div>' +
+                (displayTitles.secondary ? '<div class="title-secondary text-muted">' + _zwspWrap(escapeHtml(displayTitles.secondary)) + '</div>' : '') +
                 '</div>' +
-                '<div class="d-flex justify-content-between align-items-center gap-1" style="margin-top:2px">' +
+                // 第 4 行（左对齐）：分类 badge + 语种 badge + 页数
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-top">' +
                 catBadge +
                 langBadge +
-                '</div>' +
-                '<div class="d-flex justify-content-between align-items-center" style="margin-top:2px">' +
                 '<span class="small text-muted">' + (g.total_pages || 0) + 'p</span>' +
+                '</div>' +
+                // 第 5 行（右对齐）：本地阅览 / 下载 / ExHentai 外链
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom">' +
                 '<span class="d-inline-flex gap-1">' + downloadBtn + sourceBtn + '</span>' +
                 '</div>' +
                 '</div>' +
@@ -777,15 +823,15 @@ async function stopVerify() {
     renderVerifyStatus(null);
 }
 
-async function addTagToCacheSearch(type, rawName, nameCn) {
-    // 把 popup 点的标签累加到缓存检索框（AND 关系用逗号分隔），scope 根据标签 type 设定下拉框 → 立即触发检索
+function addTagToCacheSearch(type, rawName, nameCn) {
+    // 把 popup 点的标签累加到缓存检索框（AND 关系用逗号分隔），scope 根据标签 type 设定下拉框
+    // —— 显式触发搜索：仅修改输入框/下拉，不自动调用 cacheSearch()，等用户点"筛选"按钮或按 Enter（避免 NAS/大库点 tag 时强制 4s+ 延迟）
     var input = document.getElementById('cache_keyword');
     var scopeSel = document.getElementById('cache_search_scope');
     var value = (nameCn && nameCn.trim()) ? nameCn.trim() : (rawName || '').trim();
     if (!value) return;
-    // 1) scope 设定（只在当前无 keyword 或用户没手动改过 scope 时覆盖；已经 scope=tags 就保留）
+    // 1) scope 设定（只在当前 scope 仍是默认 all 时覆盖；用户手动改过就保留）
     if (scopeSel && scopeSel.value === 'all') {
-        // 内容类型标签（male/female/parody/other/mixed/character/...）→ tags/tags_cn 优先匹配 name_cn 中文
         var CONTENT_TYPES = new Set(['male','female','parody','character','mixed','other','language','category','cosplayer']);
         if (type === 'artist' || type === 'group') scopeSel.value = 'author';
         else if (CONTENT_TYPES.has(type)) scopeSel.value = (nameCn && nameCn.trim()) ? 'tags_cn' : 'tags';
@@ -798,15 +844,8 @@ async function addTagToCacheSearch(type, rawName, nameCn) {
     }
     if (!exists) parts.push(value);
     input.value = parts.join(', ');
-    // 3) 立即触发检索
-    _cachePage = 1;
-    await cacheSearch();
-    // 4) 如果详情弹窗还开着就关掉
-    var m = document.getElementById('cache_detail_modal');
-    if (m && typeof bootstrap !== 'undefined') {
-        var inst = bootstrap.Modal.getInstance(m);
-        if (inst) inst.hide();
-    }
+    // —— 不再自动触发 cacheSearch() + 不关弹窗，允许用户连续点多个 tag 后手动按"筛选"
+    //    用户如果想立刻搜，直接按 Enter 或点"筛选"按钮即可（符合 project_memory 显式触发原则）
 }
 
 // ─── Detail Popup ─────────────────────────────────────────
@@ -848,7 +887,7 @@ function showCacheDetail(idx) {
                     var label = typeLabels[type] || type;
                     var badges = grouped[type].map(function(tag) {
                         var nameOrCn = tag.cn || tag.raw;
-                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="点击：累加到缓存检索（AND）并搜索" onclick="addTagToCacheSearch(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\',\'' + escapeAttr(tag.cn) + '\')">' + escapeHtml(nameOrCn) + '</span>';
+                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="点击：累加到缓存检索（AND，不自动触发，按筛选按钮或 Enter 执行）" onclick="addTagToCacheSearch(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\',\'' + escapeAttr(tag.cn) + '\')">' + escapeHtml(nameOrCn) + '</span>';
                     }).join('');
                     return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
                 }).filter(function(s) { return s; }).join('');

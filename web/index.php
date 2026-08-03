@@ -12,7 +12,7 @@ $projectPath = realpath(__DIR__ . '/..');
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=17">
+    <link rel="stylesheet" href="assets/css/app.css?v=27">
 </head>
 <body>
 
@@ -135,10 +135,10 @@ $projectPath = realpath(__DIR__ . '/..');
 <script src="assets/js/navigation.js?v=7"></script>
 <script src="assets/js/config.js"></script>
 <script src="assets/js/download.js?v=3"></script>
-<script src="assets/js/gallery.js?v=8"></script>
+<script src="assets/js/cache.js?v=28"></script>
+<script src="assets/js/gallery.js?v=13"></script>
 <script src="assets/js/reader.js"></script>
 <script src="assets/js/export.js"></script>
-<script src="assets/js/cache.js?v=23"></script>
 <script src="assets/js/refresh_targets.js?v=4"></script>
 <script src="assets/js/test_verify.js"></script>
 </body>

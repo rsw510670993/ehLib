@@ -705,7 +705,7 @@ function _open_sqlite($db_path) {
     $pdo->exec("PRAGMA mmap_size = 268435456");  // 256MB mmap：读数据少 1 次 memcpy（纯 read 系统调用大幅减少）
     $pdo->exec("PRAGMA foreign_keys = OFF");
     // ——— 迁移守卫：用 user_version 保证 7 条复合索引 + 2 条数据修复 UPDATE 只跑 1 次，后续请求 0 成本（避免每次 cache_search 把读请求变写请求拖慢 4.7s）
-    $SCHEMA_VER_TARGET = 1;
+    $SCHEMA_VER_TARGET = 2;
     $cur_ver = (int)$pdo->query("PRAGMA user_version")->fetchColumn();
     if ($cur_ver < $SCHEMA_VER_TARGET) {
         // ——— search_cache 专用 4 组复合索引（幂等 IF NOT EXISTS）：
@@ -723,6 +723,30 @@ function _open_sqlite($db_path) {
         // 幂等修复旧数据：空 uploaded_at 统一写成 '0000-00-00'，保证 ORDER BY 直接走 uploaded_at 索引（不用包 COALESCE(NULLIF()) 让索引失效）
         $pdo->exec("UPDATE search_cache SET uploaded_at = '0000-00-00' WHERE uploaded_at IS NULL OR uploaded_at = ''");
         $pdo->exec("UPDATE galleries    SET uploaded_at = '0000-00-00' WHERE uploaded_at IS NULL OR uploaded_at = ''");
+        if ($cur_ver < 2) {
+            // ——— V2：galleries 唯一化 + UNIQUE 守卫 —————————————————————————————
+            // 1. galleries 历史上 save_gallery() 有竞态时同一 (source,source_id) 可能插入 2+ 行，
+            //    会把 cache_search 的 LEFT JOIN 1 行放大为 N 行（"Amateur Coloring Practice" 重复出现 2 次就是此根因）。
+            //    先去重：每组保留最小 id，把其余 DELETE；再建立 UNIQUE 索引从数据层杜绝未来复发。
+            $dups = $pdo->query("SELECT source, source_id, MIN(id) AS keep_id FROM galleries GROUP BY source, source_id HAVING COUNT(*)>1")->fetchAll();
+            foreach ($dups as $d) {
+                $stmt = $pdo->prepare("DELETE FROM galleries WHERE source=? AND source_id=? AND id>?");
+                $stmt->execute([$d['source'], $d['source_id'], (int)$d['keep_id']]);
+                $stmt2 = $pdo->prepare("DELETE FROM gallery_tags WHERE gallery_id NOT IN (SELECT id FROM galleries)");
+                $stmt2->execute();
+            }
+            $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_gals_src_sid ON galleries (source, source_id)");
+            // 2. search_cache 同理：(source, source_id) 必须唯一，避免爬取去重失败时产生重复（虽然此表没有 JOIN 放大自己，但翻页时同一卡片会在两页都出现）。
+            $sc_dups = $pdo->query("SELECT source, source_id FROM search_cache GROUP BY source, source_id HAVING COUNT(*)>1")->fetchAll();
+            if (!empty($sc_dups)) {
+                // 用隐式 rowid 去重保留最小 rowid 那一行（SQLite 每个表必有 rowid）
+                foreach ($sc_dups as $d) {
+                    $stmt = $pdo->prepare("DELETE FROM search_cache WHERE rowid NOT IN (SELECT MIN(rowid) FROM search_cache WHERE source=? AND source_id=?) AND source=? AND source_id=?");
+                    $stmt->execute([$d['source'], $d['source_id'], $d['source'], $d['source_id']]);
+                }
+            }
+            $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_sc_src_sid ON search_cache (source, source_id)");
+        }
         $pdo->exec("PRAGMA user_version = $SCHEMA_VER_TARGET");
     }
     return $pdo;
@@ -742,6 +766,29 @@ try {
     }
 
     switch ($action) {
+        // ——— 调试用：触发一次 _open_sqlite() 以便 SCHEMA v2 去重迁移立刻生效（下次访问缓存页也会自动触发，这里提供一个显式的 HTTP 入口）
+        case 'db_migrate_v2':
+            try {
+                $pdo = _pdo();
+                $cur_ver = (int)$pdo->query("PRAGMA user_version")->fetchColumn();
+                $g_dup = (int)$pdo->query("SELECT COUNT(*) FROM (SELECT 1 FROM galleries GROUP BY source,source_id HAVING COUNT(*)>1)")->fetchColumn();
+                $sc_dup = (int)$pdo->query("SELECT COUNT(*) FROM (SELECT 1 FROM search_cache GROUP BY source,source_id HAVING COUNT(*)>1)")->fetchColumn();
+                $g_total = (int)$pdo->query("SELECT COUNT(*) FROM galleries")->fetchColumn();
+                $sc_total = (int)$pdo->query("SELECT COUNT(*) FROM search_cache")->fetchColumn();
+                // 列出 galleries 所有 (source,source_id) 重复组的 前 20 组，方便核对
+                $dup_list = $pdo->query("SELECT source, source_id, COUNT(*) AS c, MIN(id) AS keep_id FROM galleries GROUP BY source,source_id HAVING COUNT(*)>1 ORDER BY c DESC LIMIT 20")->fetchAll();
+                json_exit([
+                    'user_version_before' => $cur_ver,
+                    'galleries_dup_groups' => $g_dup,
+                    'search_cache_dup_groups' => $sc_dup,
+                    'galleries_total' => $g_total,
+                    'search_cache_total' => $sc_total,
+                    'sample_dup_groups' => $dup_list,
+                    'note' => '下次 GET cache_search 时将自动触发 SCHEMA v2 去重迁移（DELETE 重复 (src,sid)+UNIQUE 索引），本接口只读当前状态不执行任何修改。'
+                ]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
         case 'get_config':
             $config = read_config();
             json_exit(['config' => $config]);
@@ -1631,9 +1678,8 @@ try {
                         "SELECT sc.source_id, sc.title, sc.title_jp, sc.category, sc.language, sc.group_name,
                                 sc.tags, sc.tags_cn, sc.total_pages, sc.artist, sc.uploaded_at,
                                 sc.crawled_at, sc.thumb_path, sc.searched_at,
-                                CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local
+                                CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local
                          FROM search_cache sc
-                         LEFT JOIN galleries g ON g.source=sc.source AND g.source_id=sc.source_id
                          $where
                          ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC";
                     $US = "\x1F";
@@ -1694,8 +1740,8 @@ try {
                         $all_query = "SELECT sc.source_id, sc.title, sc.title_jp, sc.category, sc.language, sc.group_name,
                                              sc.tags, sc.tags_cn, sc.total_pages, sc.artist, sc.uploaded_at,
                                              sc.crawled_at, sc.thumb_path, sc.searched_at,
-                                             CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local
-                                      FROM search_cache sc LEFT JOIN galleries g ON g.source=sc.source AND g.source_id=sc.source_id
+                                             CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local
+                                      FROM search_cache sc
                                       $where
                                       ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC
                                       LIMIT $limit_top";
@@ -1740,7 +1786,7 @@ try {
                         $rows = array_slice($kept, $offset, $per_page);
                     } else {
                         $total = $total_raw;
-                        $data_query = "SELECT sc.*, CASE WHEN g.id IS NOT NULL THEN 1 ELSE 0 END as is_local FROM search_cache sc LEFT JOIN galleries g ON g.source = sc.source AND g.source_id = sc.source_id $where ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC LIMIT $per_page OFFSET $offset";
+                        $data_query = "SELECT sc.*, CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local FROM search_cache sc $where ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC LIMIT $per_page OFFSET $offset";
                         $stmt = $pdo->prepare($data_query);
                         $stmt->execute($params);
                         $rows = $stmt->fetchAll();
@@ -1748,15 +1794,20 @@ try {
                 }
 
                 $results = [];
+                $seen_keys = [];
                 foreach ($rows as $row) {
                     $thumb_url = '';
                     $thumb_path = $row['thumb_path'] ?? '';
                     $source_id = $row['source_id'] ?? '';
+                    $src = $row['source'] ?? $source;
+                    $k = $src . '::' . $source_id;
+                    if (isset($seen_keys[$k])) continue;
+                    $seen_keys[$k] = true;
                     if ($thumb_path && is_file($thumb_path)) {
                         $thumb_url = 'api.php?action=serve_cache_thumb&source=' . urlencode($source) . '&source_id=' . urlencode($source_id);
                     }
                     $results[] = [
-                        'source'      => $row['source'] ?? $source,
+                        'source'      => $src,
                         'source_id'   => $source_id,
                         'title'       => $row['title'] ?? '',
                         'title_jp'    => $row['title_jp'] ?? '',
