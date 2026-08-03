@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime
 import aiosqlite
 from pathlib import Path
@@ -140,6 +141,36 @@ CREATE TABLE IF NOT EXISTS remote_favorites (
 )
 """
 
+CREATE_EXCLUDED_SIDS = """
+CREATE TABLE IF NOT EXISTS excluded_sids (
+    source     TEXT NOT NULL,
+    source_id  TEXT NOT NULL,
+    reason     TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (source, source_id)
+)
+"""
+
+CREATE_EXCLUDED_PARTICIPANTS = """
+CREATE TABLE IF NOT EXISTS excluded_participants (
+    kind       TEXT NOT NULL,        -- 'artist' | 'group'
+    name       TEXT NOT NULL,
+    reason     TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (kind, name)
+)
+"""
+
+CREATE_TAG_BLACKLIST = """
+CREATE TABLE IF NOT EXISTS tag_blacklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag_type TEXT NOT NULL DEFAULT '',
+    tag_value TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(tag_type, tag_value)
+)
+"""
+
 REMOTE_FAVORITE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_remote_favorites_favcat ON remote_favorites(favcat)",
     "CREATE INDEX IF NOT EXISTS idx_remote_favorites_synced ON remote_favorites(synced_at)",
@@ -214,6 +245,9 @@ class Database:
             await db.execute(CREATE_CRAWL_JOBS)
             await db.execute(CREATE_REFRESH_TARGETS)
             await db.execute(CREATE_REMOTE_FAVORITES)
+            await db.execute(CREATE_EXCLUDED_SIDS)
+            await db.execute(CREATE_EXCLUDED_PARTICIPANTS)
+            await db.execute(CREATE_TAG_BLACKLIST)
             for index_sql in CREATE_INDEXES:
                 await db.execute(index_sql)
             for index_sql in REMOTE_FAVORITE_INDEXES:
@@ -344,6 +378,42 @@ class Database:
                 await self._link_tags(db, gallery_id, tag_ids)
 
             await db.commit()
+
+            # ——— 同步钩子：若命中 tag_blacklist → 写 excluded_sids + 从 galleries 立即删除
+            #     tags_json: 把 gallery.tags list[Tag] 转成 PHP 端同样的 JSON 格式（保证 fuzzy 判定与前端 cache_search 一致）
+            tags_json = ""
+            if gallery.tags:
+                try:
+                    tags_json = json.dumps(
+                        [{"type": t.type, "name": t.name, "name_cn": t.name_cn or ""} for t in gallery.tags],
+                        ensure_ascii=False,
+                    )
+                except Exception:
+                    tags_json = ""
+            applied = await self._apply_tag_blacklist_to_entry(
+                db=db,
+                source=gallery.source,
+                source_id=gallery.source_id,
+                title=gallery.title,
+                title_jp=gallery.title_jp,
+                artist=gallery.artist,
+                group_name=gallery.group_name,
+                tags=tags_json,
+                tags_cn="",
+            )
+            if applied:
+                # 命中黑名单后连带清 galleries 与本地记录，防止删除根除不了反复回显
+                try:
+                    import shutil
+                    lp = gallery.local_path
+                    if lp and os.path.isdir(lp):
+                        shutil.rmtree(lp, ignore_errors=True)
+                except Exception:
+                    pass
+                await db.execute("DELETE FROM galleries WHERE source=? AND source_id=?", (gallery.source, gallery.source_id))
+                await db.commit()
+                gallery_id = 0
+
             return gallery_id
 
     async def _save_tags(self, db: aiosqlite.Connection, tags: list[Tag]) -> list[int]:
@@ -496,6 +566,77 @@ class Database:
         rows = await cursor.fetchall()
         return [Tag(id=row[0], type=row[1], name=row[2]) for row in rows]
 
+    # ── Tag Blacklist 同步入表钩子（一劳永逸解决 males only / dickgirl 等 fuzzy 标签在重复获取模式下"无法靠删除根除"问题）──────
+    async def _load_compiled_blacklist(
+        self,
+        db: aiosqlite.Connection,
+    ):
+        """读取 tag_blacklist 所有规则 + 用同于 PHP 前端 cache_search 的正则编译；
+        空时返回 None 避免 O(N*rules) 的正则构造成本。"""
+        try:
+            cursor = await db.execute(
+                "SELECT tag_type, tag_value FROM tag_blacklist WHERE tag_value IS NOT NULL AND tag_value!=''"
+            )
+            rows = await cursor.fetchall()
+        except Exception:
+            return None
+        if not rows:
+            return None
+        # 懒加载（避免启动时 import 成本），避免 tag_blacklist 表不存在时 import 报错
+        try:
+            from ehlib.utils.tag_blacklist import compile_blacklist
+        except Exception:
+            return None
+        return compile_blacklist([(r[0] if r and len(r) > 0 else "", r[1] if r and len(r) > 1 else "") for r in rows])
+
+    async def _apply_tag_blacklist_to_entry(
+        self,
+        db: aiosqlite.Connection,
+        *,
+        source: str,
+        source_id: str,
+        title: str = "",
+        title_jp: str = "",
+        artist: str = "",
+        group_name: str = "",
+        tags: str = "",
+        tags_cn: str = "",
+    ) -> bool:
+        """
+        判断 1 条漫画条目是否命中 tag_blacklist。
+        命中 → INSERT OR IGNORE excluded_sids（同步理由，O(1) 主键判重），并返回 True。
+        未命中 → 返回 False。
+        """
+        if not source or not source_id:
+            return False
+        cb = await self._load_compiled_blacklist(db)
+        if cb is None or cb.is_empty:
+            return False
+        try:
+            from ehlib.utils.tag_blacklist import entry_matches_blacklist
+        except Exception:
+            return False
+        matched, _reason = entry_matches_blacklist(
+            cb,
+            title=title or "",
+            title_jp=title_jp or "",
+            artist=artist or "",
+            group_name=group_name or "",
+            tags=tags or "",
+            tags_cn=tags_cn or "",
+        )
+        if not matched:
+            return False
+        reason_text = "auto by tag_blacklist on save_gallery/save_search_results hook"
+        try:
+            await db.execute(
+                "INSERT OR IGNORE INTO excluded_sids (source, source_id, reason) VALUES (?,?,?)",
+                (source, source_id, reason_text),
+            )
+        except Exception:
+            return False
+        return True
+
     async def get_gallery_tags(self, gallery_id: int) -> list[Tag]:
         async with aiosqlite.connect(self._db_path) as db:
             return await self._get_tags_for_gallery(db, gallery_id)
@@ -577,6 +718,22 @@ class Database:
                 await db.execute(
                     "UPDATE search_cache SET searched_at=?, thumbnail=? WHERE source=? AND source_id=?",
                     (now, r.get("thumbnail", ""), r.get("source", "exhentai"), r.get("source_id", "")),
+                )
+            await db.commit()
+
+            # ——— 同步钩子：把这批 search_cache 新条目里命中 tag_blacklist 的立即写 excluded_sids
+            #     避免重复获取模式下 fuzzy 标签反复出现在缓存首页
+            for r in results:
+                await self._apply_tag_blacklist_to_entry(
+                    db=db,
+                    source=r.get("source", "exhentai"),
+                    source_id=r.get("source_id", ""),
+                    title=r.get("title", ""),
+                    title_jp=r.get("title_jp", ""),
+                    artist=r.get("artist", ""),
+                    group_name=r.get("group_name", "") if isinstance(r.get("group_name"), str) else "",
+                    tags=r.get("tags", "") if isinstance(r.get("tags"), str) else "",
+                    tags_cn=r.get("tags_cn", "") if isinstance(r.get("tags_cn"), str) else "",
                 )
             await db.commit()
         return saved

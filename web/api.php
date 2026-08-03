@@ -705,7 +705,7 @@ function _open_sqlite($db_path) {
     $pdo->exec("PRAGMA mmap_size = 268435456");  // 256MB mmap：读数据少 1 次 memcpy（纯 read 系统调用大幅减少）
     $pdo->exec("PRAGMA foreign_keys = OFF");
     // ——— 迁移守卫：用 user_version 保证 7 条复合索引 + 2 条数据修复 UPDATE 只跑 1 次，后续请求 0 成本（避免每次 cache_search 把读请求变写请求拖慢 4.7s）
-    $SCHEMA_VER_TARGET = 2;
+    $SCHEMA_VER_TARGET = 3;
     $cur_ver = (int)$pdo->query("PRAGMA user_version")->fetchColumn();
     if ($cur_ver < $SCHEMA_VER_TARGET) {
         // ——— search_cache 专用 4 组复合索引（幂等 IF NOT EXISTS）：
@@ -746,6 +746,29 @@ function _open_sqlite($db_path) {
                 }
             }
             $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_sc_src_sid ON search_cache (source, source_id)");
+        }
+        if ($cur_ver < 3) {
+            // ——— V3：精确排除表（O(1) PK 查/删，SQL WHERE 走 NOT IN 前置索引排除，根除模糊黑名单每页 REGEXP 300ms+）
+            //   excluded_sids        = 单本精确排除（(source, source_id) PK）
+            //   excluded_participants = artist/group 精确排除（(kind, name) PK）
+            $pdo->exec("CREATE TABLE IF NOT EXISTS excluded_sids (
+                source     TEXT NOT NULL,
+                source_id  TEXT NOT NULL,
+                reason     TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (source, source_id)
+            )");
+            $pdo->exec("CREATE TABLE IF NOT EXISTS excluded_participants (
+                kind       TEXT NOT NULL,        -- 'artist' | 'group'
+                name       TEXT NOT NULL,
+                reason     TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (kind, name)
+            )");
+            // 把既存 tag_blacklist 里 artist/group 精确类一次性同步到 excluded_participants（避免新表刚建好但旧条目不生效）
+            $pdo->exec("INSERT OR IGNORE INTO excluded_participants (kind, name, reason)
+                        SELECT 'artist', tag_value, 'migrated from tag_blacklist (v3)'
+                        FROM tag_blacklist WHERE tag_type IN ('artist','group','author','*') AND tag_value!=''");
         }
         $pdo->exec("PRAGMA user_version = $SCHEMA_VER_TARGET");
     }
@@ -1232,13 +1255,25 @@ try {
                 $stmt->execute([$source, $source_id]);
                 $row = $stmt->fetch();
                 if (!$row || empty($row['thumb_path'])) error_exit('Thumb not found');
-                $thumb_path = $row['thumb_path'];
-                if (!is_file($thumb_path)) error_exit('Thumb file not found');
-                $ext = strtolower(pathinfo($thumb_path, PATHINFO_EXTENSION));
+                $thumb_path = (string)$row['thumb_path'];
+                // ——— 安全：防止 DB 里被注入 .. / \ / Windows 绝对路径穿越
+                //     1. realpath 解析后必须以真实的 data_dir 根开头
+                //     2. 扩展名白名单 jpg/jpeg/png/gif/webp 只允许图片
+                $data_dir = realpath($root . '/data') ?: $root . '/data';
+                $rp = @realpath($thumb_path);
+                if ($rp === false) error_exit('Thumb file not found');
+                $norm_data = rtrim(str_replace('\\', '/', $data_dir), '/');
+                $norm_rp   = rtrim(str_replace('\\', '/', $rp), '/');
+                if (strpos($norm_rp, $norm_data . '/') !== 0 && $norm_rp !== $norm_data) {
+                    error_exit('Invalid thumb path (outside data dir)');
+                }
+                if (!is_file($rp)) error_exit('Thumb file not found');
+                $ext = strtolower(pathinfo($rp, PATHINFO_EXTENSION));
                 $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
-                header('Content-Type: ' . ($mime[$ext] ?? 'image/webp'));
+                if (!isset($mime[$ext])) error_exit('Invalid thumb extension');
+                header('Content-Type: ' . $mime[$ext]);
                 header('Cache-Control: max-age=86400');
-                readfile($thumb_path);
+                readfile($rp);
                 exit;
             } catch (Exception $e) {
                 error_exit($e->getMessage());
@@ -1611,6 +1646,17 @@ try {
 
                 $params = [];
                 $where = ' WHERE 1=1';
+                // ————— 阶段 0：精确排除（O(1) NOT IN 走 Index，避免重复获取模式下 fuzzy 无法根除的 males only / dickgirl / 伪娘）
+                //   加在所有 3 条查询（cand_base_query / all_query / data_query）共用的 $where 上，三条路径自动生效
+                $ex_sid_count = (int)$pdo->query("SELECT COUNT(*) FROM excluded_sids")->fetchColumn();
+                if ($ex_sid_count > 0) {
+                    $where .= " AND (sc.source, sc.source_id) NOT IN (SELECT source, source_id FROM excluded_sids)";
+                }
+                $ex_part_count = (int)$pdo->query("SELECT COUNT(*) FROM excluded_participants")->fetchColumn();
+                if ($ex_part_count > 0) {
+                    $where .= " AND sc.artist NOT IN (SELECT name FROM excluded_participants WHERE kind='artist')";
+                    $where .= " AND (sc.group_name IS NULL OR sc.group_name='' OR sc.group_name NOT IN (SELECT name FROM excluded_participants WHERE kind='group'))";
+                }
                 if ($source !== '') { $where .= ' AND sc.source=?'; $params[] = $source; }
 
                 if ($category) { $where .= ' AND sc.category=?'; $params[] = $category; }
@@ -1795,34 +1841,73 @@ try {
 
                 $results = [];
                 $seen_keys = [];
-                foreach ($rows as $row) {
-                    $thumb_url = '';
-                    $thumb_path = $row['thumb_path'] ?? '';
-                    $source_id = $row['source_id'] ?? '';
-                    $src = $row['source'] ?? $source;
-                    $k = $src . '::' . $source_id;
-                    if (isset($seen_keys[$k])) continue;
-                    $seen_keys[$k] = true;
-                    if ($thumb_path && is_file($thumb_path)) {
-                        $thumb_url = 'api.php?action=serve_cache_thumb&source=' . urlencode($source) . '&source_id=' . urlencode($source_id);
+                // ——— seen_keys 兜底判重 + 缺失补足机制（保证返回永远满 per_page，避免判重丢弃后缺行）
+                $need_more = true;
+                $extra_probe_pages = 0;
+                $extra_rows_from_sql = null;   // 补拉模式下：SQL 已拉到的 extra_rows（供后续循环用）
+                $extra_rows_cursor = 0;        // 遍历 extra_rows_from_sql 的游标
+                $rows_original = $rows;
+                while ($need_more && $extra_probe_pages < 10) {
+                    if ($extra_probe_pages === 0) {
+                        $iterate_rows = $rows_original;
+                    } else {
+                        // 第 2+ 轮补足：我们用 SQL 再 OFFSET 往后拉 per_page*2 行，从原始 LIMIT 结束的位置继续
+                        if ($extra_rows_from_sql === null) {
+                            // 只有无 keyword + 无黑名单的高速路径才会触发补足（因为路径 A/B 本身是 PHP 数组切片，不会因 SQL JOIN 重复导致缺行）
+                            $extra_offset = ($offset + $per_page) + ($extra_probe_pages - 1) * ($per_page * 2);
+                            $extra_limit = $per_page * 2;
+                            $_extra_sql = "SELECT sc.*, CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local FROM search_cache sc $where ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC LIMIT $extra_limit OFFSET $extra_offset";
+                            $_stmt_e = $pdo->prepare($_extra_sql);
+                            $_stmt_e->execute($params);
+                            $extra_rows_from_sql = $_stmt_e->fetchAll();
+                            $extra_rows_cursor = 0;
+                            if (empty($extra_rows_from_sql)) break;
+                        }
+                        $iterate_rows = array_slice($extra_rows_from_sql, $extra_rows_cursor);
                     }
-                    $results[] = [
-                        'source'      => $src,
-                        'source_id'   => $source_id,
-                        'title'       => $row['title'] ?? '',
-                        'title_jp'    => $row['title_jp'] ?? '',
-                        'category'    => $row['category'] ?? '',
-                        'language'    => $row['language'] ?? '',
-                        'group_name'  => $row['group_name'] ?? '',
-                        'tags'        => $row['tags'] ?? '',
-                        'tags_cn'     => $row['tags_cn'] ?? '',
-                        'total_pages' => (int)($row['total_pages'] ?? 0),
-                        'artist'      => $row['artist'] ?? '',
-                        'uploaded_at' => $row['uploaded_at'] ?? '',
-                        'is_local'    => (int)($row['is_local'] ?? 0) === 1,
-                        'thumb_url'   => $thumb_url,
-                        'searched_at' => $row['searched_at'] ?? '',
-                    ];
+                    foreach ($iterate_rows as $row) {
+                        $source_id = $row['source_id'] ?? '';
+                        $src = $row['source'] ?? $source;
+                        $k = $src . '::' . $source_id;
+                        if (isset($seen_keys[$k])) {
+                            if ($extra_probe_pages > 0) $extra_rows_cursor++;
+                            continue;
+                        }
+                        $seen_keys[$k] = true;
+                        if ($extra_probe_pages > 0) $extra_rows_cursor++;
+                        $thumb_url = '';
+                        $thumb_path = $row['thumb_path'] ?? '';
+                        if ($thumb_path && is_file($thumb_path)) {
+                            $thumb_url = 'api.php?action=serve_cache_thumb&source=' . urlencode($source) . '&source_id=' . urlencode($source_id);
+                        }
+                        $results[] = [
+                            'source'      => $src,
+                            'source_id'   => $source_id,
+                            'title'       => $row['title'] ?? '',
+                            'title_jp'    => $row['title_jp'] ?? '',
+                            'category'    => $row['category'] ?? '',
+                            'language'    => $row['language'] ?? '',
+                            'group_name'  => $row['group_name'] ?? '',
+                            'tags'        => $row['tags'] ?? '',
+                            'tags_cn'     => $row['tags_cn'] ?? '',
+                            'total_pages' => (int)($row['total_pages'] ?? 0),
+                            'artist'      => $row['artist'] ?? '',
+                            'uploaded_at' => $row['uploaded_at'] ?? '',
+                            'is_local'    => (int)($row['is_local'] ?? 0) === 1,
+                            'thumb_url'   => $thumb_url,
+                            'searched_at' => $row['searched_at'] ?? '',
+                        ];
+                        if (count($results) >= $per_page) { $need_more = false; break; }
+                    }
+                    if (count($results) >= $per_page) break;
+                    // 当前批次没攒够一页 → 进入下一轮补拉
+                    $extra_probe_pages++;
+                    if ($extra_probe_pages > 0) {
+                        // SQL 已补拉的这一批已经遍历完 → 清空让下一轮再 OFFSET 继续
+                        if ($extra_rows_from_sql !== null && $extra_rows_cursor >= count($extra_rows_from_sql)) {
+                            $extra_rows_from_sql = null;
+                        }
+                    }
                 }
                 json_exit(['results' => $results, 'total' => $total, 'page' => $page, 'per_page' => $per_page]);
             } catch (Exception $e) {
@@ -2333,7 +2418,15 @@ try {
                 $pdo->exec("CREATE TABLE IF NOT EXISTS tag_blacklist (id INTEGER PRIMARY KEY AUTOINCREMENT, tag_type TEXT NOT NULL DEFAULT '', tag_value TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '', UNIQUE(tag_type, tag_value))");
                 $stmt = $pdo->prepare("INSERT OR IGNORE INTO tag_blacklist (tag_type, tag_value, created_at) VALUES (?, ?, datetime('now','localtime'))");
                 $stmt->execute([$tag_type, $tag_value]);
-                json_exit(['message' => '已加入排除黑名单']);
+                // ——— 精确类（artist/group/author/*）同步写入 excluded_participants，保证翻页 O(1) NOT IN 立刻生效
+                if ($tag_type === '' || $tag_type === '*' || $tag_type === 'artist' || $tag_type === 'author') {
+                    $s = $pdo->prepare("INSERT OR IGNORE INTO excluded_participants (kind, name, reason) VALUES ('artist', ?, 'added via tag_blacklist')");
+                    $s->execute([$tag_value]);
+                } elseif ($tag_type === 'group') {
+                    $s = $pdo->prepare("INSERT OR IGNORE INTO excluded_participants (kind, name, reason) VALUES ('group', ?, 'added via tag_blacklist')");
+                    $s->execute([$tag_value]);
+                }
+                json_exit(['message' => '已加入排除黑名单（精确类已同步到 O(1) 排除表）']);
             } catch (Exception $e) { error_exit($e->getMessage()); }
             break;
 
@@ -2344,10 +2437,70 @@ try {
             if (!is_file($db_path)) error_exit('Database not found');
             try {
                 $pdo = _pdo($db_path);
-                $stmt = $pdo->prepare("DELETE FROM tag_blacklist WHERE id=?");
+                // 先取出被删条目的 tag_type/tag_value，同步清理 excluded_participants 里的对应记录
+                $stmt = $pdo->prepare("SELECT tag_type, tag_value FROM tag_blacklist WHERE id=?");
                 $stmt->execute([$id]);
-                if ($stmt->rowCount() < 1) error_exit('黑名单条目不存在');
+                $row = $stmt->fetch();
+                $stmt2 = $pdo->prepare("DELETE FROM tag_blacklist WHERE id=?");
+                $stmt2->execute([$id]);
+                if ($stmt2->rowCount() < 1) error_exit('黑名单条目不存在');
+                if ($row) {
+                    $tt = trim($row['tag_type'] ?? '');
+                    $tv = trim($row['tag_value'] ?? '');
+                    if ($tv !== '') {
+                        if ($tt === '' || $tt === '*' || $tt === 'artist' || $tt === 'author') {
+                            $pdo->prepare("DELETE FROM excluded_participants WHERE kind='artist' AND name=?")->execute([$tv]);
+                        } elseif ($tt === 'group') {
+                            $pdo->prepare("DELETE FROM excluded_participants WHERE kind='group' AND name=?")->execute([$tv]);
+                        }
+                    }
+                }
                 json_exit(['message' => '已移除']);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        // ————— 精确排除表的直接管理接口（O(1) 加/删）—————
+        case 'add_excluded_sid':
+            $source = trim($_POST['source'] ?? ($_GET['source'] ?? 'exhentai'));
+            $source_id = trim($_POST['source_id'] ?? ($_GET['source_id'] ?? ''));
+            $reason = trim($_POST['reason'] ?? ($_GET['reason'] ?? 'manual'));
+            if ($source_id === '') error_exit('source_id 不能为空');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                $stmt = $pdo->prepare("INSERT OR IGNORE INTO excluded_sids (source, source_id, reason) VALUES (?,?,?)");
+                $stmt->execute([$source, $source_id, $reason]);
+                // 顺带清掉本地 galleries 记录（根除"删了又从本地出来"循环）
+                $pdo->prepare("DELETE FROM galleries WHERE source=? AND source_id=?")->execute([$source, $source_id]);
+                json_exit(['ok' => true, 'message' => '已加入单本排除']);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'remove_excluded_sid':
+            $source = trim($_POST['source'] ?? ($_GET['source'] ?? 'exhentai'));
+            $source_id = trim($_POST['source_id'] ?? ($_GET['source_id'] ?? ''));
+            if ($source_id === '') error_exit('source_id 不能为空');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                $stmt = $pdo->prepare("DELETE FROM excluded_sids WHERE source=? AND source_id=?");
+                $stmt->execute([$source, $source_id]);
+                json_exit(['ok' => true, 'removed' => $stmt->rowCount()]);
+            } catch (Exception $e) { error_exit($e->getMessage()); }
+            break;
+
+        case 'list_excluded_sids':
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) json_exit(['rows' => []]);
+            try {
+                $pdo = _pdo($db_path);
+                $limit = max(1, min(200, (int)($_GET['limit'] ?? 100)));
+                $rows = $pdo->query("SELECT source, source_id, reason, created_at FROM excluded_sids ORDER BY created_at DESC LIMIT $limit")->fetchAll();
+                $cnt  = (int)$pdo->query("SELECT COUNT(*) FROM excluded_sids")->fetchColumn();
+                $p_cnt = (int)$pdo->query("SELECT COUNT(*) FROM excluded_participants")->fetchColumn();
+                json_exit(['rows' => $rows, 'total_excluded_sids' => $cnt, 'total_excluded_participants' => $p_cnt]);
             } catch (Exception $e) { error_exit($e->getMessage()); }
             break;
 
