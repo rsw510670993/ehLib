@@ -548,7 +548,7 @@ class ExhentaiSite(SiteBase):
             if not name:
                 return []
             out = []
-            for part in re.split(r'\s*\|\s*', name):
+            for part in str(name).split('|'):
                 p = part.strip()
                 if p:
                     out.append(p)

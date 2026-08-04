@@ -1462,7 +1462,7 @@ try {
                 error_exit('Provide --url, --id+source, or --gid+--token');
             }
             if ($force) $args[] = '--force';
-            $result = run_python_locked($args, 900);
+            $result = run_python_locked($args, 7200);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],
                 'exit_code' => $result['exit_code'],
@@ -1478,7 +1478,7 @@ try {
             $args = ['batch', '--file', $tmpfile];
             $force = !empty($_POST['force']);
             if ($force) $args[] = '--force';
-            $result = run_python_locked($args, 600);
+            $result = run_python_locked($args, 21600);
             @unlink($tmpfile);
             json_exit([
                 'output' => $result['stdout'] ?: $result['stderr'],

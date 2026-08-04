@@ -466,7 +466,7 @@ class Database:
                         thumbnail_url, uploaded_at, local_path, downloaded_at,
                         file_size, is_complete, created_at, updated_at,
                         tags, tags_cn)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         gallery.source, gallery.source_id, gallery.title,
                         gallery.title_jp, gallery.artist, gallery.group_name,
