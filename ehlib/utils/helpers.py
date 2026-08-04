@@ -1,5 +1,29 @@
 import re
 from pathlib import Path
+from urllib.parse import unquote_plus
+
+
+_TAG_HREF_RE = re.compile(r"/tag/[a-zA-Z_]+:([^?#$]+)", re.IGNORECASE)
+_LEGACY_TAG_HREF_RE = re.compile(
+    r"/(?:artist|group|parody|character|cosplayer|female|male|misc|language|other)/([^?#/]+)/?$",
+    re.IGNORECASE,
+)
+
+
+def extract_tag_match_keys_from_href(href: str) -> list[str]:
+    """Extract decoded translation keys from an E-Hentai tag link."""
+    if not href:
+        return []
+
+    decoded = unquote_plus(str(href).strip())
+    match = _TAG_HREF_RE.search(decoded) or _LEGACY_TAG_HREF_RE.search(decoded)
+    if not match:
+        return []
+
+    raw_key = match.group(1).rstrip("$").strip()
+    if not raw_key:
+        return []
+    return [part.strip() for part in re.split(r"\s*\|\s*", raw_key) if part.strip()]
 
 
 def sanitize_filename(filename: str) -> str:

@@ -38,7 +38,10 @@ class TagTranslator:
                     if isinstance(tag_val, dict):
                         cn = tag_val.get("name", "")
                         if cn:
-                            tag_map[tag_key.lower()] = cn
+                            normalized_key = str(tag_key).lower()
+                            tag_map[normalized_key] = cn
+                            for alias in self._split_multi_alias(str(tag_key)):
+                                tag_map.setdefault(alias.lower(), cn)
                 self._ns_map[ns_name] = tag_map
             self._loaded = True
             return True

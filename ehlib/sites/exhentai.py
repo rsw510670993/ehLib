@@ -12,7 +12,7 @@ from ehlib.core.session_manager import SessionManager
 from ehlib.models.schemas import Gallery, Tag
 from ehlib.sites.base import SiteBase
 from ehlib.translate.tag_translator import TagTranslator
-from ehlib.utils.helpers import parse_exhentai_url
+from ehlib.utils.helpers import extract_tag_match_keys_from_href, parse_exhentai_url
 from ehlib.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -544,43 +544,6 @@ class ExhentaiSite(SiteBase):
         if title_jp_elem:
             title_jp = title_jp_elem.get_text(strip=True)
 
-        def _tag_keys_from_href(href: str, fallback_display: str = "") -> list[str]:
-            """从 tag a 的 href 中提取 ehTagTranslation DB 标准 key 列表。
-            例如 href='/tag/character:kirito%7Ckazuto%20kirigaya%24' -> ['kirito', 'kazuto kirigaya']
-                 href='/artist/tokuni%24' -> ['tokuni']
-                 href 未知 -> []（fallback_display 拆别名后由外部再加）
-            """
-            if not href:
-                return []
-            try:
-                href2 = unquote(href.strip())
-            except Exception:
-                href2 = str(href).strip()
-            candidates: list[str] = []
-            # 模式 1：/tag/<namespace>:<key>[$]   （exhentai / e-hentai 标准 tag 页）
-            m1 = re.search(r'/tag/[a-zA-Z_]+:([^?#$]+)', href2)
-            if m1:
-                raw = m1.group(1).rstrip('$').strip()
-                if raw:
-                    for part in re.split(r'\s*\|\s*', raw):
-                        p = part.strip()
-                        if p:
-                            candidates.append(p)
-            else:
-                # 模式 2：老版 artist/group/parody 分类页 URL /artist/tokuni$
-                for ns in ('artist', 'group', 'parody', 'character', 'cosplayer',
-                          'female', 'male', 'misc', 'language', 'other'):
-                    m2 = re.search(r'/' + re.escape(ns) + r'/([^?#/]+)/?$', href2)
-                    if m2:
-                        raw = m2.group(1).rstrip('$').strip()
-                        if raw:
-                            for part in re.split(r'\s*\|\s*', raw):
-                                p = part.strip()
-                                if p:
-                                    candidates.append(p)
-                        break
-            return candidates
-
         def _split_display_aliases(name: str) -> list[str]:
             if not name:
                 return []
@@ -620,7 +583,7 @@ class ExhentaiSite(SiteBase):
                     continue
                 href = tag_link.get("href", "")
                 match_keys: list[str] = []
-                for k in _tag_keys_from_href(href, tag_name):
+                for k in extract_tag_match_keys_from_href(href):
                     if k and k not in match_keys:
                         match_keys.append(k)
                 for k in _split_display_aliases(tag_name):
@@ -644,7 +607,7 @@ class ExhentaiSite(SiteBase):
                         continue
                     href = tag_link.get("href", "")
                     match_keys: list[str] = []
-                    for k in _tag_keys_from_href(href, tag_name):
+                    for k in extract_tag_match_keys_from_href(href):
                         if k and k not in match_keys:
                             match_keys.append(k)
                     for k in _split_display_aliases(tag_name):
@@ -679,7 +642,7 @@ class ExhentaiSite(SiteBase):
                         if tag_name and key not in seen:
                             seen.add(key)
                             match_keys: list[str] = []
-                            for k in _tag_keys_from_href(href, tag_name):
+                            for k in extract_tag_match_keys_from_href(href):
                                 if k and k not in match_keys:
                                     match_keys.append(k)
                             for k in _split_display_aliases(tag_name):
