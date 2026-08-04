@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS galleries (
     is_complete INTEGER DEFAULT 0,
     created_at TEXT DEFAULT '',
     updated_at TEXT DEFAULT '',
+    tags TEXT DEFAULT '',
+    tags_cn TEXT DEFAULT '',
     UNIQUE(source, source_id)
 )
 """
@@ -45,6 +47,7 @@ CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,
     name TEXT NOT NULL,
+    match_keys TEXT NOT NULL DEFAULT '',
     UNIQUE(type, name)
 )
 """
@@ -258,6 +261,15 @@ class Database:
                     await db.execute(f"ALTER TABLE search_cache ADD COLUMN {col}")
                 except Exception:
                     pass
+            for col in ["tags TEXT DEFAULT ''", "tags_cn TEXT DEFAULT ''"]:
+                try:
+                    await db.execute(f"ALTER TABLE galleries ADD COLUMN {col}")
+                except Exception:
+                    pass
+            try:
+                await db.execute("ALTER TABLE tags ADD COLUMN match_keys TEXT NOT NULL DEFAULT ''")
+            except Exception:
+                pass
             # 兼容旧库：search_presets 增加 languages 列，既存预设补默认语种（中日+speechless+text cleaned）
             try:
                 await db.execute("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL")
@@ -292,6 +304,69 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_refresh_targets_origin_kind_artist "
                 "ON refresh_targets(origin_kind, origin_artist)"
             )
+
+            # ——— 迁移守卫：用临时表保证「老数据补 translate_tags 更新 tags_cn 列」只跑 1 次
+            try:
+                await db.execute(
+                    "CREATE TABLE IF NOT EXISTS migration_flags (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now','localtime')))"
+                )
+                cur = await db.execute(
+                    "SELECT 1 FROM migration_flags WHERE name='tag_alias_translate_v1'"
+                )
+                migrated = await cur.fetchone() is not None
+                if not migrated:
+                    global _QUERY_LABEL_TRANSLATOR_LOADED
+                    if _QUERY_LABEL_TRANSLATOR_LOADED is None:
+                        _QUERY_LABEL_TRANSLATOR_LOADED = _QUERY_LABEL_TRANSLATOR.load()
+                    tr = _QUERY_LABEL_TRANSLATOR if _QUERY_LABEL_TRANSLATOR_LOADED else None
+                    # 1) search_cache：所有 tags 非空的行全量重跑 translate_tags（逐 tag 补缺，幂等）
+                    try:
+                        sc_cur = await db.execute(
+                            "SELECT rowid, tags, tags_cn FROM search_cache WHERE (tags IS NOT NULL AND tags!='') LIMIT -1"
+                        )
+                        sc_rows = await sc_cur.fetchall()
+                    except Exception:
+                        sc_rows = []
+                    for sc_r in sc_rows:
+                        try:
+                            raw_tags = str(sc_r[1] if isinstance(sc_r[1], str) else "")
+                            if not raw_tags:
+                                continue
+                            new_cn = tr.translate_tags(raw_tags) if tr else raw_tags
+                            if new_cn and new_cn != str(sc_r[2] if sc_r[2] is not None else ""):
+                                await db.execute(
+                                    "UPDATE search_cache SET tags_cn=? WHERE rowid=?",
+                                    (new_cn, sc_r[0]),
+                                )
+                        except Exception:
+                            continue
+                    # 2) galleries：同理全量重跑
+                    try:
+                        g_cur = await db.execute(
+                            "SELECT id, tags, tags_cn FROM galleries WHERE (tags IS NOT NULL AND tags!='') LIMIT -1"
+                        )
+                        g_rows = await g_cur.fetchall()
+                    except Exception:
+                        g_rows = []
+                    for g_r in g_rows:
+                        try:
+                            raw_tags = str(g_r[1] if isinstance(g_r[1], str) else "")
+                            if not raw_tags:
+                                continue
+                            new_cn = tr.translate_tags(raw_tags) if tr else raw_tags
+                            if new_cn and new_cn != str(g_r[2] if g_r[2] is not None else ""):
+                                await db.execute(
+                                    "UPDATE galleries SET tags_cn=? WHERE id=?",
+                                    (new_cn, g_r[0]),
+                                )
+                        except Exception:
+                            continue
+                    await db.execute(
+                        "INSERT OR IGNORE INTO migration_flags (name) VALUES ('tag_alias_translate_v1')"
+                    )
+            except Exception:
+                pass
+
             await db.commit()
 
     async def gallery_exists(self, source: str, source_id: str) -> bool:
@@ -332,6 +407,35 @@ class Database:
             )
             existing = await cursor.fetchone()
 
+            # ——— 提前构造 gallery.tags 的 JSON 序列化 + translate_tags 后的 tags_cn JSON
+            #     供 galleries 表 tags/tags_cn 两列写入 + tag_blacklist 钩子复用
+            tags_json = ""
+            tags_cn_json = ""
+            if gallery.tags:
+                try:
+                    serialized = []
+                    for t in gallery.tags:
+                        item = {"type": t.type, "name": t.name}
+                        if isinstance(getattr(t, 'match_keys', None), list):
+                            item["match_keys"] = [str(k) for k in t.match_keys if k is not None and str(k) != ""]
+                        if isinstance(getattr(t, 'name_cn', None), str) and getattr(t, 'name_cn', ''):
+                            item["name_cn"] = t.name_cn
+                        serialized.append(item)
+                    tags_json = json.dumps(serialized, ensure_ascii=False)
+                except Exception:
+                    tags_json = ""
+                if tags_json:
+                    try:
+                        global _QUERY_LABEL_TRANSLATOR_LOADED
+                        if _QUERY_LABEL_TRANSLATOR_LOADED is None:
+                            _QUERY_LABEL_TRANSLATOR_LOADED = _QUERY_LABEL_TRANSLATOR.load()
+                        if _QUERY_LABEL_TRANSLATOR_LOADED:
+                            tags_cn_json = _QUERY_LABEL_TRANSLATOR.translate_tags(tags_json) or tags_json
+                        else:
+                            tags_cn_json = tags_json
+                    except Exception:
+                        tags_cn_json = tags_json
+
             if existing:
                 gallery_id = existing[0]
                 await db.execute(
@@ -339,7 +443,8 @@ class Database:
                        title=?, title_jp=?, artist=?, group_name=?,
                        language=?, category=?, total_pages=?, cover_url=?, cover_path=?,
                        thumbnail_url=?, uploaded_at=?, local_path=?, downloaded_at=?,
-                       file_size=?, is_complete=?, created_at=?, updated_at=?
+                       file_size=?, is_complete=?, created_at=?, updated_at=?,
+                       tags=?, tags_cn=?
                        WHERE id=?""",
                     (
                         gallery.title, gallery.title_jp, gallery.artist,
@@ -349,6 +454,7 @@ class Database:
                         gallery.local_path or existing[1], gallery.downloaded_at,
                         gallery.file_size, int(gallery.is_complete),
                         gallery.created_at, gallery.updated_at,
+                        tags_json, tags_cn_json,
                         gallery_id,
                     ),
                 )
@@ -358,8 +464,9 @@ class Database:
                        (source, source_id, title, title_jp, artist, group_name,
                         language, category, total_pages, cover_url, cover_path,
                         thumbnail_url, uploaded_at, local_path, downloaded_at,
-                        file_size, is_complete, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        file_size, is_complete, created_at, updated_at,
+                        tags, tags_cn)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         gallery.source, gallery.source_id, gallery.title,
                         gallery.title_jp, gallery.artist, gallery.group_name,
@@ -368,6 +475,7 @@ class Database:
                         gallery.uploaded_at, gallery.local_path, gallery.downloaded_at,
                         gallery.file_size, int(gallery.is_complete),
                         gallery.created_at, gallery.updated_at,
+                        tags_json, tags_cn_json,
                     ),
                 )
                 gallery_id = cursor.lastrowid or 0
@@ -380,16 +488,6 @@ class Database:
             await db.commit()
 
             # ——— 同步钩子：若命中 tag_blacklist → 写 excluded_sids + 从 galleries 立即删除
-            #     tags_json: 把 gallery.tags list[Tag] 转成 PHP 端同样的 JSON 格式（保证 fuzzy 判定与前端 cache_search 一致）
-            tags_json = ""
-            if gallery.tags:
-                try:
-                    tags_json = json.dumps(
-                        [{"type": t.type, "name": t.name, "name_cn": t.name_cn or ""} for t in gallery.tags],
-                        ensure_ascii=False,
-                    )
-                except Exception:
-                    tags_json = ""
             applied = await self._apply_tag_blacklist_to_entry(
                 db=db,
                 source=gallery.source,
@@ -399,7 +497,7 @@ class Database:
                 artist=gallery.artist,
                 group_name=gallery.group_name,
                 tags=tags_json,
-                tags_cn="",
+                tags_cn=tags_cn_json,
             )
             if applied:
                 # 命中黑名单后连带清 galleries 与本地记录，防止删除根除不了反复回显
@@ -419,20 +517,41 @@ class Database:
     async def _save_tags(self, db: aiosqlite.Connection, tags: list[Tag]) -> list[int]:
         tag_ids = []
         for tag in tags:
-            cursor = await db.execute(
-                "INSERT OR IGNORE INTO tags (type, name) VALUES (?, ?)",
-                (tag.type, tag.name),
-            )
-            if cursor.rowcount > 0 and cursor.lastrowid:
-                tag_ids.append(cursor.lastrowid)
-            else:
+            mk_raw = ""
+            if isinstance(getattr(tag, 'match_keys', None), list):
+                cleaned = [str(k) for k in tag.match_keys if k is not None and str(k) != ""]
+                if cleaned:
+                    try:
+                        mk_raw = json.dumps(cleaned, ensure_ascii=False)
+                    except Exception:
+                        mk_raw = ""
+            inserted = False
+            try:
                 cursor = await db.execute(
-                    "SELECT id FROM tags WHERE type=? AND name=?",
+                    "INSERT OR IGNORE INTO tags (type, name, match_keys) VALUES (?, ?, ?)",
+                    (tag.type, tag.name, mk_raw),
+                )
+                if cursor.rowcount > 0 and cursor.lastrowid:
+                    tag_ids.append(cursor.lastrowid)
+                    inserted = True
+            except Exception:
+                inserted = False
+            if not inserted:
+                cursor = await db.execute(
+                    "SELECT id, match_keys FROM tags WHERE type=? AND name=?",
                     (tag.type, tag.name),
                 )
                 row = await cursor.fetchone()
                 if row:
                     tag_ids.append(row[0])
+                    if mk_raw and (row[1] is None or str(row[1]) == ""):
+                        try:
+                            await db.execute(
+                                "UPDATE tags SET match_keys=? WHERE id=?",
+                                (mk_raw, row[0]),
+                            )
+                        except Exception:
+                            pass
         return tag_ids
 
     async def _link_tags(self, db: aiosqlite.Connection, gallery_id: int, tag_ids: list[int]) -> None:
@@ -556,7 +675,7 @@ class Database:
 
     async def _get_tags_for_gallery(self, db: aiosqlite.Connection, gallery_id: int) -> list[Tag]:
         cursor = await db.execute(
-            """SELECT t.id, t.type, t.name
+            """SELECT t.id, t.type, t.name, COALESCE(t.match_keys, '')
                FROM tags t
                JOIN gallery_tags gt ON t.id = gt.tag_id
                WHERE gt.gallery_id = ?
@@ -564,7 +683,27 @@ class Database:
             (gallery_id,),
         )
         rows = await cursor.fetchall()
-        return [Tag(id=row[0], type=row[1], name=row[2]) for row in rows]
+        result: list[Tag] = []
+        for row in rows:
+            mk_list: list[str] = []
+            mk_raw = row[3] if len(row) > 3 and row[3] is not None else ""
+            if mk_raw:
+                try:
+                    parsed = json.loads(str(mk_raw))
+                    if isinstance(parsed, list):
+                        mk_list = [str(x) for x in parsed if x is not None and str(x) != ""]
+                except Exception:
+                    mk_list = []
+            # 如果 DB 没存 match_keys，fallback 对 name 自己拆 | 作为别名
+            if not mk_list and row[2]:
+                try:
+                    import re as _re
+                    parts = _re.split(r'\s*\|\s*', str(row[2]))
+                    mk_list = [p.strip() for p in parts if p and p.strip()]
+                except Exception:
+                    mk_list = []
+            result.append(Tag(id=row[0], type=row[1], name=row[2], match_keys=mk_list))
+        return result
 
     # ── Tag Blacklist 同步入表钩子（一劳永逸解决 males only / dickgirl 等 fuzzy 标签在重复获取模式下"无法靠删除根除"问题）──────
     async def _load_compiled_blacklist(
@@ -695,8 +834,9 @@ class Database:
                 cursor = await db.execute(
                     """INSERT OR IGNORE INTO search_cache
                        (source, source_id, title, title_jp, artist, category,
-                        total_pages, uploaded_at, thumbnail, searched_at, crawled_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        total_pages, uploaded_at, thumbnail, searched_at, crawled_at,
+                        tags, tags_cn, language, group_name)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         r.get("source", "exhentai"),
                         r.get("source_id", ""),
@@ -709,15 +849,47 @@ class Database:
                         r.get("thumbnail", ""),
                         now,
                         now,
+                        r.get("tags", "") if isinstance(r.get("tags"), str) else "",
+                        r.get("tags_cn", "") if isinstance(r.get("tags_cn"), str) else "",
+                        r.get("language", "") if isinstance(r.get("language"), str) else "",
+                        r.get("group_name", "") if isinstance(r.get("group_name"), str) else "",
                     ),
                 )
                 if cursor.rowcount > 0:
                     saved += 1
-            # Update searched_at + thumbnail for existing records
+            # Update searched_at + thumbnail + tags_cn (translate if missing) for existing records
+            global _QUERY_LABEL_TRANSLATOR_LOADED
+            tr_loaded = False
+            tr = None
             for r in results:
+                raw_tags = r.get("tags", "") if isinstance(r.get("tags"), str) else ""
+                raw_tags_cn = r.get("tags_cn", "") if isinstance(r.get("tags_cn"), str) else ""
+                # 若传入 tags 有值但 tags_cn 没带 name_cn，懒加载翻译器现场补一次 translate_tags
+                if raw_tags and (not raw_tags_cn or '"name_cn"' not in raw_tags_cn):
+                    try:
+                        if not tr_loaded:
+                            if _QUERY_LABEL_TRANSLATOR_LOADED is None:
+                                _QUERY_LABEL_TRANSLATOR_LOADED = _QUERY_LABEL_TRANSLATOR.load()
+                            tr = _QUERY_LABEL_TRANSLATOR if _QUERY_LABEL_TRANSLATOR_LOADED else None
+                            tr_loaded = True
+                        if tr is not None:
+                            translated = tr.translate_tags(raw_tags)
+                            if translated:
+                                raw_tags_cn = translated
+                    except Exception:
+                        pass
                 await db.execute(
-                    "UPDATE search_cache SET searched_at=?, thumbnail=? WHERE source=? AND source_id=?",
-                    (now, r.get("thumbnail", ""), r.get("source", "exhentai"), r.get("source_id", "")),
+                    "UPDATE search_cache SET searched_at=?, thumbnail=?, tags=COALESCE(NULLIF(?,''),tags), tags_cn=COALESCE(NULLIF(?,''),tags_cn), language=COALESCE(NULLIF(?,''),language), group_name=COALESCE(NULLIF(?,''),group_name) WHERE source=? AND source_id=?",
+                    (
+                        now,
+                        r.get("thumbnail", ""),
+                        raw_tags,
+                        raw_tags_cn,
+                        r.get("language", "") if isinstance(r.get("language"), str) else "",
+                        r.get("group_name", "") if isinstance(r.get("group_name"), str) else "",
+                        r.get("source", "exhentai"),
+                        r.get("source_id", ""),
+                    ),
                 )
             await db.commit()
 

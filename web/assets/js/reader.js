@@ -85,7 +85,19 @@ function openReader(source, sourceId) {
                 var typeLabels = { artist: 'bg-danger', parody: 'bg-warning text-dark', character: 'bg-primary', group: 'bg-success', language: 'bg-secondary', category: 'bg-info text-dark', tag: 'bg-light text-dark' };
                 g.tags.forEach(function(t) {
                     var cls = typeLabels[t.type] || 'bg-light text-dark';
-                    tagsHtml += '<span class="tag-badge ' + cls + '" onclick="event.stopPropagation();readerSearchTag(\'' + t.type + '\',\'' + escapeAttr(t.name) + '\')">' + t.type + ': ' + t.name + '</span> ';
+                    // 多别名显示：优先 name_cn（PHP 已按 | 拆分 + EhTagTranslation 比对）；否则对 name 拆 | 取最短 alias，tooltip 写全名
+                    var rawName = String(t.name || t.raw || '');
+                    var cn = String(t.name_cn || t.cn || '');
+                    var aliases = [];
+                    if (rawName) {
+                        rawName.split(/\s*\|\s*/).forEach(function(p) {
+                            p = (p || '').trim();
+                            if (p && aliases.indexOf(p) < 0) aliases.push(p);
+                        });
+                    }
+                    var display = cn || (aliases.length > 0 ? aliases.slice().sort(function(a, b) { return a.length - b.length; })[0] : rawName) || '-';
+                    var tooltip = (cn && aliases.length > 0) ? (cn + ' — ' + aliases.join(' | ')) : (aliases.length > 1 ? aliases.join(' | ') : display);
+                    tagsHtml += '<span class="tag-badge ' + cls + '" title="' + escapeAttr(tooltip) + '" onclick="event.stopPropagation();readerSearchTag(\'' + escapeAttr(t.type) + '\',\'' + escapeAttr(rawName) + '\')">' + escapeAttr(t.type) + ': ' + escapeHtml(display) + '</span> ';
                 });
             } else {
                 tagsHtml = '<span style="color:#666">无标签</span>';

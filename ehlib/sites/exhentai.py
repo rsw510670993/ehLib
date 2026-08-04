@@ -89,7 +89,7 @@ class ExhentaiSite(SiteBase):
         language = (gallery.language or "").lower()
         title_jp = gallery.title_jp or ""
         group_name = gallery.group_name or ""
-        tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
+        tags_json = json.dumps([t.to_dict() for t in gallery.tags], ensure_ascii=False) if gallery.tags else ""
         tags_cn_json = ""
         if tags_json:
             global _translator_loaded
@@ -124,7 +124,7 @@ class ExhentaiSite(SiteBase):
         response.raise_for_status()
         gallery = self._parse_html(response.text, source_id)
 
-        tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
+        tags_json = json.dumps([t.to_dict() for t in gallery.tags], ensure_ascii=False) if gallery.tags else ""
         tags_cn_json = ""
         if tags_json:
             global _translator_loaded
@@ -544,12 +544,59 @@ class ExhentaiSite(SiteBase):
         if title_jp_elem:
             title_jp = title_jp_elem.get_text(strip=True)
 
+        def _tag_keys_from_href(href: str, fallback_display: str = "") -> list[str]:
+            """从 tag a 的 href 中提取 ehTagTranslation DB 标准 key 列表。
+            例如 href='/tag/character:kirito%7Ckazuto%20kirigaya%24' -> ['kirito', 'kazuto kirigaya']
+                 href='/artist/tokuni%24' -> ['tokuni']
+                 href 未知 -> []（fallback_display 拆别名后由外部再加）
+            """
+            if not href:
+                return []
+            try:
+                href2 = unquote(href.strip())
+            except Exception:
+                href2 = str(href).strip()
+            candidates: list[str] = []
+            # 模式 1：/tag/<namespace>:<key>[$]   （exhentai / e-hentai 标准 tag 页）
+            m1 = re.search(r'/tag/[a-zA-Z_]+:([^?#$]+)', href2)
+            if m1:
+                raw = m1.group(1).rstrip('$').strip()
+                if raw:
+                    for part in re.split(r'\s*\|\s*', raw):
+                        p = part.strip()
+                        if p:
+                            candidates.append(p)
+            else:
+                # 模式 2：老版 artist/group/parody 分类页 URL /artist/tokuni$
+                for ns in ('artist', 'group', 'parody', 'character', 'cosplayer',
+                          'female', 'male', 'misc', 'language', 'other'):
+                    m2 = re.search(r'/' + re.escape(ns) + r'/([^?#/]+)/?$', href2)
+                    if m2:
+                        raw = m2.group(1).rstrip('$').strip()
+                        if raw:
+                            for part in re.split(r'\s*\|\s*', raw):
+                                p = part.strip()
+                                if p:
+                                    candidates.append(p)
+                        break
+            return candidates
+
+        def _split_display_aliases(name: str) -> list[str]:
+            if not name:
+                return []
+            out = []
+            for part in re.split(r'\s*\|\s*', name):
+                p = part.strip()
+                if p:
+                    out.append(p)
+            return out
+
         artist = ""
         group_name = ""
         language = ""
         language_candidates = []
         category = ""
-        tags = []
+        tags: list[Tag] = []
 
         tag_rows = soup.select("#taglist tr")
         if not tag_rows:
@@ -571,7 +618,17 @@ class ExhentaiSite(SiteBase):
                 tag_name = tag_link.get_text(strip=True)
                 if not tag_name:
                     continue
-                tags.append(Tag(type=tag_type, name=tag_name))
+                href = tag_link.get("href", "")
+                match_keys: list[str] = []
+                for k in _tag_keys_from_href(href, tag_name):
+                    if k and k not in match_keys:
+                        match_keys.append(k)
+                for k in _split_display_aliases(tag_name):
+                    if k and k not in match_keys:
+                        match_keys.append(k)
+                if tag_name and tag_name not in match_keys:
+                    match_keys.append(tag_name)
+                tags.append(Tag(type=tag_type, name=tag_name, match_keys=match_keys))
 
                 if tag_type == "artist":
                     artist = tag_name
@@ -585,7 +642,17 @@ class ExhentaiSite(SiteBase):
                     tag_name = tag_link.get_text(strip=True)
                     if not tag_name or tag_name == tag_type.rstrip(":"):
                         continue
-                    tags.append(Tag(type=tag_type, name=tag_name))
+                    href = tag_link.get("href", "")
+                    match_keys: list[str] = []
+                    for k in _tag_keys_from_href(href, tag_name):
+                        if k and k not in match_keys:
+                            match_keys.append(k)
+                    for k in _split_display_aliases(tag_name):
+                        if k and k not in match_keys:
+                            match_keys.append(k)
+                    if tag_name and tag_name not in match_keys:
+                        match_keys.append(tag_name)
+                    tags.append(Tag(type=tag_type, name=tag_name, match_keys=match_keys))
 
                     if tag_type == "artist":
                         artist = tag_name
@@ -611,7 +678,16 @@ class ExhentaiSite(SiteBase):
                         key = (tag_type, tag_name)
                         if tag_name and key not in seen:
                             seen.add(key)
-                            tags.append(Tag(type=tag_type, name=tag_name))
+                            match_keys: list[str] = []
+                            for k in _tag_keys_from_href(href, tag_name):
+                                if k and k not in match_keys:
+                                    match_keys.append(k)
+                            for k in _split_display_aliases(tag_name):
+                                if k and k not in match_keys:
+                                    match_keys.append(k)
+                            if tag_name and tag_name not in match_keys:
+                                match_keys.append(tag_name)
+                            tags.append(Tag(type=tag_type, name=tag_name, match_keys=match_keys))
                             if tag_type == "artist" and not artist:
                                 artist = tag_name
                             elif tag_type == "group" and not group_name:

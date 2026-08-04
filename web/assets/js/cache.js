@@ -366,6 +366,77 @@ function getGalleryDisplayTitles(gallery) {
 }
 var getCacheDisplayTitles = getGalleryDisplayTitles;
 
+// ─── Tooling: 公共 tag 解析 + 多别名兜底显示（统一给 图库/缓存详情渲染共用）─────────
+// 输入：gallery.tags / gallery.tags_cn（JSON 字符串或对象数组）
+// 输出：Object { <type>: Array<{type, raw, cn, display, aliases, tooltip}> }
+//   display 选择逻辑（优先最短 alias：1) name_cn（翻译命中）2) 否则对 raw 按 | 拆：挑最短 alias（让 'kirito' 优先于 'kazuto kirigaya'），tooltip 写全所有别名方便用户知道完整原名
+var _TAG_SPLIT_RE = /\s*\|\s*/;
+function parseGalleryTagsForDisplay(tagSource) {
+    var grouped = {};
+    if (!tagSource) return grouped;
+    var parsed = null;
+    if (typeof tagSource === 'string') {
+        try { parsed = JSON.parse(tagSource); } catch (e) { return grouped; }
+    } else if (Array.isArray(tagSource)) {
+        parsed = tagSource;
+    }
+    if (!Array.isArray(parsed)) return grouped;
+    for (var i = 0; i < parsed.length; i++) {
+        var t = parsed[i];
+        if (!t || typeof t !== 'object') continue;
+        var type = String(t.type || t.namespace || 'other');
+        if (type === 'reclass') type = 'category';
+        var raw = String(t.name || t.raw || '');
+        var cn = String(t.name_cn || t.cn || '');
+        var aliases = [];
+        if (raw) {
+            var parts = raw.split(_TAG_SPLIT_RE);
+            for (var j = 0; j < parts.length; j++) {
+                var p = (parts[j] || '').trim();
+                if (p) aliases.push(p);
+            }
+        }
+        // 若有后端已给的 match_keys，也并入别名池（方便兜底查找翻译）
+        if (Array.isArray(t.match_keys)) {
+            for (var k = 0; k < t.match_keys.length; k++) {
+                var mm = String(t.match_keys[k] || '').trim();
+                if (mm && aliases.indexOf(mm) < 0) aliases.push(mm);
+            }
+        }
+        var display = '';
+        if (cn) {
+            display = cn;
+        } else if (aliases.length > 0) {
+            var shortest = aliases[0];
+            for (var m = 1; m < aliases.length; m++) {
+                if (aliases[m].length < shortest.length) shortest = aliases[m];
+            }
+            display = shortest;
+        } else {
+            display = raw;
+        }
+        var tooltip = '';
+        if (cn && aliases.length > 0) {
+            tooltip = cn + ' — ' + aliases.join(' | ');
+        } else if (aliases.length > 1) {
+            tooltip = aliases.join(' | ');
+        } else {
+            tooltip = display;
+        }
+        if (!grouped[type]) grouped[type] = [];
+        grouped[type].push({
+            type: type,
+            raw: raw,
+            cn: cn,
+            display: display,
+            aliases: aliases,
+            tooltip: tooltip,
+            match_keys: Array.isArray(t.match_keys) ? t.match_keys : []
+        });
+    }
+    return grouped;
+}
+
 function renderCacheGrid() {
     const body = document.getElementById('cache_grid_body');
     if (!_cacheResults || _cacheResults.length === 0) {
@@ -866,33 +937,25 @@ function showCacheDetail(idx) {
     if (titleEl) titleEl.textContent = detailTitles.primary;
 
     var tagsHtml = '';
-    var tagSource = gallery.tags_cn || gallery.tags;
-    if (tagSource) {
-        try {
-            var parsed = JSON.parse(tagSource);
-            if (Array.isArray(parsed)) {
-                var typeLabels = { 'artist':'作者', 'parody':'原作', 'character':'角色', 'group':'社团', 'male':'男性', 'female':'女性', 'language':'语言', 'category':'分类', 'mixed':'混合', 'cosplayer':'Coser', 'other':'其他' };
-                var typeColors = { 'artist':'#e74c3c', 'male':'#3498db', 'female':'#e91e63', 'parody':'#9b59b6', 'character':'#27ae60', 'group':'#f39c12', 'language':'#0dcaf0', 'category':'#95a5a6', 'mixed':'#607d8b', 'cosplayer':'#00bcd4', 'other':'#6b7280' };
-                var grouped = {};
-                parsed.forEach(function(t) {
-                    var type = t.type || 'other';
-                    if (type === 'category' && gallery.category) return;
-                    if (!grouped[type]) grouped[type] = [];
-                    grouped[type].push({ type: type, raw: t.name || '', cn: t.name_cn || '' });
-                });
-                var order = ['parody', 'character', 'artist', 'group', 'male', 'female', 'cosplayer', 'mixed', 'language', 'category', 'other'];
-                tagsHtml = order.map(function(type) {
-                    if (!grouped[type] || grouped[type].length === 0) return '';
-                    var color = typeColors[type] || '#6b7280';
-                    var label = typeLabels[type] || type;
-                    var badges = grouped[type].map(function(tag) {
-                        var nameOrCn = tag.cn || tag.raw;
-                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="点击：累加到缓存检索（AND，不自动触发，按筛选按钮或 Enter 执行）" onclick="addTagToCacheSearch(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\',\'' + escapeAttr(tag.cn) + '\')">' + escapeHtml(nameOrCn) + '</span>';
-                    }).join('');
-                    return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
-                }).filter(function(s) { return s; }).join('');
-            }
-        } catch(e) {}
+    var grouped = parseGalleryTagsForDisplay(gallery.tags_cn || gallery.tags);
+    // 过滤：如果图库本身有 category 值，不再在 tag 区重复显示 category 类 tag
+    if (grouped && gallery.category) { delete grouped['category']; }
+    if (grouped && Object.keys(grouped).length > 0) {
+        var typeLabels = { 'artist':'作者', 'parody':'原作', 'character':'角色', 'group':'社团', 'male':'男性', 'female':'女性', 'language':'语言', 'category':'分类', 'mixed':'混合', 'cosplayer':'Coser', 'other':'其他' };
+        var typeColors = { 'artist':'#e74c3c', 'male':'#3498db', 'female':'#e91e63', 'parody':'#9b59b6', 'character':'#27ae60', 'group':'#f39c12', 'language':'#0dcaf0', 'category':'#95a5a6', 'mixed':'#607d8b', 'cosplayer':'#00bcd4', 'other':'#6b7280' };
+        var order = ['parody', 'character', 'artist', 'group', 'male', 'female', 'cosplayer', 'mixed', 'language', 'category', 'other'];
+        tagsHtml = order.map(function(type) {
+            if (!grouped[type] || grouped[type].length === 0) return '';
+            var color = typeColors[type] || '#6b7280';
+            var label = typeLabels[type] || type;
+            var badges = grouped[type].map(function(tag) {
+                var display = tag.display || tag.cn || tag.raw;
+                var tooltip = tag.tooltip || display;
+                var cnArg = tag.cn || (tag.display && tag.display !== tag.raw ? tag.display : '');
+                return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="' + escapeAttr(tooltip) + '" onclick="addTagToCacheSearch(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\',\'' + escapeAttr(cnArg) + '\')">' + escapeHtml(display) + '</span>';
+            }).join('');
+            return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
+        }).filter(function(s) { return s; }).join('');
     }
 
     bodyEl.innerHTML =

@@ -529,14 +529,154 @@ function run_python_locked($args, $timeout = 120, $chunk_callback = null) {
     }
 }
 
-function translate_search_preset_name($query) {
-    global $root;
-    $query = trim((string)$query);
-    if ($query === '') return '';
+function _t_split_aliases($name) {
+    $s = (string)$name;
+    if ($s === '') return [];
+    $parts = preg_split('/\s*\|\s*/', $s);
+    if (!is_array($parts)) return [$s];
+    $out = [];
+    foreach ($parts as $p) {
+        $p = trim((string)$p);
+        if ($p !== '') $out[] = $p;
+    }
+    if (!$out) return [$s];
+    return $out;
+}
+function _t_lookup_ns(&$ns_map, $lookup_ns, $name) {
+    if (!isset($ns_map[$lookup_ns])) return null;
+    $m = $ns_map[$lookup_ns];
+    $nm = (string)$name;
+    if (isset($m[strtolower($nm)])) return $m[strtolower($nm)];
+    // 多 alias 轮询： 'kazuto kirigaya | kirito' 逐个查
+    $aliases = _t_split_aliases($nm);
+    foreach ($aliases as $a) {
+        if (isset($m[strtolower((string)$a)])) return $m[strtolower((string)$a)];
+    }
+    return null;
+}
+function &_t_get_translation_static() {
     static $loaded = false;
     static $ns_map = [];
     static $ns_alias = ['category' => 'reclass'];
-    static $ns_display = [
+    if (!$loaded) {
+        $loaded = true;
+        global $root;
+        $db_path = $root . '/data/eh_tag_translation.json';
+        if (is_file($db_path)) {
+            $raw = @json_decode((string)@file_get_contents($db_path), true);
+            $entries = is_array($raw) && isset($raw['data']) && is_array($raw['data']) ? $raw['data'] : $raw;
+            if (is_array($entries)) {
+                foreach ($entries as $entry) {
+                    $ns_name = $entry['namespace'] ?? '';
+                    $ns_data = $entry['data'] ?? null;
+                    if (!$ns_name || !is_array($ns_data)) continue;
+                    $tag_map = [];
+                    foreach ($ns_data as $tag_key => $tag_val) {
+                        if (is_array($tag_val) && !empty($tag_val['name'])) {
+                            $tag_map[strtolower((string)$tag_key)] = (string)$tag_val['name'];
+                            // 对翻译 DB 自身 tag_key 若带 | 也同步拆各别名单独存，命中率更高
+                            foreach (_t_split_aliases((string)$tag_key) as $alias_key) {
+                                $ak = strtolower((string)$alias_key);
+                                if (!isset($tag_map[$ak])) {
+                                    $tag_map[$ak] = (string)$tag_val['name'];
+                                }
+                            }
+                        }
+                    }
+                    $ns_map[$ns_name] = $tag_map;
+                }
+            }
+        }
+    }
+    $bundle = ['loaded' => &$loaded, 'ns_map' => &$ns_map, 'ns_alias' => &$ns_alias];
+    return $bundle;
+}
+function _t_translate_single($ns, $name, $extra_aliases = null) {
+    $bundle = &_t_get_translation_static();
+    $ns_map = &$bundle['ns_map'];
+    $ns_alias = &$bundle['ns_alias'];
+    $lookup_ns = $ns_alias[$ns] ?? $ns;
+    $cn = _t_lookup_ns($ns_map, $lookup_ns, $name);
+    if ($cn !== null && $cn !== '') return $cn;
+    if (is_array($extra_aliases)) {
+        foreach ($extra_aliases as $a) {
+            $cn = _t_lookup_ns($ns_map, $lookup_ns, (string)$a);
+            if ($cn !== null && $cn !== '') return $cn;
+        }
+    }
+    return null;
+}
+function _t_translate_tags_json($tags_json_str, $tags_cn_json_str = '') {
+    // 输入：两列都是 JSON 数组字符串，元素形如 {type,name,match_keys?,name_cn?}
+    // 逻辑：优先用 $tags_cn_json_str；若它缺 name_cn 则用 $tags_json_str 的 (type,name+match_keys) 通过 EhTagTranslation 补 name_cn
+    $tags_json_str = (string)$tags_json_str;
+    $tags_cn_json_str = (string)$tags_cn_json_str;
+    $use_tags = ($tags_cn_json_str !== '' && $tags_cn_json_str !== '[]') ? $tags_cn_json_str : $tags_json_str;
+    if ($use_tags === '' || $use_tags === '[]') return '';
+    $arr = @json_decode($use_tags, true);
+    if (!is_array($arr)) return $use_tags;
+    // 快速扫描：全部 tag 已有 name_cn → 直接返回（不触发翻译 DB 加载，保住响应预算）
+    $need_lookup = false;
+    foreach ($arr as $t) {
+        if (!is_array($t)) continue;
+        $existing_cn = isset($t['name_cn']) ? trim((string)$t['name_cn']) : '';
+        if ($existing_cn === '') { $need_lookup = true; break; }
+    }
+    if (!$need_lookup) {
+        return ($tags_cn_json_str !== '' && $tags_cn_json_str !== '[]') ? $tags_cn_json_str : json_encode($arr, JSON_UNESCAPED_UNICODE);
+    }
+    // 存在缺失 → 加载翻译 DB 逐 tag 补缺（保留已有 name_cn，只补缺失的）
+    $changed = false;
+    foreach ($arr as $i => $t) {
+        if (!is_array($t)) continue;
+        $existing_cn = isset($t['name_cn']) ? trim((string)$t['name_cn']) : '';
+        if ($existing_cn !== '') continue;
+        $ns = isset($t['type']) ? (string)$t['type'] : '';
+        $name = isset($t['name']) ? (string)$t['name'] : '';
+        if ($ns === '' || $name === '') continue;
+        $extra = [];
+        if (isset($t['match_keys']) && is_array($t['match_keys'])) {
+            foreach ($t['match_keys'] as $mk) {
+                if (is_string($mk) && $mk !== '') $extra[] = $mk;
+            }
+        }
+        // 对 name 本身先拆 |，得到的 alias 作为候选；再拼 match_keys
+        $name_aliases = _t_split_aliases($name);
+        $all_extra = array_values(array_unique(array_merge($name_aliases, $extra)));
+        $cn = _t_translate_single($ns, $name, $all_extra);
+        if ($cn !== null && $cn !== '') {
+            $arr[$i]['name_cn'] = $cn;
+            $changed = true;
+        }
+    }
+    if (!$changed) return ($tags_cn_json_str !== '' && $tags_cn_json_str !== '[]') ? $tags_cn_json_str : json_encode($arr, JSON_UNESCAPED_UNICODE);
+    return json_encode($arr, JSON_UNESCAPED_UNICODE);
+}
+function _t_translate_flat_tag_rows($flat_rows) {
+    // 给 get_gallery_detail 用：直接从 tags JOIN gallery_tags 得到 PDO rows，元素 shape [type, name]（纯键值对），返回时每一项加 name_cn 键
+    if (!is_array($flat_rows)) return $flat_rows;
+    $out = [];
+    foreach ($flat_rows as $r) {
+        if (!is_array($r)) { $out[] = $r; continue; }
+        $ns = isset($r['type']) ? (string)$r['type'] : '';
+        $name = isset($r['name']) ? (string)$r['name'] : '';
+        if ($ns === '' || $name === '') { $out[] = $r; continue; }
+        $aliases = _t_split_aliases($name);
+        $cn = _t_translate_single($ns, $name, $aliases);
+        if ($cn !== null && $cn !== '') {
+            $r['name_cn'] = $cn;
+        }
+        $out[] = $r;
+    }
+    return $out;
+}
+function translate_search_preset_name($query) {
+    $query = trim((string)$query);
+    if ($query === '') return '';
+    $bundle = &_t_get_translation_static();
+    $ns_map = &$bundle['ns_map'];
+    $ns_alias = &$bundle['ns_alias'];
+    $ns_display = [
         'artist' => '作者',
         'character' => '角色',
         'cosplayer' => 'Coser',
@@ -551,35 +691,12 @@ function translate_search_preset_name($query) {
         'category' => '分类',
     ];
 
-    if (!$loaded) {
-        $loaded = true;
-        $db_path = $root . '/data/eh_tag_translation.json';
-        if (is_file($db_path)) {
-            $raw = @json_decode((string)@file_get_contents($db_path), true);
-            $entries = is_array($raw) && isset($raw['data']) && is_array($raw['data']) ? $raw['data'] : $raw;
-            if (is_array($entries)) {
-                foreach ($entries as $entry) {
-                    $ns_name = $entry['namespace'] ?? '';
-                    $ns_data = $entry['data'] ?? null;
-                    if (!$ns_name || !is_array($ns_data)) continue;
-                    $tag_map = [];
-                    foreach ($ns_data as $tag_key => $tag_val) {
-                        if (is_array($tag_val) && !empty($tag_val['name'])) {
-                            $tag_map[strtolower((string)$tag_key)] = (string)$tag_val['name'];
-                        }
-                    }
-                    $ns_map[$ns_name] = $tag_map;
-                }
-            }
-        }
-    }
-
-    return preg_replace_callback('/(?<!\S)(-?)([a-zA-Z_]+):(?:"([^"]+)"|(\S+))/', function ($m) use ($ns_map, $ns_alias, $ns_display) {
+    return preg_replace_callback('/(?<!\S)(-?)([a-zA-Z_]+):(?:"([^"]+)"|(\S+))/', function ($m) use (&$ns_map, &$ns_alias, &$ns_display) {
         $ns = $m[2];
         $raw_name = $m[3] !== '' ? $m[3] : $m[4];
         $name = substr($raw_name, -1) === '$' ? substr($raw_name, 0, -1) : $raw_name;
         $lookup_ns = $ns_alias[$ns] ?? $ns;
-        $translated = $ns_map[$lookup_ns][strtolower($name)] ?? null;
+        $translated = _t_lookup_ns($ns_map, $lookup_ns, $name);
         $label = $ns_display[$ns] ?? ($ns_display[$lookup_ns] ?? $ns);
         if (!$translated && $label === $ns) {
             return $m[0];
@@ -967,12 +1084,12 @@ try {
             if (!is_file($db_path)) error_exit('Database not found');
             try {
                 $pdo = _pdo($db_path);
-                $stmt = $pdo->prepare('SELECT id, title, title_jp, artist, group_name, language, category, total_pages, uploaded_at, file_size, local_path, downloaded_at FROM galleries WHERE source=? AND source_id=?');
+                $stmt = $pdo->prepare('SELECT id, title, title_jp, artist, group_name, language, category, total_pages, uploaded_at, file_size, local_path, downloaded_at, tags, tags_cn FROM galleries WHERE source=? AND source_id=?');
                 $stmt->execute([$source, $source_id]);
                 $gallery = $stmt->fetch();
                 if (!$gallery) error_exit('Gallery not found');
                 $stmt2 = $pdo->prepare(
-                    'SELECT t.type, t.name FROM tags t
+                    'SELECT t.type, t.name, COALESCE(t.match_keys,\'\') AS match_keys FROM tags t
                      JOIN gallery_tags gt ON t.id = gt.tag_id
                      JOIN galleries g ON gt.gallery_id = g.id
                      WHERE g.source=? AND g.source_id=?
@@ -980,7 +1097,42 @@ try {
                 );
                 $stmt2->execute([$source, $source_id]);
                 $tags = $stmt2->fetchAll();
-                $gallery['tags'] = $tags;
+                // 兜底 1：优先用 galleries.tags_cn JSON 列（Python 已 translate_tags 写好）
+                $final_tags = '';
+                $gallery_tags_cn = isset($gallery['tags_cn']) ? (string)$gallery['tags_cn'] : '';
+                $gallery_tags_raw = isset($gallery['tags']) ? (string)$gallery['tags'] : '';
+                if ($gallery_tags_cn !== '' || $gallery_tags_raw !== '') {
+                    $final_tags = _t_translate_tags_json($gallery_tags_raw, $gallery_tags_cn);
+                }
+                if ($final_tags !== '') {
+                    $gallery['tags'] = @json_decode($final_tags, true) ?: [];
+                } else {
+                    // 兜底 2：galleries 表没存 tags JSON → 用 join 的 flat rows + 对 name 拆 | 查翻译
+                    $translated_rows = [];
+                    foreach ($tags as $r) {
+                        if (!is_array($r)) { $translated_rows[] = $r; continue; }
+                        $ns = isset($r['type']) ? (string)$r['type'] : '';
+                        $name = isset($r['name']) ? (string)$r['name'] : '';
+                        if ($ns === '' || $name === '') { $translated_rows[] = $r; continue; }
+                        $aliases = _t_split_aliases($name);
+                        $extra = [];
+                        if (!empty($r['match_keys'])) {
+                            $parsed_mk = @json_decode((string)$r['match_keys'], true);
+                            if (is_array($parsed_mk)) {
+                                foreach ($parsed_mk as $mk) {
+                                    if (is_string($mk) && $mk !== '') $extra[] = $mk;
+                                }
+                            }
+                        }
+                        $all_extra = array_values(array_unique(array_merge($aliases, $extra)));
+                        $cn = _t_translate_single($ns, $name, $all_extra);
+                        if ($cn !== null && $cn !== '') {
+                            $r['name_cn'] = $cn;
+                        }
+                        $translated_rows[] = $r;
+                    }
+                    $gallery['tags'] = $translated_rows;
+                }
                 json_exit(['gallery' => $gallery]);
             } catch (Exception $e) {
                 error_exit($e->getMessage());
@@ -1880,6 +2032,15 @@ try {
                         if ($thumb_path && is_file($thumb_path)) {
                             $thumb_url = 'api.php?action=serve_cache_thumb&source=' . urlencode($source) . '&source_id=' . urlencode($source_id);
                         }
+                        $raw_tags = (string)($row['tags'] ?? '');
+                        $raw_tags_cn = (string)($row['tags_cn'] ?? '');
+                        // 逐 tag 兜底：_t_translate_tags_json 内部对已有 name_cn 的 tag 短路跳过，
+                        // 只补缺失的（避免整行含任一 name_cn 就跳过整行导致部分 tag 缺翻译）
+                        $final_tags_cn = $raw_tags_cn;
+                        if ($raw_tags !== '') {
+                            $final_tags_cn = _t_translate_tags_json($raw_tags, $raw_tags_cn);
+                            if ($final_tags_cn === '') $final_tags_cn = $raw_tags_cn;
+                        }
                         $results[] = [
                             'source'      => $src,
                             'source_id'   => $source_id,
@@ -1888,8 +2049,8 @@ try {
                             'category'    => $row['category'] ?? '',
                             'language'    => $row['language'] ?? '',
                             'group_name'  => $row['group_name'] ?? '',
-                            'tags'        => $row['tags'] ?? '',
-                            'tags_cn'     => $row['tags_cn'] ?? '',
+                            'tags'        => $raw_tags,
+                            'tags_cn'     => $final_tags_cn,
                             'total_pages' => (int)($row['total_pages'] ?? 0),
                             'artist'      => $row['artist'] ?? '',
                             'uploaded_at' => $row['uploaded_at'] ?? '',
@@ -1929,6 +2090,19 @@ try {
             } catch (Exception $e) {
                 error_exit($e->getMessage());
             }
+            break;
+
+        case 'translate_tag':
+            $ns = $_GET['ns'] ?? ($_GET['type'] ?? '');
+            $name = $_GET['name'] ?? '';
+            $ns = trim((string)$ns);
+            $name = trim((string)$name);
+            $out = ['name' => $name, 'ns' => $ns, 'name_cn' => null, 'aliases' => _t_split_aliases($name)];
+            if ($ns !== '' && $name !== '') {
+                $cn = _t_translate_single($ns, $name, _t_split_aliases($name));
+                if ($cn !== null && $cn !== '') $out['name_cn'] = $cn;
+            }
+            json_exit($out);
             break;
 
         case 'cache_categories':
@@ -2294,6 +2468,12 @@ try {
                         foreach ($ns_data as $tag_key => $tag_val) {
                             if (is_array($tag_val) && !empty($tag_val['name'])) {
                                 $tag_map[strtolower((string)$tag_key)] = (string)$tag_val['name'];
+                                foreach (_t_split_aliases((string)$tag_key) as $alias_key) {
+                                    $ak = strtolower((string)$alias_key);
+                                    if (!isset($tag_map[$ak])) {
+                                        $tag_map[$ak] = (string)$tag_val['name'];
+                                    }
+                                }
                             }
                         }
                         $trans_ns_map[$ns_name] = $tag_map;
@@ -2307,7 +2487,13 @@ try {
                     $lookup_ns = $ns_alias[$ns] ?? $ns;
                     $ns_map = $trans_ns_map[$lookup_ns] ?? null;
                     if (!$ns_map) return null;
-                    return $ns_map[strtolower($name)] ?? null;
+                    $lc = strtolower($name);
+                    if (isset($ns_map[$lc])) return $ns_map[$lc];
+                    foreach (_t_split_aliases($name) as $a) {
+                        $alc = strtolower((string)$a);
+                        if (isset($ns_map[$alc])) return $ns_map[$alc];
+                    }
+                    return null;
                 }
 
                 $QUERY_TOKEN_RE = '/(?<!\S)(-?)([a-zA-Z_]+):(?:"([^"]+)"|(\S+))/';
