@@ -46,6 +46,12 @@ var _readerPreloadAfter = 3;
 var _readerPreloadImages = {};
 var _readerThumbObserver = null;
 var _readerOpenToken = 0;
+var _readerWheelHandler = null;
+var _readerWheelResetTimer = null;
+var _readerWheelDelta = 0;
+var _readerWheelLocked = false;
+var _readerWheelThreshold = 60;
+var _readerWheelIdleMs = 160;
 
 function readerImageForPage(page) {
     for (var i = 0; i < _readerImageList.length; i++) {
@@ -158,6 +164,61 @@ function readerResetLazyImages() {
     readerClearPreloads();
     document.querySelectorAll('#reader_thumb_list img[data-src]').forEach(readerUnloadThumbImage);
 }
+function readerResetWheelGesture() {
+    if (_readerWheelResetTimer) {
+        clearTimeout(_readerWheelResetTimer);
+        _readerWheelResetTimer = null;
+    }
+    _readerWheelDelta = 0;
+    _readerWheelLocked = false;
+}
+
+function readerUnbindWheel() {
+    var main = document.getElementById('reader_main');
+    if (main && _readerWheelHandler) {
+        main.removeEventListener('wheel', _readerWheelHandler);
+    }
+    _readerWheelHandler = null;
+    readerResetWheelGesture();
+}
+
+function readerBindWheel() {
+    readerUnbindWheel();
+    var main = document.getElementById('reader_main');
+    if (!main) return;
+
+    _readerWheelHandler = function(event) {
+        if (event.ctrlKey || _readerTotalPages < 1) return;
+        if (!event.deltaY || Math.abs(event.deltaY) < Math.abs(event.deltaX || 0)) return;
+
+        event.preventDefault();
+        if (_readerWheelResetTimer) clearTimeout(_readerWheelResetTimer);
+        _readerWheelResetTimer = setTimeout(function() {
+            readerResetWheelGesture();
+        }, _readerWheelIdleMs);
+
+        if (_readerWheelLocked) return;
+
+        var delta = event.deltaY;
+        if (event.deltaMode === 1) {
+            delta *= 16;
+        } else if (event.deltaMode === 2) {
+            delta *= main.clientHeight || window.innerHeight || 800;
+        }
+        _readerWheelDelta += delta;
+        if (Math.abs(_readerWheelDelta) < _readerWheelThreshold) return;
+
+        if (_readerWheelDelta > 0) {
+            readerNextPage();
+        } else {
+            readerPrevPage();
+        }
+        _readerWheelDelta = 0;
+        _readerWheelLocked = true;
+    };
+    main.addEventListener('wheel', _readerWheelHandler, { passive: false });
+}
+
 
 function openReader(source, sourceId) {
     var requestToken = ++_readerOpenToken;
@@ -166,6 +227,7 @@ function openReader(source, sourceId) {
     _readerTotalPages = 0;
     _readerImageList = [];
     document.getElementById('reader_page').classList.remove('section-hidden');
+    readerBindWheel();
     document.getElementById('reader_main_img').removeAttribute('src');
     document.getElementById('reader_main_img').alt = '加载中...';
     document.getElementById('reader_thumb_list').innerHTML = '<div class="text-center text-muted small py-3"><i class="fas fa-spinner fa-spin"></i></div>';
@@ -262,6 +324,7 @@ function openReader(source, sourceId) {
 
 function closeReader() {
     _readerOpenToken++;
+    readerUnbindWheel();
     readerResetLazyImages();
     document.getElementById('reader_page').classList.add('section-hidden');
     document.getElementById('reader_main_img').removeAttribute('src');

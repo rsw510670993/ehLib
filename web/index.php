@@ -137,7 +137,7 @@ $projectPath = realpath(__DIR__ . '/..');
 <script src="assets/js/download.js?v=3"></script>
 <script src="assets/js/cache.js?v=30"></script>
 <script src="assets/js/gallery.js?v=16"></script>
-<script src="assets/js/reader.js?v=4"></script>
+<script src="assets/js/reader.js?v=5"></script>
 <script src="assets/js/export.js"></script>
 <script src="assets/js/refresh_targets.js?v=4"></script>
 <script src="assets/js/test_verify.js"></script>

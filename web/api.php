@@ -21,16 +21,10 @@ function error_exit($msg) {
     json_exit(['error' => $msg], false);
 }
 
-// ─── Word-boundary match helpers v5 (merge REGEXP calls → 更少的 PCRE 调用) ───
+// ─── Word-boundary match helpers v6 (bounded per-token/per-field PCRE patterns) ───
 //
-// 核心设计 (解决之前的「每列多次 REGEXP 导致 scope=all 慢 10x 问题」):
-//   ┌──────────────────────────────────────────────────────────────────────────┐
-//   │ 1. 每个 helper 返回「pattern 字符串」，不直接 push 到 params              │
-//   │ 2. 对「同一个字段」收集所有条件：                                       │
-//   │       * 同一 token 跨多个 scope → OR 合并为 (?:p_a)|(?:p_b)              │
-//   │       * 多个 token AND  → 前瞻合并为 (?s)(?=.*P1)(?=.*P2) ... .*         │
-//   │ 3. 最终每个字段只 push 1 个 REGEXP 调用，SQLite 每行只回调 1 次 PCRE     │
-//   └──────────────────────────────────────────────────────────────────────────┘
+// 核心设计：SQL LIKE 只负责缩小候选集；PHP 按关键词、按字段运行有界正则。
+// 同一关键词可命中任一允许字段，多个关键词必须全部命中，避免旧版 PCRE 编译超长组合正则失败。
 //
 //  词边界 (strict_token):
 //    * 字母/数字/罗马音 token：  (?<![A-Za-z0-9_-])X(?![A-Za-z0-9_-])
@@ -1684,9 +1678,8 @@ try {
                 // 两阶段过滤（解决 41s 全表慢问题）：
                 //   阶段1. SQL 层用 LIKE 子串做廉价粗过滤 —— C 内建实现，比跨层 REGEXP 快 5-20 倍
                 //   阶段2. PHP 层用严格 strict_token + 非内容命名空间负向前瞻精确匹配，只扫阶段1的小候选集
-                $php_pattern = '';
+                $php_token_matchers = [];
                 if ($has_keyword_cond) {
-                    $token_ors = [];
                     $kw_tokens = [];
                     if ($artist !== '') {
                         foreach (_split_and_tokens($artist) as $tok) $kw_tokens[] = [$tok, ['author']];
@@ -1714,17 +1707,15 @@ try {
                         }
                         if (isset($t_set['tags']))     $cols['ta'][] = _pattern_content_tag($tok);
                         if (isset($t_set['tags_cn']))  $cols['tc'][] = _pattern_content_tag($tok);
-                        $tok_or_patterns = [];
-                        foreach ($cols as $pats) {
+                        $token_checks = [];
+                        foreach ($cols as $field_key => $pats) {
                             $m = _merge_or_patterns($pats);
-                            if ($m !== '') $tok_or_patterns[] = $m;
+                            if ($m !== '') $token_checks[] = [$field_key, $m];
                         }
-                        $tok_or_patterns = array_values(array_filter($tok_or_patterns, function($p){ return $p !== ''; }));
-                        if (!empty($tok_or_patterns)) {
-                            $token_ors[] = _merge_or_patterns($tok_or_patterns);
+                        if (!empty($token_checks)) {
+                            $php_token_matchers[] = $token_checks;
                         }
                     }
-                    $php_pattern = _merge_and_patterns($token_ors);
                 }
 
                 $params = [];
@@ -1760,7 +1751,7 @@ try {
                 // ——————— 阶段 1：SQL 廉价 LIKE 粗过滤，把无关行提前砍掉 ———————
                 // 去掉 LOWER / COALESCE：SQLite LIKE 默认 ASCII 大小写不敏感，NULL LIKE X 自动 FALSE
                 // 执行顺序严格保证：sc.source=? / sc.category IN ? / sc.language IN ? (等值/IN 可用索引) → LIKE AND (子串廉价 C 实现) → 绝对不把 REGEXP 放进 SQL WHERE
-                if ($has_keyword_cond && $php_pattern !== '') {
+                if ($has_keyword_cond && !empty($php_token_matchers)) {
                     $like_token_groups = [];
                     $kw_like_tokens = [];
                     $escapeLike = function ($s) {
@@ -1801,8 +1792,8 @@ try {
                     }
                 }
 
-                // ——————— 阶段 2：PHP 层精确过滤（渐进式探测 LIMIT：避免 LIKE 粗筛命中 2000+ 行时把全部 tags/tags_cn 大列拉到 PHP 拖慢 4.7s on NAS）———————
-                if ($has_keyword_cond && $php_pattern !== '') {
+                // ——————— 阶段 2：PHP 层逐批精确过滤；完整扫描粗筛候选以返回稳定的精确总数 ———————
+                if ($has_keyword_cond && !empty($php_token_matchers)) {
                     $cand_base_query =
                         "SELECT sc.source_id, sc.title, sc.title_jp, sc.category, sc.language, sc.group_name,
                                 sc.tags, sc.tags_cn, sc.total_pages, sc.artist, sc.uploaded_at,
@@ -1811,29 +1802,21 @@ try {
                          FROM search_cache sc
                          $where
                          ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC";
-                    $US = "\x1F";
-                    $preg_pattern = '/' . str_replace('/', '\\/', $php_pattern) . '/ui';
                     $bl_content_preg = $bl_content_regexp !== '' ? '/' . str_replace('/', '\\/', $bl_content_regexp) . '/ui' : '';
                     $bl_artist_preg  = $bl_artist_regexp  !== '' ? '/' . str_replace('/', '\\/', $bl_artist_regexp)  . '/ui' : '';
                     $bl_any_preg     = $bl_any_regexp     !== '' ? '/' . str_replace('/', '\\/', $bl_any_regexp)     . '/ui' : '';
-                    // 初始批次：够 offset + 一页即可（page1 offset0 → 取25；page3 offset60 → 取90）
-                    $target_end = $offset + $per_page;
-                    $batch_size = max($per_page * 2, 60);
-                    $probe_limit = $target_end + $batch_size;
+                    // Scan all coarse candidates for an exact total; retain only the requested page in memory.
+                    $probe_limit = max($per_page * 4, 200);
                     $probe_offset = 0;
-                    $pages_probe = 0;
-                    $filtered = [];
-                    $total_raw_est = 0;
-                    while (count($filtered) < $target_end && $pages_probe < 10) {
+                    $total = 0;
+                    $rows = [];
+                    while (true) {
                         $q = $cand_base_query . " LIMIT $probe_limit OFFSET $probe_offset";
                         $stmt = $pdo->prepare($q);
                         $stmt->execute($params);
                         $batch = $stmt->fetchAll();
                         if (empty($batch)) break;
-                        $pages_probe++;
-                        $probe_offset += $probe_limit;
-                        $total_raw_est += count($batch);
-                        $enough = false;
+                        $probe_offset += count($batch);
                         foreach ($batch as $r) {
                             $tags    = (string)($r['tags']    ?? '');
                             $tags_cn = (string)($r['tags_cn'] ?? '');
@@ -1843,20 +1826,36 @@ try {
                             if (!$hits_bl && $bl_content_preg !== '' && (@preg_match($bl_content_preg, $tags) === 1 || @preg_match($bl_content_preg, $tags_cn) === 1)) $hits_bl = true;
                             if (!$hits_bl && $bl_any_preg     !== '' && (@preg_match($bl_any_preg, $tags) === 1 || @preg_match($bl_any_preg, $tags_cn) === 1 || @preg_match($bl_any_preg, $art) === 1)) $hits_bl = true;
                             if ($hits_bl) continue;
-                            $subject =
-                                ($r['title'] ?? '') . $US .
-                                ($r['title_jp'] ?? '') . $US .
-                                $art . $US .
-                                $tags . $US .
-                                $tags_cn;
-                            if (@preg_match($preg_pattern, $subject) === 1) $filtered[] = $r;
-                            if (count($filtered) >= $target_end) { $enough = true; break; }
+                            $field_values = [
+                                't'  => (string)($r['title'] ?? ''),
+                                'tj' => (string)($r['title_jp'] ?? ''),
+                                'a'  => $art,
+                                'ta' => $tags,
+                                'tc' => $tags_cn,
+                            ];
+                            $matches_all = true;
+                            foreach ($php_token_matchers as $token_checks) {
+                                $token_hit = false;
+                                foreach ($token_checks as $check) {
+                                    $field_pattern = '/' . str_replace('/', '\\/', $check[1]) . '/ui';
+                                    if (@preg_match($field_pattern, $field_values[$check[0]] ?? '') === 1) {
+                                        $token_hit = true;
+                                        break;
+                                    }
+                                }
+                                if (!$token_hit) {
+                                    $matches_all = false;
+                                    break;
+                                }
+                            }
+                            if ($matches_all) {
+                                if ($total >= $offset && count($rows) < $per_page) {
+                                    $rows[] = $r;
+                                }
+                                $total++;
+                            }
                         }
-                        if ($enough) break;
                     }
-                    // 路径 A 不再做 usort：SQL ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC 已经保证逐批次 global 顺序（上传倒序 + 爬取倒序复合主键稳定）
-                    $total = count($filtered) >= $target_end ? max($offset + count($filtered), (int)($total_raw_est * 0.6)) : count($filtered);
-                    $rows  = array_slice($filtered, $offset, $per_page);
                 } else {
                     // 无 keyword（只按 source/category/language 翻页）：只在有黑名单条目时在 PHP 侧拉全页再切，否则保持原 LIMIT/OFFSET 高速路径
                     $count_query = "SELECT COUNT(*) FROM search_cache sc $where";
@@ -1992,6 +1991,7 @@ try {
                         if (count($results) >= $per_page) { $need_more = false; break; }
                     }
                     if (count($results) >= $per_page) break;
+                    if ($has_keyword_cond && !empty($php_token_matchers)) break;
                     // 当前批次没攒够一页 → 进入下一轮补拉
                     $extra_probe_pages++;
                     if ($extra_probe_pages > 0) {
