@@ -237,14 +237,6 @@ function count_downloaded_pages($local_path) {
     }
     return $count;
 }
-function public_gallery_image_url($source, $source_id, $file) {
-    if ($source === '' || $source_id === '' || $file === '') return '';
-    $public_source_id = str_replace('/', '_', $source_id);
-    foreach ([$source, $public_source_id, $file] as $part) {
-        if (strpos($part, '/') !== false || strpos($part, '\\') !== false || $part === '.' || $part === '..') return '';
-    }
-    return 'ehlib_images/' . rawurlencode($source) . '/' . rawurlencode($public_source_id) . '/' . rawurlencode($file);
-}
 
 function public_image_url_from_path($path) {
     $download_base = resolve_download_path();
@@ -288,14 +280,12 @@ function find_gallery_image_path($local_path, $page) {
     return '';
 }
 
-function public_cover_url($source, $source_id) {
-    global $root;
-    $base = normalize_path($root . DIRECTORY_SEPARATOR . 'web' . DIRECTORY_SEPARATOR . 'ehlib_images');
-    $public_source_id = str_replace('/', '_', $source_id);
-    $dir = normalize_path($base . DIRECTORY_SEPARATOR . $source . DIRECTORY_SEPARATOR . $public_source_id);
-    if (!is_path_within($dir, $base) || !is_dir($dir)) return '';
+function public_cover_url($local_path) {
+    $dir = normalize_path((string)$local_path);
+    $download_base = resolve_download_path();
+    if (!is_path_within($dir, $download_base) || !is_dir($dir)) return '';
     $img_path = find_gallery_image_path($dir, 'cover');
-    return $img_path ? public_gallery_image_url($source, $source_id, basename($img_path)) : '';
+    return $img_path ? public_image_url_from_path($img_path) : '';
 }
 
 function delete_dir_recursive($dir) {
@@ -1068,7 +1058,7 @@ try {
                         'is_complete' => $is_complete,
                         'downloaded_at' => $row['downloaded_at'] ?? '',
                         'uploaded_at' => $row['uploaded_at'] ?? '',
-                        'cover_url' => public_cover_url($row['source'] ?? '', $row['source_id'] ?? ''),
+                        'cover_url' => public_cover_url($row['local_path'] ?? ''),
                     ];
                 }
                 json_exit(['galleries' => $galleries, 'total' => $total, 'page' => $page, 'per_page' => $per_page]);
@@ -1282,65 +1272,6 @@ try {
                 return strcmp($a['source_id'] ?? '', $b['source_id'] ?? '');
             });
             json_exit(['tasks' => $tasks]);
-            break;
-
-        case 'serve_image':
-            $source = $_GET['source'] ?? '';
-            $source_id = $_GET['source_id'] ?? '';
-            $page = $_GET['page'] ?? 'cover';
-            if (!$source || !$source_id) error_exit('source and source_id required');
-            $db_path = $root . '/data/ehlib.db';
-            if (!is_file($db_path)) error_exit('Database not found');
-            try {
-                $pdo = _pdo($db_path);
-                $stmt = $pdo->prepare('SELECT local_path FROM galleries WHERE source=? AND source_id=?');
-                $stmt->execute([$source, $source_id]);
-                $row = $stmt->fetch();
-                if (!$row || empty($row['local_path'])) error_exit('Gallery path not found');
-                $local_path = normalize_path($row['local_path']);
-                $download_base = resolve_download_path();
-                if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
-                $img_path = '';
-                if ($page === 'cover') {
-                    foreach (['001', '1'] as $name) {
-                        foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . $name . '.' . $ext;
-                            if (is_file($candidate)) { $img_path = $candidate; break; }
-                        }
-                        if ($img_path) break;
-                    }
-                    if (!$img_path) {
-                        foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . 'cover.' . $ext;
-                            if (is_file($candidate)) { $img_path = $candidate; break; }
-                        }
-                    }
-                } else {
-                    $page_num = (int)$page;
-                    if ($page_num < 1) error_exit('Invalid page number');
-                    foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                        $candidate = $local_path . DIRECTORY_SEPARATOR . sprintf('%03d', $page_num) . '.' . $ext;
-                        if (is_file($candidate)) { $img_path = $candidate; break; }
-                    }
-                    if (!$img_path) {
-                        foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
-                            $candidate = $local_path . DIRECTORY_SEPARATOR . $page_num . '.' . $ext;
-                            if (is_file($candidate)) { $img_path = $candidate; break; }
-                        }
-                    }
-                }
-                if (!$img_path || !is_file($img_path)) error_exit('Image not found');
-                $ext = strtolower(pathinfo($img_path, PATHINFO_EXTENSION));
-                $mime_map = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
-                $mime = $mime_map[$ext] ?? 'application/octet-stream';
-                header('Content-Type: ' . $mime);
-                header('Content-Length: ' . filesize($img_path));
-                header('Cache-Control: public, max-age=86400');
-                readfile($img_path);
-                exit;
-            } catch (Exception $e) {
-                error_exit($e->getMessage());
-            }
             break;
 
         case 'get_image_list':

@@ -165,10 +165,13 @@ body { background: #f5f7fa; }
 .reader-header-details .detail-tags .tag-badge { cursor: pointer; }
 .reader-body { flex: 1; display: flex; overflow: hidden; }
 .reader-thumbstrip { width: 150px; background: rgba(0,0,0,.6); overflow-y: auto; flex-shrink: 0; padding: .5rem; }
-.reader-thumbstrip .thumb-item { display: block; width: 100%; margin-bottom: .4rem; cursor: pointer; border: 2px solid transparent; border-radius: 4px; overflow: hidden; opacity: .6; transition: opacity .15s, border-color .15s; }
+.reader-thumbstrip .thumb-item { display: block; position: relative; width: 100%; aspect-ratio: 3 / 4; margin-bottom: .4rem; cursor: pointer; border: 2px solid transparent; border-radius: 4px; overflow: hidden; background: #1f2937; opacity: .6; transition: opacity .15s, border-color .15s; }
 .reader-thumbstrip .thumb-item:hover { opacity: .9; }
 .reader-thumbstrip .thumb-item.active { border-color: #0d6efd; opacity: 1; }
-.reader-thumbstrip .thumb-item img { width: 100%; height: auto; display: block; }
+.reader-thumbstrip .thumb-item img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .15s ease; }
+.reader-thumbstrip .thumb-item img.is-loaded { opacity: 1; }
+.reader-thumbstrip .thumb-page-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: .72rem; pointer-events: none; }
+.reader-thumbstrip .thumb-item img.is-loaded + .thumb-page-label { opacity: 0; }
 .reader-main { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 1rem; position: relative; }
 .reader-main img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .reader-pagenav { display: flex; align-items: center; gap: .5rem; }
