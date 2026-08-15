@@ -1801,7 +1801,7 @@ try {
                                 CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local
                          FROM search_cache sc
                          $where
-                         ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC";
+                         ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC, sc.source DESC, sc.source_id DESC";
                     $bl_content_preg = $bl_content_regexp !== '' ? '/' . str_replace('/', '\\/', $bl_content_regexp) . '/ui' : '';
                     $bl_artist_preg  = $bl_artist_regexp  !== '' ? '/' . str_replace('/', '\\/', $bl_artist_regexp)  . '/ui' : '';
                     $bl_any_preg     = $bl_any_regexp     !== '' ? '/' . str_replace('/', '\\/', $bl_any_regexp)     . '/ui' : '';
@@ -1871,7 +1871,7 @@ try {
                                              CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local
                                       FROM search_cache sc
                                       $where
-                                      ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC
+                                      ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC, sc.source DESC, sc.source_id DESC
                                       LIMIT $limit_top";
                         $stmt = $pdo->prepare($all_query);
                         $stmt->execute($params);
@@ -1882,19 +1882,18 @@ try {
                         // 我们需要 offset..offset+per_page 这段中"剩余的非黑名单行"，但黑名单命中的会被跳过，实际可能不够一页 → 若不够再继续取下一页补充（最多补 10 页限制）
                         $kept = [];
                         $pages_probe = 0;
-                        $probe_offset = 0;
+                        $probe_offset = count($top_rows);
                         $target_end = $offset + $per_page;
                         while (count($kept) < $target_end && $pages_probe < 10) {
                             if (!empty($top_rows)) {
                                 $this_batch = $top_rows;
                                 $top_rows = [];
                             } else {
-                                $probe_limit = $per_page * 2;
                                 $q = $all_query . " OFFSET $probe_offset";
                                 $stmt2 = $pdo->prepare($q);
                                 $stmt2->execute($params);
                                 $this_batch = $stmt2->fetchAll();
-                                $probe_offset += $probe_limit;
+                                $probe_offset += count($this_batch);
                             }
                             if (empty($this_batch)) break;
                             $pages_probe++;
@@ -1914,7 +1913,7 @@ try {
                         $rows = array_slice($kept, $offset, $per_page);
                     } else {
                         $total = $total_raw;
-                        $data_query = "SELECT sc.*, CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local FROM search_cache sc $where ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC LIMIT $per_page OFFSET $offset";
+                        $data_query = "SELECT sc.*, CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local FROM search_cache sc $where ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC, sc.source DESC, sc.source_id DESC LIMIT $per_page OFFSET $offset";
                         $stmt = $pdo->prepare($data_query);
                         $stmt->execute($params);
                         $rows = $stmt->fetchAll();
@@ -1938,7 +1937,7 @@ try {
                             // 只有无 keyword + 无黑名单的高速路径才会触发补足（因为路径 A/B 本身是 PHP 数组切片，不会因 SQL JOIN 重复导致缺行）
                             $extra_offset = ($offset + $per_page) + ($extra_probe_pages - 1) * ($per_page * 2);
                             $extra_limit = $per_page * 2;
-                            $_extra_sql = "SELECT sc.*, CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local FROM search_cache sc $where ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC LIMIT $extra_limit OFFSET $extra_offset";
+                            $_extra_sql = "SELECT sc.*, CASE WHEN EXISTS (SELECT 1 FROM galleries g WHERE g.source=sc.source AND g.source_id=sc.source_id) THEN 1 ELSE 0 END as is_local FROM search_cache sc $where ORDER BY sc.uploaded_at DESC, sc.crawled_at DESC, sc.source DESC, sc.source_id DESC LIMIT $extra_limit OFFSET $extra_offset";
                             $_stmt_e = $pdo->prepare($_extra_sql);
                             $_stmt_e->execute($params);
                             $extra_rows_from_sql = $_stmt_e->fetchAll();
@@ -1991,7 +1990,7 @@ try {
                         if (count($results) >= $per_page) { $need_more = false; break; }
                     }
                     if (count($results) >= $per_page) break;
-                    if ($has_keyword_cond && !empty($php_token_matchers)) break;
+                    if (($has_keyword_cond && !empty($php_token_matchers)) || !empty($bl_rows)) break;
                     // 当前批次没攒够一页 → 进入下一轮补拉
                     $extra_probe_pages++;
                     if ($extra_probe_pages > 0) {
