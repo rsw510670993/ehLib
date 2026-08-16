@@ -1,5 +1,30 @@
 const API = 'api.php';
 
+function imageApiUrl(source, sourceId, page) {
+    var url = API + '?action=serve_image';
+    if (source) url += '&source=' + encodeURIComponent(source);
+    if (sourceId) url += '&source_id=' + encodeURIComponent(sourceId);
+    if (page !== undefined && page !== null && page !== '') url += '&page=' + encodeURIComponent(page);
+    return url;
+}
+window.imageApiUrl = imageApiUrl;
+
+function fallbackImageOnError(img) {
+    if (!img) return;
+    if (img._fallbackTried) {
+        img.style.visibility = 'hidden';
+        return;
+    }
+    var fallback = img.getAttribute && img.getAttribute('data-fallback');
+    if (fallback && fallback !== img.src) {
+        img._fallbackTried = true;
+        img.src = fallback;
+    } else {
+        img.style.visibility = 'hidden';
+    }
+}
+window.fallbackImageOnError = fallbackImageOnError;
+
 
 function onCoverLoad(img) {
     if (img.naturalWidth > img.naturalHeight) {

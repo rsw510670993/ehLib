@@ -1357,6 +1357,43 @@ try {
             }
             break;
 
+        case 'serve_image':
+            $source = $_GET['source'] ?? '';
+            $source_id = $_GET['source_id'] ?? '';
+            $page = $_GET['page'] ?? '';
+            if ($source === '' || $source_id === '' || $page === '') error_exit('source, source_id and page required');
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                $stmt = $pdo->prepare('SELECT local_path FROM galleries WHERE source=? AND source_id=?');
+                $stmt->execute([$source, $source_id]);
+                $row = $stmt->fetch();
+                if (!$row || empty($row['local_path'])) error_exit('Gallery not found');
+                $local_path = normalize_path($row['local_path']);
+                $download_base = resolve_download_path();
+                if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
+                $img_path = find_gallery_image_path($local_path, $page);
+                if (!$img_path || !is_file($img_path)) error_exit('Image file not found');
+                $rp = @realpath($img_path);
+                if ($rp === false) error_exit('Image file not found');
+                $norm_base = rtrim(str_replace('\\', '/', normalize_path($download_base)), '/');
+                $norm_rp   = rtrim(str_replace('\\', '/', $rp), '/');
+                if (strpos($norm_rp, $norm_base . '/') !== 0 && $norm_rp !== $norm_base) {
+                    error_exit('Invalid image path (outside download dir)');
+                }
+                $ext = strtolower(pathinfo($rp, PATHINFO_EXTENSION));
+                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
+                if (!isset($mime[$ext])) error_exit('Invalid image extension');
+                header('Content-Type: ' . $mime[$ext]);
+                header('Cache-Control: max-age=86400');
+                readfile($rp);
+                exit;
+            } catch (Exception $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
         case 'recover_orphans':
             $source = $_POST['source'] ?? '';
             $args = ['recover-orphans'];
