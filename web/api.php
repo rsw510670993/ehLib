@@ -249,7 +249,7 @@ function public_image_url_from_path($path) {
 }
 
 function find_gallery_image_path($local_path, $page) {
-    $exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    $exts = ['webp', 'jpg', 'jpeg', 'png', 'gif'];
     if ($page === 'cover') {
         foreach (['001', '1'] as $name) {
             foreach ($exts as $ext) {
@@ -1287,7 +1287,7 @@ try {
                 $images = [];
                 for ($i = 1; $i <= $total_pages; $i++) {
                     $found = false;
-                    foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                    foreach (['webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
                         $candidate = $local_path . DIRECTORY_SEPARATOR . sprintf('%03d', $i) . '.' . $ext;
                         if (is_file($candidate)) {
                             $images[] = ['page' => $i, 'file' => sprintf('%03d', $i) . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
@@ -1296,7 +1296,7 @@ try {
                         }
                     }
                     if (!$found) {
-                        foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                        foreach (['webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
                             $candidate = $local_path . DIRECTORY_SEPARATOR . $i . '.' . $ext;
                             if (is_file($candidate)) {
                                 $images[] = ['page' => $i, 'file' => $i . '.' . $ext, 'url' => public_image_url_from_path($candidate)];

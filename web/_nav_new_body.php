@@ -73,6 +73,39 @@
                                 </div>
                             </div>
 
+                            <div class="border rounded p-3 mb-4 bg-light-subtle">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                    <div>
+                                        <div class="fw-semibold">WebP 图片压缩</div>
+                                        <div class="small text-muted">用于新下载的正文图片和缓存封面，不改变分辨率。</div>
+                                    </div>
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input" type="checkbox" role="switch" id="set_dl_webp_enabled" onchange="updateWebpSettingsState()">
+                                        <label class="form-check-label" for="set_dl_webp_enabled">启用</label>
+                                    </div>
+                                </div>
+                                <div class="row g-3">
+                                    <div class="col-md-4">
+                                        <label class="form-label" for="set_dl_webp_quality">有损质量</label>
+                                        <input type="number" class="form-control" id="set_dl_webp_quality" min="1" max="100" step="1">
+                                        <div class="form-text">推荐 88；越高越接近原图，体积也越大。</div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label" for="set_dl_webp_method">编码强度</label>
+                                        <input type="number" class="form-control" id="set_dl_webp_method" min="0" max="6" step="1">
+                                        <div class="form-text">推荐 4；越高压缩稍好，但更占用 CPU。</div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label" for="set_dl_webp_min_savings">最低节省比例 (%)</label>
+                                        <input type="number" class="form-control" id="set_dl_webp_min_savings" min="0" max="100" step="0.5">
+                                        <div class="form-text">推荐 5；不足此比例时保留服务器返回格式。</div>
+                                    </div>
+                                </div>
+                                <div class="alert alert-secondary py-2 px-3 mt-3 mb-0 small">
+                                    已是 WebP 或动态图时不会二次有损；现有本地图片不会自动转换或删除。
+                                </div>
+                            </div>
+
                             <h6 class="border-bottom pb-2 mb-3">请求设置</h6>
                             <div class="row g-3 mb-4">
                                 <div class="col-md-8">

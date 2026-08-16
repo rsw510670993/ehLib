@@ -65,10 +65,8 @@ async function loadGalleries(filters) {
             var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
             var lang = g.language || '';
             var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
-            var imgUrl = g.cover_url || '';
-            var coverImg = imgUrl
-                ? '<img src="' + imgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="this.style.display=\'none\'" onload="onCoverLoad(this)">'
-                : '';
+            var fallbackImgUrl = imageApiUrl(g.source, g.source_id, 'cover');
+            var imgUrl = g.cover_url || fallbackImgUrl;
             var totalPages = parseInt(g.total_pages || g.pages || 0, 10) || 0;
             var downloadedPages = parseInt(g.downloaded_pages || 0, 10) || 0;
             var isComplete = g.is_complete !== false && g.is_complete !== 0 && g.is_complete !== '0';
@@ -79,11 +77,19 @@ async function loadGalleries(filters) {
                 ? 'openReader(\'' + g.source + '\',\'' + g.source_id + '\')'
                 : 'openIncompleteGalleryRetry(\'' + g.source + '\',\'' + g.source_id + '\')';
             var statusBadge = isComplete ? '' : '<span class="badge bg-warning text-dark gallery-status-badge">未完成</span>';
+            // 按钮：本地阅览（已下载）/ 重试（未完成） + ExHentai 外链
+            var readBtn = isComplete
+                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="event.stopPropagation();openReader(\'' + g.source + '\',\'' + g.source_id + '\')" title="本地阅览"><i class="fas fa-book-open"></i></button>'
+                : '<button class="btn btn-sm btn-outline-warning py-0 px-1" onclick="event.stopPropagation();openIncompleteGalleryRetry(\'' + g.source + '\',\'' + g.source_id + '\')" title="继续下载"><i class="fas fa-redo-alt"></i></button>';
+            var escapedSid = escapeAttr(g.source_id || '');
+            var exLink = (g.source && g.source.toLowerCase() === 'exhentai')
+                ? '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>'
+                : '';
             var titleTooltip = displayTitles.primary + (displayTitles.secondary ? '\n' + displayTitles.secondary : '');
             return '<div data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
-                '<div class="card gallery-card' + cardClass + '" onclick="' + clickAction + '">' +
+                '<div class="card h-100 gallery-card' + cardClass + '" onclick="' + clickAction + '">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
-                coverImg +
+                '<img src="' + imgUrl + '" data-fallback="' + fallbackImgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="fallbackImageOnError(this)" onload="onCoverLoad(this)">' +
                 statusBadge +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitles.primary) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
@@ -100,6 +106,10 @@ async function loadGalleries(filters) {
                 langBadge +
                 sourceBadge +
                 '<span class="' + progressClass + '">' + progressText + '</span>' +
+                '</div>' +
+                // 第5行（右对齐）：阅读/重试按钮 + ExHentai 外链
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom">' +
+                '<span class="d-inline-flex gap-1">' + readBtn + exLink + '</span>' +
                 '</div>' +
                 '</div>' +
                 '</div>' +

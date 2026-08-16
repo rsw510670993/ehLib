@@ -459,22 +459,22 @@ function renderCacheGrid() {
                 : '<div class="placeholder-thumb" style="aspect-ratio:3/4;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:2rem"><i class="far fa-image"></i></div>';
             var source_id = g.source_id || '';
             var escapedSid = escapeAttr(source_id);
-            var isSelected = _selectedIds.has(source_id);
             var downloadBtn = g.is_local
-                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="event.stopPropagation();openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="本地阅览"><i class="fas fa-book-open"></i></button>'
-                : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="event.stopPropagation();cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
-            var sourceBtn = '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" title="在 ExHentai 打开" onclick="event.stopPropagation()"><i class="fas fa-arrow-up-right-from-square"></i></a>';
+                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="本地阅览"><i class="fas fa-book-open"></i></button>'
+                : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
+            var sourceBtn = '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>';
             return '<div>' +
-                '<div class="card gallery-card' + (isSelected ? ' cache-card-selected' : '') + '">' +
-                '<div class="card-img-wrapper cache-card-popup-zone" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0" title="打开详情" onclick="showCacheDetail(' + idx + ')">' +
+                '<div class="card gallery-card">' +
+                '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0;cursor:pointer" onclick="toggleCacheSelect(\'' + escapedSid + '\',null,event)">' +
+                '<div class="card-checkbox"><input type="checkbox" class="form-check-input" onchange="toggleCacheSelect(\'' + escapedSid + '\',this.checked,event)" ' + (_selectedIds.has(source_id) ? 'checked' : '') + '></div>' +
                 thumbHtml +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
-                '<div class="card-body px-2 py-1 card-info-body cache-card-select-zone" role="checkbox" tabindex="0" aria-checked="' + (isSelected ? 'true' : 'false') + '" title="点击选择或取消选择" onclick="toggleCacheSelect(\'' + escapedSid + '\',null,event)" onkeydown="handleCacheSelectKey(event,\'' + escapedSid + '\')">' +
+                '<div class="card-body px-2 py-1 card-info-body">' +
                 // 第 1~3 行：中文标题 + 日语标题，合占严格 3 行（主最多 2 行 / 副 1 行；无副时主占满 3 行）
                 // ZWSP 注入保证 -webkit-box 容器下 CJK/假名/罗马字序列能真正换行
-                '<div class="title-double-clamp" title="' + escapeAttr(displayTitles.primary + (displayTitles.secondary ? '\n' + displayTitles.secondary : '')) + '">' +
-                '<div class="title-primary">' + _zwspWrap(escapeHtml(displayTitles.primary)) + '</div>' +
+                '<div class="title-double-clamp" style="cursor:pointer" title="' + escapeAttr(displayTitles.primary + (displayTitles.secondary ? '\n' + displayTitles.secondary : '')) + '" onclick="showCacheDetail(' + idx + ')">' +
+                '<div class="title-primary" style="color:var(--bs-link-color)">' + _zwspWrap(escapeHtml(displayTitles.primary)) + '</div>' +
                 (displayTitles.secondary ? '<div class="title-secondary text-muted">' + _zwspWrap(escapeHtml(displayTitles.secondary)) + '</div>' : '') +
                 '</div>' +
                 // 第 4 行（左对齐）：分类 badge + 语种 badge + 页数
@@ -483,9 +483,8 @@ function renderCacheGrid() {
                 langBadge +
                 '<span class="small text-muted">' + (g.total_pages || 0) + 'p</span>' +
                 '</div>' +
-                // 第 5 行：左侧选中标记；右侧本地阅览 / 下载 / ExHentai 外链
+                // 第 5 行（右对齐）：本地阅览 / 下载 / ExHentai 外链
                 '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom">' +
-                '<span class="cache-selection-mark' + (isSelected ? ' is-selected' : '') + '" aria-hidden="true"><i class="fas fa-check"></i></span>' +
                 '<span class="d-inline-flex gap-1">' + downloadBtn + sourceBtn + '</span>' +
                 '</div>' +
                 '</div>' +
@@ -780,27 +779,14 @@ async function deleteSearchPreset(id) {
 
 function toggleCacheSelect(sid, checked, e) {
     if (e) e.stopPropagation();
-    if (checked === null) checked = !_selectedIds.has(sid);
+    if (checked === null) {
+        var cb = e.currentTarget.querySelector('.form-check-input');
+        if (cb) { cb.checked = !cb.checked; checked = cb.checked; }
+        else return;
+    }
     if (checked) _selectedIds.add(sid);
     else _selectedIds.delete(sid);
-
-    var trigger = e && e.currentTarget ? e.currentTarget : null;
-    var card = trigger && trigger.closest ? trigger.closest('.gallery-card') : null;
-    if (card) {
-        card.classList.toggle('cache-card-selected', checked);
-        var zone = card.querySelector('.cache-card-select-zone');
-        var marker = card.querySelector('.cache-selection-mark');
-        if (zone) zone.setAttribute('aria-checked', checked ? 'true' : 'false');
-        if (marker) marker.classList.toggle('is-selected', checked);
-    }
     updateBatchBar();
-}
-
-function handleCacheSelectKey(e, sid) {
-    if (!e || e.target !== e.currentTarget) return;
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    e.preventDefault();
-    toggleCacheSelect(sid, null, e);
 }
 
 function selectAllCache(checked) {

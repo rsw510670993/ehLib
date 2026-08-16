@@ -45,6 +45,26 @@ async function parseExCookieString() {
 }
 
 // ─── Settings ───
+function readBoundedSetting(id, fallback, min, max, integer) {
+    const input = document.getElementById(id);
+    let value = input && input.value.trim() !== '' ? Number(input.value) : fallback;
+    if (!Number.isFinite(value)) value = fallback;
+    value = Math.max(min, Math.min(max, value));
+    if (integer) value = Math.round(value);
+    if (input) input.value = String(value);
+    return value;
+}
+
+function updateWebpSettingsState() {
+    const enabledInput = document.getElementById('set_dl_webp_enabled');
+    const disabled = !enabledInput || !enabledInput.checked;
+    ['set_dl_webp_quality', 'set_dl_webp_method', 'set_dl_webp_min_savings'].forEach((id) => {
+        const input = document.getElementById(id);
+        if (input) input.disabled = disabled;
+    });
+}
+window.updateWebpSettingsState = updateWebpSettingsState;
+
 async function loadSettings() {
     const data = await api('get_config');
     if (!data.config) return;
@@ -55,6 +75,11 @@ async function loadSettings() {
     document.getElementById('set_dl_concurrent').value = dl.max_concurrent || 3;
     document.getElementById('set_dl_retry').value = dl.retry_times || 3;
     document.getElementById('set_dl_retry_delay').value = dl.retry_delay || 5;
+    document.getElementById('set_dl_webp_enabled').checked = dl.convert_to_webp !== false;
+    document.getElementById('set_dl_webp_quality').value = dl.webp_quality ?? 88;
+    document.getElementById('set_dl_webp_method').value = dl.webp_method ?? 4;
+    document.getElementById('set_dl_webp_min_savings').value = dl.webp_min_savings_percent ?? 5;
+    updateWebpSettingsState();
     document.getElementById('set_req_ua').value = req.user_agent || '';
     document.getElementById('set_req_delay').value = req.delay_between_requests || 1.5;
     document.getElementById('set_browser_headless').value = br.headless ? 'true' : 'false';
@@ -63,12 +88,17 @@ async function loadSettings() {
 async function saveSettings() {
     const data = await api('get_config');
     const cfg = data.config || {};
-    cfg.download = {
+    const currentDownload = cfg.download || {};
+    cfg.download = Object.assign({}, currentDownload, {
         path: document.getElementById('set_dl_path').value,
         max_concurrent: parseInt(document.getElementById('set_dl_concurrent').value) || 3,
         retry_times: parseInt(document.getElementById('set_dl_retry').value) || 3,
         retry_delay: parseInt(document.getElementById('set_dl_retry_delay').value) || 5,
-    };
+        convert_to_webp: document.getElementById('set_dl_webp_enabled').checked,
+        webp_quality: readBoundedSetting('set_dl_webp_quality', 88, 1, 100, true),
+        webp_method: readBoundedSetting('set_dl_webp_method', 4, 0, 6, true),
+        webp_min_savings_percent: readBoundedSetting('set_dl_webp_min_savings', 5, 0, 100, false),
+    });
     cfg.request = {
         user_agent: document.getElementById('set_req_ua').value,
         delay_between_requests: parseFloat(document.getElementById('set_req_delay').value) || 1.5,

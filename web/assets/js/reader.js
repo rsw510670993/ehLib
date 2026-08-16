@@ -37,21 +37,10 @@ async function readerRefreshMetadata(source, sourceId) {
     }
 }
 
+var _readerSource, _readerSourceId;
 var _readerCurrentPage = 1;
 var _readerTotalPages = 0;
 var _readerImageList = [];
-var _readerThumbRadius = 4;
-var _readerPreloadBefore = 2;
-var _readerPreloadAfter = 3;
-var _readerPreloadImages = {};
-var _readerThumbObserver = null;
-var _readerOpenToken = 0;
-var _readerWheelHandler = null;
-var _readerWheelResetTimer = null;
-var _readerWheelDelta = 0;
-var _readerWheelLocked = false;
-var _readerWheelThreshold = 60;
-var _readerWheelIdleMs = 160;
 
 function readerImageForPage(page) {
     for (var i = 0; i < _readerImageList.length; i++) {
@@ -62,173 +51,17 @@ function readerImageForPage(page) {
 
 function readerImageUrl(page) {
     var img = readerImageForPage(page);
-    return (img && img.url) ? img.url : '';
+    return (img && img.url) ? img.url : imageApiUrl(_readerSource, _readerSourceId, page);
 }
-function readerClearPreloads() {
-    Object.keys(_readerPreloadImages).forEach(function(key) {
-        var preload = _readerPreloadImages[key];
-        preload.onload = null;
-        preload.onerror = null;
-        preload.removeAttribute('src');
-    });
-    _readerPreloadImages = {};
-}
-
-function readerLoadThumbImage(img) {
-    if (!img || img.getAttribute('src') || !img.dataset.src) return;
-    img.style.display = '';
-    img.src = img.dataset.src;
-}
-
-function readerUnloadThumbImage(img) {
-    if (!img || !img.getAttribute('src')) return;
-    img.removeAttribute('src');
-    img.classList.remove('is-loaded');
-    img.style.display = '';
-}
-
-function readerThumbLoaded(img) {
-    img.classList.add('is-loaded');
-}
-
-function readerThumbError(img) {
-    readerUnloadThumbImage(img);
-}
-
-function readerSetupThumbObserver() {
-    if (_readerThumbObserver) _readerThumbObserver.disconnect();
-    _readerThumbObserver = null;
-    if (typeof IntersectionObserver === 'undefined') return;
-
-    var root = document.getElementById('reader_thumbstrip');
-    _readerThumbObserver = new IntersectionObserver(function(entries) {
-        entries.forEach(function(entry) {
-            var img = entry.target;
-            var item = img.closest('.thumb-item');
-            var page = item ? parseInt(item.dataset.page, 10) : 0;
-            if (entry.isIntersecting) {
-                readerLoadThumbImage(img);
-            } else if (page && Math.abs(page - _readerCurrentPage) > _readerThumbRadius) {
-                readerUnloadThumbImage(img);
-            }
-        });
-    }, { root: root, rootMargin: '240px 0px' });
-
-    document.querySelectorAll('#reader_thumb_list img[data-src]').forEach(function(img) {
-        _readerThumbObserver.observe(img);
-    });
-}
-
-function readerUpdateThumbWindow(page) {
-    var minPage = Math.max(1, page - _readerThumbRadius);
-    var maxPage = Math.min(_readerTotalPages, page + _readerThumbRadius);
-    document.querySelectorAll('#reader_thumb_list .thumb-item').forEach(function(item) {
-        var itemPage = parseInt(item.dataset.page, 10);
-        var img = item.querySelector('img[data-src]');
-        if (!img) return;
-        if (itemPage >= minPage && itemPage <= maxPage) readerLoadThumbImage(img);
-        else readerUnloadThumbImage(img);
-    });
-}
-
-function readerUpdatePreloadWindow(page) {
-    var desired = {};
-    var first = Math.max(1, page - _readerPreloadBefore);
-    var last = Math.min(_readerTotalPages, page + _readerPreloadAfter);
-    for (var candidate = first; candidate <= last; candidate++) {
-        if (candidate !== page) desired[candidate] = true;
-    }
-
-    Object.keys(_readerPreloadImages).forEach(function(key) {
-        if (desired[key]) return;
-        var preload = _readerPreloadImages[key];
-        preload.onload = null;
-        preload.onerror = null;
-        preload.removeAttribute('src');
-        delete _readerPreloadImages[key];
-    });
-
-    Object.keys(desired).forEach(function(key) {
-        if (_readerPreloadImages[key]) return;
-        var preloadUrl = readerImageUrl(parseInt(key, 10));
-        if (!preloadUrl) return;
-        var preload = new Image();
-        preload.src = preloadUrl;
-        _readerPreloadImages[key] = preload;
-    });
-}
-
-function readerResetLazyImages() {
-    if (_readerThumbObserver) _readerThumbObserver.disconnect();
-    _readerThumbObserver = null;
-    readerClearPreloads();
-    document.querySelectorAll('#reader_thumb_list img[data-src]').forEach(readerUnloadThumbImage);
-}
-function readerResetWheelGesture() {
-    if (_readerWheelResetTimer) {
-        clearTimeout(_readerWheelResetTimer);
-        _readerWheelResetTimer = null;
-    }
-    _readerWheelDelta = 0;
-    _readerWheelLocked = false;
-}
-
-function readerUnbindWheel() {
-    var main = document.getElementById('reader_main');
-    if (main && _readerWheelHandler) {
-        main.removeEventListener('wheel', _readerWheelHandler);
-    }
-    _readerWheelHandler = null;
-    readerResetWheelGesture();
-}
-
-function readerBindWheel() {
-    readerUnbindWheel();
-    var main = document.getElementById('reader_main');
-    if (!main) return;
-
-    _readerWheelHandler = function(event) {
-        if (event.ctrlKey || _readerTotalPages < 1) return;
-        if (!event.deltaY || Math.abs(event.deltaY) < Math.abs(event.deltaX || 0)) return;
-
-        event.preventDefault();
-        if (_readerWheelResetTimer) clearTimeout(_readerWheelResetTimer);
-        _readerWheelResetTimer = setTimeout(function() {
-            readerResetWheelGesture();
-        }, _readerWheelIdleMs);
-
-        if (_readerWheelLocked) return;
-
-        var delta = event.deltaY;
-        if (event.deltaMode === 1) {
-            delta *= 16;
-        } else if (event.deltaMode === 2) {
-            delta *= main.clientHeight || window.innerHeight || 800;
-        }
-        _readerWheelDelta += delta;
-        if (Math.abs(_readerWheelDelta) < _readerWheelThreshold) return;
-
-        if (_readerWheelDelta > 0) {
-            readerNextPage();
-        } else {
-            readerPrevPage();
-        }
-        _readerWheelDelta = 0;
-        _readerWheelLocked = true;
-    };
-    main.addEventListener('wheel', _readerWheelHandler, { passive: false });
-}
-
 
 function openReader(source, sourceId) {
-    var requestToken = ++_readerOpenToken;
-    readerResetLazyImages();
+    _readerSource = source;
+    _readerSourceId = sourceId;
     _readerCurrentPage = 1;
     _readerTotalPages = 0;
     _readerImageList = [];
     document.getElementById('reader_page').classList.remove('section-hidden');
-    readerBindWheel();
-    document.getElementById('reader_main_img').removeAttribute('src');
+    document.getElementById('reader_main_img').src = '';
     document.getElementById('reader_main_img').alt = '加载中...';
     document.getElementById('reader_thumb_list').innerHTML = '<div class="text-center text-muted small py-3"><i class="fas fa-spinner fa-spin"></i></div>';
 
@@ -236,7 +69,7 @@ function openReader(source, sourceId) {
     fetch(API + '?action=get_gallery_detail&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId))
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (requestToken !== _readerOpenToken || !data.ok || !data.gallery) return;
+            if (!data.ok || !data.gallery) return;
             var g = data.gallery;
             var displayTitle = g.title_jp || g.title;
             document.getElementById('reader_title').textContent = displayTitle;
@@ -286,7 +119,7 @@ function openReader(source, sourceId) {
     fetch(API + '?action=get_image_list&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId))
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (requestToken !== _readerOpenToken || !data.ok || !data.images) return;
+            if (!data.ok || !data.images) return;
             _readerTotalPages = data.total_pages || data.images.length;
             _readerImageList = data.images;
             document.getElementById('reader_page_total').textContent = '/ ' + _readerTotalPages;
@@ -295,20 +128,18 @@ function openReader(source, sourceId) {
             var thumbHtml = '';
             data.images.forEach(function(img, idx) {
                 var pageNum = img.page || (idx + 1);
-                if (img.file && img.url) {
-                    var thumbUrl = img.url;
+                if (img.file) {
+                    var fallbackThumbUrl = imageApiUrl(source, sourceId, pageNum);
+                    var thumbUrl = img.url || fallbackThumbUrl;
                     thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')">' +
-                        '<img data-src="' + thumbUrl + '" alt="p' + pageNum + '" onload="readerThumbLoaded(this)" onerror="readerThumbError(this)">' +
-                        '<span class="thumb-page-label">p' + pageNum + '</span>' +
+                        '<img src="' + thumbUrl + '" data-fallback="' + fallbackThumbUrl + '" alt="p' + pageNum + '" loading="lazy" onerror="fallbackImageOnError(this)">' +
                         '</div>';
                 } else {
-                    thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')">' +
-                        '<span class="thumb-page-label">p' + pageNum + '</span>' +
-                        '</div>';
+                    thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')" style="text-align:center;padding:.5rem;color:#666;font-size:.75rem">' +
+                        'p' + pageNum + '</div>';
                 }
             });
             document.getElementById('reader_thumb_list').innerHTML = thumbHtml;
-            readerSetupThumbObserver();
             readerGoToPage(1);
         });
 
@@ -323,15 +154,8 @@ function openReader(source, sourceId) {
 }
 
 function closeReader() {
-    _readerOpenToken++;
-    readerUnbindWheel();
-    readerResetLazyImages();
     document.getElementById('reader_page').classList.add('section-hidden');
-    document.getElementById('reader_main_img').removeAttribute('src');
-    document.getElementById('reader_thumb_list').innerHTML = '';
-    _readerImageList = [];
-    _readerTotalPages = 0;
-    _readerCurrentPage = 1;
+    document.getElementById('reader_main_img').src = '';
     if (_readerKeyHandler) {
         document.removeEventListener('keydown', _readerKeyHandler);
         _readerKeyHandler = null;
@@ -339,14 +163,10 @@ function closeReader() {
 }
 
 function readerGoToPage(page) {
-    page = parseInt(page, 10);
-    if (!Number.isFinite(page)) page = _readerCurrentPage || 1;
-    if (_readerTotalPages < 1) return;
     if (page < 1) page = 1;
     if (page > _readerTotalPages) page = _readerTotalPages;
     _readerCurrentPage = page;
     document.getElementById('reader_page_input').value = page;
-    readerUpdateThumbWindow(page);
 
     // Update thumb active
     var thumbs = document.querySelectorAll('#reader_thumb_list .thumb-item');
@@ -358,21 +178,27 @@ function readerGoToPage(page) {
     }
 
     // Load main image
+    var fallbackImgUrl = imageApiUrl(_readerSource, _readerSourceId, page);
     var imgUrl = readerImageUrl(page);
     var mainImg = document.getElementById('reader_main_img');
-    mainImg.alt = 'p' + page;
-    delete mainImg.dataset.fallback;
-    mainImg.onerror = function() { this.style.display = 'none'; };
-    if (imgUrl) {
-        mainImg.style.display = '';
-        mainImg.src = imgUrl;
-    } else {
-        mainImg.removeAttribute('src');
-        mainImg.style.display = 'none';
-    }
+    mainImg.style.display = '';
+    mainImg.dataset.fallback = fallbackImgUrl;
+    mainImg.onerror = function() { fallbackImageOnError(this); };
+    mainImg.src = imgUrl;
 
-    // Keep only a small decoded-image window around the current page.
-    readerUpdatePreloadWindow(page);
+    // Preload next 2 pages
+    for (var i = 1; i <= 2; i++) {
+        var nextPage = page + i;
+        if (nextPage <= _readerTotalPages) {
+            var preloadUrl = readerImageUrl(nextPage);
+            var link = document.createElement('link');
+            link.rel = 'preload';
+            link.as = 'image';
+            link.href = preloadUrl;
+            document.head.appendChild(link);
+            setTimeout(function(el) { document.head.removeChild(el); }, 3000, link);
+        }
+    }
 }
 
 function readerPrevPage() {

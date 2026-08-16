@@ -38,6 +38,13 @@ def _is_updated_on_site(existing, item: dict) -> bool:
     return bool(site_date and local_date and site_date != local_date)
 
 
+def _cached_item_is_updated(cached_uploaded_at: str, item: dict) -> bool:
+    """缓存日期与站点日期均存在且不一致时，不能把该记录作为停止点。"""
+    site_date = " ".join(str(item.get("uploaded_at", "") or "").split())
+    cached_date = " ".join(str(cached_uploaded_at or "").split())
+    return bool(site_date and cached_date and site_date != cached_date)
+
+
 def _parse_languages(languages) -> set:
     """解析逗号分隔/列表形式的语种筛选条件，返回小写集合。空集合表示不过滤。
     注意：E-Hentai 的 language: 标签搜索不可靠（japanese 不过滤、~ 语义异常），
@@ -225,6 +232,20 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 print("Cancel signal received, stopping crawl.")
                 raise KeyboardInterrupt()
 
+            page_ids = list(dict.fromkeys(
+                item.get("source_id", "") for item in items if item.get("source_id", "")
+            ))
+            queue_job_id = getattr(args, "queue_job_id", 0)
+            cached_states = {}
+            if args.update and page_ids:
+                cached_states = await db.get_search_cache_states(args.source, page_ids)
+                # 断点续传时，本任务此前写入的记录不属于历史重复边界。
+                if queue_job_id:
+                    cached_states = {
+                        sid: state for sid, state in cached_states.items()
+                        if state[1] != queue_job_id
+                    }
+
             saved_ids = []
             for item in items:
                 sid = item.get("source_id", "")
@@ -234,16 +255,19 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
             if saved_ids:
                 batch = [it for it in items if it.get("source_id", "") in saved_ids]
                 await db.save_search_results(batch)
-            queue_job_id = getattr(args, "queue_job_id", 0)
             if queue_job_id:
                 await db.set_search_cache_origin(args.source, [it.get("source_id", "") for it in items if it.get("source_id")], queue_job_id)
 
             # 获取元数据和封面
+            eligible_ids = set()
             for idx, item in enumerate(items, 1):
                 if cancel_file.exists():
                     raise KeyboardInterrupt()
                 sid = item.get("source_id", "")
-                if not sid or sid in metadata_done:
+                if not sid:
+                    continue
+                if sid in metadata_done:
+                    eligible_ids.add(sid)
                     continue
                 try:
                     artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json = await site.fetch_metadata_and_thumb(sid, thumbs_dir, item.get("thumbnail", ""))
@@ -261,6 +285,7 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                         continue
                     await db.update_search_cache_metadata(args.source, sid, artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json)
                     metadata_done.add(sid)
+                    eligible_ids.add(sid)
                     print(f"    Metadata {idx}/{len(items)}: {sid} artist={artist} uploaded={uploaded_at}")
                 except Exception as e:
                     print(f"    Metadata failed for {sid}: {e}")
@@ -274,12 +299,29 @@ async def cmd_crawl(args: argparse.Namespace, config: Config, db: Database) -> N
                 }))
                 write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", len(items), idx, "running", f"Page {page}, metadata {idx}/{len(items)}")
 
-            # 更新模式：遇到已下载且上传日期一致的作品则停止翻页（但仍更新当前页元数据）
+            # 更新模式：遇到历史缓存且上传日期一致的作品则停止翻页（但仍更新当前页元数据）
             if args.update:
                 for item in items:
                     sid = item.get("source_id", "")
-                    if not sid:
+                    if not sid or sid not in eligible_ids:
                         continue
+                    cached_state = cached_states.get(sid)
+                    if cached_state is not None:
+                        cached_uploaded_at, _origin_job_id = cached_state
+                        if _cached_item_is_updated(cached_uploaded_at, item):
+                            print(f"  Cached gallery updated on site, not a stop point: {sid} (cached={cached_uploaded_at}, site={item.get('uploaded_at', '')})")
+                            continue
+                        print(f"  Existing cache entry found: {sid}, stopping further pages")
+                        progress_file.write_text(json.dumps({
+                            "page": page,
+                            "next_cursor": next_cursor,
+                            "saved_ids": list(reserved_ids),
+                            "metadata_ids": list(metadata_done),
+                            "query": args.query,
+                        }))
+                        write_progress("crawl", CRAWL_TASK_ID, f"爬取: {args.query}", 0, page, "completed", f"已是最新，Page {page}")
+                        remove_progress("crawl", CRAWL_TASK_ID)
+                        return False
                     try:
                         existing = await db.get_gallery(args.source, sid)
                         if existing and existing.is_complete:
@@ -467,7 +509,7 @@ async def cmd_verify(args: argparse.Namespace, config: Config, db: Database) -> 
                 try:
                     row = await db.get_search_cache_row(source, sid)
                     old_cover = (row or {}).get("thumbnail", "") or ""
-                    new = await site.verify_gallery(sid, thumbs_dir, old_cover)
+                    new = await site.verify_gallery(sid, thumbs_dir, old_cover, (row or {}).get("thumb_path", "") or "")
                     if "error" in new:
                         print(f"  SKIP {sid}: {new['error']}")
                         errors += 1
@@ -570,7 +612,7 @@ async def cmd_verify_single(args: argparse.Namespace, config: Config, db: Databa
         old = dict(row) if row else None
         old_cover = (old or {}).get("thumbnail", "") or ""
 
-        result = await site.verify_gallery(source_id, thumbs_dir, old_cover)
+        result = await site.verify_gallery(source_id, thumbs_dir, old_cover, (old or {}).get("thumb_path", "") or "")
 
         if "error" in result:
             out_file.write_text(json.dumps({"error": result["error"], "old": old}, ensure_ascii=False))

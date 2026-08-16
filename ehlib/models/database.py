@@ -1028,6 +1028,34 @@ class Database:
             )
             return await cursor.fetchone() is not None
 
+    async def get_search_cache_states(
+        self, source: str, source_ids: list[str]
+    ) -> dict[str, tuple[str, int | None]]:
+        """Return upload date and origin job for cache rows that already exist."""
+        unique_ids = list(dict.fromkeys(sid for sid in source_ids if sid))
+        if not unique_ids:
+            return {}
+
+        states: dict[str, tuple[str, int | None]] = {}
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # Keep comfortably below SQLite's variable limit.
+            for start in range(0, len(unique_ids), 900):
+                chunk = unique_ids[start:start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = await db.execute(
+                    f"""SELECT source_id, uploaded_at, origin_job_id
+                        FROM search_cache
+                        WHERE source=? AND source_id IN ({placeholders})""",
+                    [source, *chunk],
+                )
+                for row in await cursor.fetchall():
+                    states[row["source_id"]] = (
+                        row["uploaded_at"] or "",
+                        row["origin_job_id"],
+                    )
+        return states
+
     async def get_search_cache(
         self,
         source: str | None = None,
