@@ -46,11 +46,11 @@ class FileManager:
     def first_page_path(self, gallery_dir: Path) -> Path | None:
         if not gallery_dir.exists():
             return None
-        for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        for ext in (".webp", ".jpg", ".jpeg", ".png", ".gif"):
             candidate = gallery_dir / f"001{ext}"
             if candidate.exists() and candidate.stat().st_size > 0:
                 return candidate
-        for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        for ext in (".webp", ".jpg", ".jpeg", ".png", ".gif"):
             candidate = gallery_dir / f"1{ext}"
             if candidate.exists() and candidate.stat().st_size > 0:
                 return candidate

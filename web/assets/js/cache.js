@@ -30,7 +30,7 @@ function cacheToggleCategory(el) {
             allBtn.classList.remove('active');
         }
     }
-    cacheSearch();
+    // 显式触发：移除自动 cacheSearch()，等用户按"筛选"按钮或 Enter（符合 project_memory 偏好显式触发而非自动触发）
 }
 
 function getCacheSelectedCategories() {
@@ -225,7 +225,7 @@ let _cacheLanguages = new Set(LANG_DEFAULTS);
 
 function cacheToggleLanguage(el) {
     _toggleLanguageTag(el, document.getElementById('cache_language_tags'), _cacheLanguages);
-    cacheSearch();
+    // 显式触发：移除自动 cacheSearch()，等用户按"筛选"按钮或 Enter
 }
 
 function getCacheSelectedLanguages() {
@@ -312,18 +312,131 @@ function renderCacheBatchBar() {
         '</div>';
 }
 
-function normalizeCacheTitle(title) {
+function normalizeTitle(title) {
     return String(title || '').replace(/\s+/g, ' ').trim();
 }
+var normalizeCacheTitle = normalizeTitle;
 
-function getCacheDisplayTitles(gallery) {
-    var original = normalizeCacheTitle(gallery.title);
-    var japanese = normalizeCacheTitle(gallery.title_jp);
+// ─── Tooling: ZWSP 强制软换行（Chromium -webkit-box + CJK 不换行老坑）───
+// 在 ① CJK 字符之间 / ② ASCII 与 CJK 相变点 / ③ 连续 8 个以上 ASCII 字母数字之间
+// 插入 U+200B ZERO WIDTH SPACE，保证 -webkit-box 下 word-break:break-all 能真正断行
+function _zwspWrap(s) {
+    if (!s) return '';
+    var zwsp = '\u200b';
+    var out = '';
+    var run = 0;
+    var prevC = '';
+    var prevType = 0; // 0=none, 1=CJK(汉/日/韩/符号), 2=ASCII 字母数字
+    function _type(c) {
+        var code = c.charCodeAt(0);
+        if (!c) return 0;
+        if (code <= 0x20) return -1;
+        if ((code >= 0x30 && code <= 0x39) || (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) return 2;
+        if (code < 0x80) return -1;
+        return 1;
+    }
+    for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i);
+        var t = _type(ch);
+        if (t !== -1) {
+            if (prevType !== 0 && prevC && ((t === 1 && prevType === 1) || (t !== prevType))) {
+                out += zwsp;
+                run = 0;
+            } else if (t === 2 && prevType === 2) {
+                run++;
+                if (run >= 8) { out += zwsp; run = 0; }
+            }
+            prevType = t;
+            prevC = ch;
+        } else {
+            run = 0; prevType = 0; prevC = '';
+        }
+        out += ch;
+    }
+    return out;
+}
+
+function getGalleryDisplayTitles(gallery) {
+    var original = normalizeTitle(gallery.title);
+    var japanese = normalizeTitle(gallery.title_jp);
     return {
         primary: japanese || original || '(无标题)',
-        secondary: japanese && original && japanese !== original ? original : ''
+        secondary: ''
     };
 }
+var getCacheDisplayTitles = getGalleryDisplayTitles;
+
+// ─── Tooling: 公共 tag 解析 + 多别名兜底显示（统一给 图库/缓存详情渲染共用）─────────
+// 输入：gallery.tags / gallery.tags_cn（JSON 字符串或对象数组）
+// 输出：Object { <type>: Array<{type, raw, cn, display, aliases, tooltip}> }
+//   display 选择逻辑（优先最短 alias：1) name_cn（翻译命中）2) 否则对 raw 按 | 拆：挑最短 alias（让 'kirito' 优先于 'kazuto kirigaya'），tooltip 写全所有别名方便用户知道完整原名
+var _TAG_SPLIT_RE = /\s*\|\s*/;
+function parseGalleryTagsForDisplay(tagSource) {
+    var grouped = {};
+    if (!tagSource) return grouped;
+    var parsed = null;
+    if (typeof tagSource === 'string') {
+        try { parsed = JSON.parse(tagSource); } catch (e) { return grouped; }
+    } else if (Array.isArray(tagSource)) {
+        parsed = tagSource;
+    }
+    if (!Array.isArray(parsed)) return grouped;
+    for (var i = 0; i < parsed.length; i++) {
+        var t = parsed[i];
+        if (!t || typeof t !== 'object') continue;
+        var type = String(t.type || t.namespace || 'other');
+        if (type === 'reclass') type = 'category';
+        var raw = String(t.name || t.raw || '');
+        var cn = String(t.name_cn || t.cn || '');
+        var aliases = [];
+        if (raw) {
+            var parts = raw.split(_TAG_SPLIT_RE);
+            for (var j = 0; j < parts.length; j++) {
+                var p = (parts[j] || '').trim();
+                if (p) aliases.push(p);
+            }
+        }
+        // 若有后端已给的 match_keys，也并入别名池（方便兜底查找翻译）
+        if (Array.isArray(t.match_keys)) {
+            for (var k = 0; k < t.match_keys.length; k++) {
+                var mm = String(t.match_keys[k] || '').trim();
+                if (mm && aliases.indexOf(mm) < 0) aliases.push(mm);
+            }
+        }
+        var display = '';
+        if (cn) {
+            display = cn;
+        } else if (aliases.length > 0) {
+            var shortest = aliases[0];
+            for (var m = 1; m < aliases.length; m++) {
+                if (aliases[m].length < shortest.length) shortest = aliases[m];
+            }
+            display = shortest;
+        } else {
+            display = raw;
+        }
+        var tooltip = '';
+        if (cn && aliases.length > 0) {
+            tooltip = cn + ' — ' + aliases.join(' | ');
+        } else if (aliases.length > 1) {
+            tooltip = aliases.join(' | ');
+        } else {
+            tooltip = display;
+        }
+        if (!grouped[type]) grouped[type] = [];
+        grouped[type].push({
+            type: type,
+            raw: raw,
+            cn: cn,
+            display: display,
+            aliases: aliases,
+            tooltip: tooltip,
+            match_keys: Array.isArray(t.match_keys) ? t.match_keys : []
+        });
+    }
+    return grouped;
+}
+
 function renderCacheGrid() {
     const body = document.getElementById('cache_grid_body');
     if (!_cacheResults || _cacheResults.length === 0) {
@@ -335,7 +448,7 @@ function renderCacheGrid() {
     renderCacheBatchBar();
     body.innerHTML = '<div class="gallery-flex-grid" id="cache_grid">' +
         _cacheResults.map(function(g, idx) {
-            var displayTitles = getCacheDisplayTitles(g);
+            var displayTitles = getGalleryDisplayTitles(g);
             var catColor = CAT_COLORS[g.category] || '#6c757d';
             var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(g.category) + '</span>' : '';
             var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
@@ -347,7 +460,7 @@ function renderCacheGrid() {
             var source_id = g.source_id || '';
             var escapedSid = escapeAttr(source_id);
             var downloadBtn = g.is_local
-                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="阅读"><i class="fas fa-book-open"></i></button>'
+                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="openReader(\'' + escapeAttr(g.source) + '\',\'' + escapedSid + '\')" title="本地阅览"><i class="fas fa-book-open"></i></button>'
                 : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
             var sourceBtn = '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>';
             return '<div>' +
@@ -357,17 +470,21 @@ function renderCacheGrid() {
                 thumbHtml +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
-                '<div class="card-body px-2 py-1">' +
-                '<div style="cursor:pointer" title="点击查看详情" onclick="showCacheDetail(' + idx + ')">' +
-                '<div class="small title-clamp" style="color:var(--bs-link-color)">' + escapeHtml(displayTitles.primary) + '</div>' +
-                (displayTitles.secondary ? '<div class="text-muted text-truncate" style="font-size:.7rem" title="' + escapeAttr(displayTitles.secondary) + '">' + escapeHtml(displayTitles.secondary) + '</div>' : '') +
+                '<div class="card-body px-2 py-1 card-info-body">' +
+                // 第 1~3 行：中文标题 + 日语标题，合占严格 3 行（主最多 2 行 / 副 1 行；无副时主占满 3 行）
+                // ZWSP 注入保证 -webkit-box 容器下 CJK/假名/罗马字序列能真正换行
+                '<div class="title-double-clamp" style="cursor:pointer" title="' + escapeAttr(displayTitles.primary + (displayTitles.secondary ? '\n' + displayTitles.secondary : '')) + '" onclick="showCacheDetail(' + idx + ')">' +
+                '<div class="title-primary" style="color:var(--bs-link-color)">' + _zwspWrap(escapeHtml(displayTitles.primary)) + '</div>' +
+                (displayTitles.secondary ? '<div class="title-secondary text-muted">' + _zwspWrap(escapeHtml(displayTitles.secondary)) + '</div>' : '') +
                 '</div>' +
-                '<div class="d-flex justify-content-between align-items-center gap-1" style="margin-top:2px">' +
+                // 第 4 行（左对齐）：分类 badge + 语种 badge + 页数
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-top">' +
                 catBadge +
                 langBadge +
-                '</div>' +
-                '<div class="d-flex justify-content-between align-items-center" style="margin-top:2px">' +
                 '<span class="small text-muted">' + (g.total_pages || 0) + 'p</span>' +
+                '</div>' +
+                // 第 5 行（右对齐）：本地阅览 / 下载 / ExHentai 外链
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom">' +
                 '<span class="d-inline-flex gap-1">' + downloadBtn + sourceBtn + '</span>' +
                 '</div>' +
                 '</div>' +
@@ -423,34 +540,15 @@ function cacheSearch() {
 
 // ─── Search scope toggles ─────────────────────────────
 
-function toggleSearchScope(el) {
-    var allBtn = document.querySelector('#cache_search_scope .cat-tag[data-scope="all"]');
-    if (el.dataset.scope === 'all') {
-        var active = !el.classList.contains('active');
-        document.querySelectorAll('#cache_search_scope .cat-tag').forEach(function(t) {
-            t.classList.toggle('active', active);
-        });
-    } else {
-        el.classList.toggle('active');
-        var scopeBtns = document.querySelectorAll('#cache_search_scope .cat-tag[data-scope]:not([data-scope="all"])');
-        var activeBtns = document.querySelectorAll('#cache_search_scope .cat-tag.active[data-scope]:not([data-scope="all"])');
-        if (allBtn) allBtn.classList.toggle('active', activeBtns.length === scopeBtns.length);
-    }
-    cacheSearch();
-}
-
 function getCacheSearchScope() {
-    var allBtn = document.querySelector('#cache_search_scope .cat-tag[data-scope="all"]');
-    if (allBtn && allBtn.classList.contains('active')) return 'all';
-    var scopes = [];
-    document.querySelectorAll('#cache_search_scope .cat-tag.active[data-scope]').forEach(function(t) {
-        if (t.dataset.scope !== 'all') scopes.push(t.dataset.scope);
-    });
-    return scopes.length > 0 ? scopes.join(',') : 'all';
+    var el = document.getElementById('cache_search_scope');
+    if (!el) return 'all';
+    return (el.value || 'all').trim() || 'all';
 }
 
 function resetSearchScope() {
-    document.querySelectorAll('#cache_search_scope .cat-tag').forEach(function(t) { t.classList.add('active'); });
+    var el = document.getElementById('cache_search_scope');
+    if (el) el.value = 'all';
 }
 
 function cacheClearFilter() {
@@ -796,6 +894,31 @@ async function stopVerify() {
     renderVerifyStatus(null);
 }
 
+function addTagToCacheSearch(type, rawName, nameCn) {
+    // 把 popup 点的标签累加到缓存检索框（AND 关系用逗号分隔），scope 根据标签 type 设定下拉框
+    // —— 显式触发搜索：仅修改输入框/下拉，不自动调用 cacheSearch()，等用户点"筛选"按钮或按 Enter（避免 NAS/大库点 tag 时强制 4s+ 延迟）
+    var input = document.getElementById('cache_keyword');
+    var scopeSel = document.getElementById('cache_search_scope');
+    var value = (nameCn && nameCn.trim()) ? nameCn.trim() : (rawName || '').trim();
+    if (!value) return;
+    // 1) scope 设定（只在当前 scope 仍是默认 all 时覆盖；用户手动改过就保留）
+    if (scopeSel && scopeSel.value === 'all') {
+        var CONTENT_TYPES = new Set(['male','female','parody','character','mixed','other','language','category','cosplayer']);
+        if (type === 'artist' || type === 'group') scopeSel.value = 'author';
+        else if (CONTENT_TYPES.has(type)) scopeSel.value = (nameCn && nameCn.trim()) ? 'tags_cn' : 'tags';
+    }
+    // 2) 去重 + 累加（用逗号做 AND 分隔符）
+    var parts = input.value.split(/[\s]*[,;，&][\s]*|[\s]{2,}/).map(function (s) { return s.trim(); }).filter(Boolean);
+    var exists = false;
+    for (var i = 0; i < parts.length; i++) {
+        if (parts[i].toLowerCase() === value.toLowerCase()) { exists = true; break; }
+    }
+    if (!exists) parts.push(value);
+    input.value = parts.join(', ');
+    // —— 不再自动触发 cacheSearch() + 不关弹窗，允许用户连续点多个 tag 后手动按"筛选"
+    //    用户如果想立刻搜，直接按 Enter 或点"筛选"按钮即可（符合 project_memory 显式触发原则）
+}
+
 // ─── Detail Popup ─────────────────────────────────────────
 
 function showCacheDetail(idx) {
@@ -814,32 +937,25 @@ function showCacheDetail(idx) {
     if (titleEl) titleEl.textContent = detailTitles.primary;
 
     var tagsHtml = '';
-    var tagSource = gallery.tags_cn || gallery.tags;
-    if (tagSource) {
-        try {
-            var parsed = JSON.parse(tagSource);
-            if (Array.isArray(parsed)) {
-                var typeLabels = { 'artist':'作者', 'parody':'原作', 'character':'角色', 'group':'社团', 'male':'男性', 'female':'女性', 'language':'语言', 'category':'分类', 'mixed':'混合', 'cosplayer':'Coser', 'other':'其他' };
-                var typeColors = { 'artist':'#e74c3c', 'male':'#3498db', 'female':'#e91e63', 'parody':'#9b59b6', 'character':'#27ae60', 'group':'#f39c12', 'language':'#0dcaf0', 'category':'#95a5a6', 'mixed':'#607d8b', 'cosplayer':'#00bcd4', 'other':'#6b7280' };
-                var grouped = {};
-                parsed.forEach(function(t) {
-                    var type = t.type || 'other';
-                    if (type === 'category' && gallery.category) return;
-                    if (!grouped[type]) grouped[type] = [];
-                    grouped[type].push({ type: type, raw: t.name || '', cn: t.name_cn || '' });
-                });
-                var order = ['parody', 'character', 'artist', 'group', 'male', 'female', 'cosplayer', 'mixed', 'language', 'category', 'other'];
-                tagsHtml = order.map(function(type) {
-                    if (!grouped[type] || grouped[type].length === 0) return '';
-                    var color = typeColors[type] || '#6b7280';
-                    var label = typeLabels[type] || type;
-                    var badges = grouped[type].map(function(tag) {
-                        return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="点击加入爬取关键词" onclick="addTagToCrawlKeyword(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\')">' + escapeHtml(tag.cn || tag.raw) + '</span>';
-                    }).join('');
-                    return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
-                }).filter(function(s) { return s; }).join('');
-            }
-        } catch(e) {}
+    var grouped = parseGalleryTagsForDisplay(gallery.tags_cn || gallery.tags);
+    // 过滤：如果图库本身有 category 值，不再在 tag 区重复显示 category 类 tag
+    if (grouped && gallery.category) { delete grouped['category']; }
+    if (grouped && Object.keys(grouped).length > 0) {
+        var typeLabels = { 'artist':'作者', 'parody':'原作', 'character':'角色', 'group':'社团', 'male':'男性', 'female':'女性', 'language':'语言', 'category':'分类', 'mixed':'混合', 'cosplayer':'Coser', 'other':'其他' };
+        var typeColors = { 'artist':'#e74c3c', 'male':'#3498db', 'female':'#e91e63', 'parody':'#9b59b6', 'character':'#27ae60', 'group':'#f39c12', 'language':'#0dcaf0', 'category':'#95a5a6', 'mixed':'#607d8b', 'cosplayer':'#00bcd4', 'other':'#6b7280' };
+        var order = ['parody', 'character', 'artist', 'group', 'male', 'female', 'cosplayer', 'mixed', 'language', 'category', 'other'];
+        tagsHtml = order.map(function(type) {
+            if (!grouped[type] || grouped[type].length === 0) return '';
+            var color = typeColors[type] || '#6b7280';
+            var label = typeLabels[type] || type;
+            var badges = grouped[type].map(function(tag) {
+                var display = tag.display || tag.cn || tag.raw;
+                var tooltip = tag.tooltip || display;
+                var cnArg = tag.cn || (tag.display && tag.display !== tag.raw ? tag.display : '');
+                return '<span class="badge me-1 mb-1" style="background:' + color + ';font-size:.75rem;cursor:pointer" title="' + escapeAttr(tooltip) + '" onclick="addTagToCacheSearch(\'' + escapeAttr(tag.type) + '\',\'' + escapeAttr(tag.raw) + '\',\'' + escapeAttr(cnArg) + '\')">' + escapeHtml(display) + '</span>';
+            }).join('');
+            return '<div class="mb-1"><span class="small fw-semibold me-2" style="color:' + color + ';min-width:40px;display:inline-block">' + label + ':</span>' + badges + '</div>';
+        }).filter(function(s) { return s; }).join('');
     }
 
     bodyEl.innerHTML =

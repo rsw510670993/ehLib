@@ -1,4 +1,6 @@
 // ─── Gallery (Card Grid) ───
+// 共用工具（cache.js 先于 gallery.js 引入）：
+//   normalizeTitle / _zwspWrap / getGalleryDisplayTitles / CAT_COLORS
 let _galleryFilters = {};
 let _galleryPage = 1;
 let _galleryPerPage = 30;
@@ -54,8 +56,12 @@ async function loadGalleries(filters) {
 
     body.innerHTML = '<div class="gallery-flex-grid" id="gallery_grid">' +
         data.galleries.map(function(g) {
-            var displayTitle = g.title_jp || g.title;
+            // 与 cache.js 共用的双标题优先级分配逻辑（日语 primary，中文/英文≠日语时放 secondary）
+            var displayTitles = getGalleryDisplayTitles(g);
+            var catColor = window.CAT_COLORS ? (window.CAT_COLORS[g.category] || '#6c757d') : '#6c757d';
+            var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(g.category) + '</span>' : '';
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
+            var sourceBadge = '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + escapeHtml(g.source) + '</span>';
             var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
             var lang = g.language || '';
             var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
@@ -65,24 +71,45 @@ async function loadGalleries(filters) {
             var downloadedPages = parseInt(g.downloaded_pages || 0, 10) || 0;
             var isComplete = g.is_complete !== false && g.is_complete !== 0 && g.is_complete !== '0';
             var progressText = isComplete ? (totalPages + 'p') : (downloadedPages + '/' + totalPages + 'p');
+            var progressClass = isComplete ? 'small text-muted' : 'small text-warning fw-semibold';
             var cardClass = isComplete ? '' : ' gallery-card-incomplete';
             var clickAction = isComplete
                 ? 'openReader(\'' + g.source + '\',\'' + g.source_id + '\')'
                 : 'openIncompleteGalleryRetry(\'' + g.source + '\',\'' + g.source_id + '\')';
             var statusBadge = isComplete ? '' : '<span class="badge bg-warning text-dark gallery-status-badge">未完成</span>';
+            // 按钮：本地阅览（已下载）/ 重试（未完成） + ExHentai 外链
+            var readBtn = isComplete
+                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="event.stopPropagation();openReader(\'' + g.source + '\',\'' + g.source_id + '\')" title="本地阅览"><i class="fas fa-book-open"></i></button>'
+                : '<button class="btn btn-sm btn-outline-warning py-0 px-1" onclick="event.stopPropagation();openIncompleteGalleryRetry(\'' + g.source + '\',\'' + g.source_id + '\')" title="继续下载"><i class="fas fa-redo-alt"></i></button>';
+            var escapedSid = escapeAttr(g.source_id || '');
+            var exLink = (g.source && g.source.toLowerCase() === 'exhentai')
+                ? '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>'
+                : '';
+            var titleTooltip = displayTitles.primary + (displayTitles.secondary ? '\n' + displayTitles.secondary : '');
             return '<div data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
                 '<div class="card h-100 gallery-card' + cardClass + '" onclick="' + clickAction + '">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
                 '<img src="' + imgUrl + '" data-fallback="' + fallbackImgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="fallbackImageOnError(this)" onload="onCoverLoad(this)">' +
                 statusBadge +
-                '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitle) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
+                '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitles.primary) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
-                '<div class="card-body p-2">' +
-                '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
-                '<div class="d-flex justify-content-between align-items-center gap-1">' +
+                '<div class="card-body px-2 py-1 card-info-body">' +
+                // 第1~3行：双标题严格 3 行高共享（Flex Column + 独立 line-clamp，与 cache.js 同构）
+                // 注：_zwspWrap() 在 cache.js 里注入，给 CJK/假名/罗马字序列强制软换行点，防止 -webkit-box 里不换行
+                '<div class="title-double-clamp" title="' + escapeAttr(titleTooltip) + '">' +
+                '<div class="title-primary" style="color:var(--bs-link-color)">' + _zwspWrap(escapeHtml(displayTitles.primary)) + '</div>' +
+                (displayTitles.secondary ? '<div class="title-secondary text-muted">' + _zwspWrap(escapeHtml(displayTitles.secondary)) + '</div>' : '') +
+                '</div>' +
+                // 第4行（左对齐）：分类+语种+来源badge+页数/进度
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-top">' +
+                catBadge +
                 langBadge +
-                '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + g.source + '</span>' +
-                '<span class="small ' + (isComplete ? 'text-muted' : 'text-warning fw-semibold') + '">' + progressText + '</span>' +
+                sourceBadge +
+                '<span class="' + progressClass + '">' + progressText + '</span>' +
+                '</div>' +
+                // 第5行（右对齐）：阅读/重试按钮 + ExHentai 外链
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom">' +
+                '<span class="d-inline-flex gap-1">' + readBtn + exLink + '</span>' +
                 '</div>' +
                 '</div>' +
                 '</div>' +
