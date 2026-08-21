@@ -38,7 +38,10 @@ class TagTranslator:
                     if isinstance(tag_val, dict):
                         cn = tag_val.get("name", "")
                         if cn:
-                            tag_map[tag_key.lower()] = cn
+                            normalized_key = str(tag_key).lower()
+                            tag_map[normalized_key] = cn
+                            for alias in self._split_multi_alias(str(tag_key)):
+                                tag_map.setdefault(alias.lower(), cn)
                 self._ns_map[ns_name] = tag_map
             self._loaded = True
             return True
@@ -64,14 +67,43 @@ class TagTranslator:
         "category": "分类",
     }
 
-    def translate(self, ns: str, name: str) -> str | None:
+    def _split_multi_alias(self, s: str) -> list[str]:
+        """把 'kazuto kirigaya | kirito' 或 'kirito|kazuto kirigaya' 拆成多 alias 列表"""
+        if not s:
+            return []
+        out: list[str] = []
+        for part in re.split(r'\s*\|\s*', s):
+            p = part.strip()
+            if p:
+                out.append(p)
+        return out
+
+    def translate(self, ns: str, name: str, extra_match_keys: list[str] | None = None) -> str | None:
         if not self._loaded:
             return None
         lookup_ns = self.NS_ALIAS.get(ns, ns)
         ns_map = self._ns_map.get(lookup_ns)
         if not ns_map:
             return None
-        return ns_map.get(name.lower())
+        candidates: list[str] = []
+        if name:
+            candidates.append(str(name))
+            candidates.extend(self._split_multi_alias(str(name)))
+        if extra_match_keys:
+            for k in extra_match_keys:
+                if k and k not in candidates:
+                    candidates.append(str(k))
+                    for alias in self._split_multi_alias(str(k)):
+                        if alias and alias not in candidates:
+                            candidates.append(alias)
+        for cand in candidates:
+            try:
+                cn = ns_map.get(cand.lower())
+            except Exception:
+                cn = None
+            if cn:
+                return cn
+        return None
 
     def translate_tags(self, tags_json: str) -> str:
         if not tags_json or not self._loaded:
@@ -82,9 +114,16 @@ class TagTranslator:
                 return tags_json
             changed = False
             for t in tags:
+                if not isinstance(t, dict):
+                    continue
                 ns = t.get("type", "")
                 name = t.get("name", "")
-                cn = self.translate(ns, name)
+                extra = t.get("match_keys")
+                if isinstance(extra, list):
+                    extra_match_keys: list[str] = [str(x) for x in extra if x is not None]
+                else:
+                    extra_match_keys = []
+                cn = self.translate(ns, name, extra_match_keys=extra_match_keys)
                 if cn:
                     t["name_cn"] = cn
                     changed = True

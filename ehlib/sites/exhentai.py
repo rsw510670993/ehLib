@@ -1,6 +1,6 @@
 import json
 import httpx
-from asyncio import sleep
+from asyncio import sleep, to_thread
 from math import ceil
 from pathlib import Path
 from urllib.parse import urljoin, urlencode
@@ -12,7 +12,8 @@ from ehlib.core.session_manager import SessionManager
 from ehlib.models.schemas import Gallery, Tag
 from ehlib.sites.base import SiteBase
 from ehlib.translate.tag_translator import TagTranslator
-from ehlib.utils.helpers import parse_exhentai_url
+from ehlib.utils.helpers import extract_tag_match_keys_from_href, parse_exhentai_url
+from ehlib.utils.image_compression import ImageCompressor
 from ehlib.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,6 +36,12 @@ class ExhentaiSite(SiteBase):
         self.has_next: bool = False
         self.total_results: int = 0
         self.total_pages: int = 0
+        self._image_compressor = ImageCompressor(
+            enabled=bool(config.download.get("convert_to_webp", True)),
+            quality=config.download.get("webp_quality", 88),
+            method=config.download.get("webp_method", 4),
+            min_savings_percent=config.download.get("webp_min_savings_percent", 5),
+        )
 
     def parse_gallery_id_from_url(self, url: str) -> str:
         result = parse_exhentai_url(url)
@@ -89,7 +96,7 @@ class ExhentaiSite(SiteBase):
         language = (gallery.language or "").lower()
         title_jp = gallery.title_jp or ""
         group_name = gallery.group_name or ""
-        tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
+        tags_json = json.dumps([t.to_dict() for t in gallery.tags], ensure_ascii=False) if gallery.tags else ""
         tags_cn_json = ""
         if tags_json:
             global _translator_loaded
@@ -103,15 +110,14 @@ class ExhentaiSite(SiteBase):
             safe = source_id.replace("/", "_").replace("\\", "_")
             ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
             dest = Path(thumbs_dir) / f"{safe}.{ext}"
-            dest.parent.mkdir(parents=True, exist_ok=True)
             client = await self._session.get_client(self.name)
             resp = await client.get(cover_url)
             resp.raise_for_status()
-            dest.write_bytes(resp.content)
-            thumb_path = str(dest.resolve())
+            saved_path = await to_thread(self._image_compressor.save_page_bytes, resp.content, dest)
+            thumb_path = str(saved_path.resolve())
         return artist, thumb_path, uploaded_at, category, cover_url, language, title_jp, group_name, tags_json, tags_cn_json
 
-    async def verify_gallery(self, source_id: str, thumbs_dir: str, old_cover_url: str = "") -> dict:
+    async def verify_gallery(self, source_id: str, thumbs_dir: str, old_cover_url: str = "", old_thumb_path: str = "") -> dict:
         """校对单个画廊：获取最新数据并下载封面，返回新旧数据对比"""
         gid, token = self._parse_gid_token(source_id)
         url = f"{EXHENTAI_BASE}/g/{gid}/{token}/"
@@ -124,7 +130,7 @@ class ExhentaiSite(SiteBase):
         response.raise_for_status()
         gallery = self._parse_html(response.text, source_id)
 
-        tags_json = json.dumps([{"type": t.type, "name": t.name} for t in gallery.tags]) if gallery.tags else ""
+        tags_json = json.dumps([t.to_dict() for t in gallery.tags], ensure_ascii=False) if gallery.tags else ""
         tags_cn_json = ""
         if tags_json:
             global _translator_loaded
@@ -151,15 +157,17 @@ class ExhentaiSite(SiteBase):
             safe = source_id.replace("/", "_").replace("\\", "_")
             ext = cover_url.rsplit(".", 1)[-1].split("?")[0] if "." in cover_url else "jpg"
             dest = Path(thumbs_dir) / f"{safe}.{ext}"
-            if cover_url == old_cover_url and dest.is_file():
+            current_thumb = Path(old_thumb_path) if old_thumb_path else None
+            if cover_url == old_cover_url and current_thumb and current_thumb.is_file():
+                thumb_path = str(current_thumb.resolve())
+            elif cover_url == old_cover_url and dest.is_file():
                 thumb_path = str(dest.resolve())
             else:
-                dest.parent.mkdir(parents=True, exist_ok=True)
                 client = await self._session.get_client(self.name)
                 resp = await client.get(cover_url)
                 resp.raise_for_status()
-                dest.write_bytes(resp.content)
-                thumb_path = str(dest.resolve())
+                saved_path = await to_thread(self._image_compressor.save_page_bytes, resp.content, dest)
+                thumb_path = str(saved_path.resolve())
 
         new["cover_url"] = cover_url
         new["thumb_path"] = thumb_path
@@ -544,12 +552,22 @@ class ExhentaiSite(SiteBase):
         if title_jp_elem:
             title_jp = title_jp_elem.get_text(strip=True)
 
+        def _split_display_aliases(name: str) -> list[str]:
+            if not name:
+                return []
+            out = []
+            for part in str(name).split('|'):
+                p = part.strip()
+                if p:
+                    out.append(p)
+            return out
+
         artist = ""
         group_name = ""
         language = ""
         language_candidates = []
         category = ""
-        tags = []
+        tags: list[Tag] = []
 
         tag_rows = soup.select("#taglist tr")
         if not tag_rows:
@@ -571,7 +589,17 @@ class ExhentaiSite(SiteBase):
                 tag_name = tag_link.get_text(strip=True)
                 if not tag_name:
                     continue
-                tags.append(Tag(type=tag_type, name=tag_name))
+                href = tag_link.get("href", "")
+                match_keys: list[str] = []
+                for k in extract_tag_match_keys_from_href(href):
+                    if k and k not in match_keys:
+                        match_keys.append(k)
+                for k in _split_display_aliases(tag_name):
+                    if k and k not in match_keys:
+                        match_keys.append(k)
+                if tag_name and tag_name not in match_keys:
+                    match_keys.append(tag_name)
+                tags.append(Tag(type=tag_type, name=tag_name, match_keys=match_keys))
 
                 if tag_type == "artist":
                     artist = tag_name
@@ -585,7 +613,17 @@ class ExhentaiSite(SiteBase):
                     tag_name = tag_link.get_text(strip=True)
                     if not tag_name or tag_name == tag_type.rstrip(":"):
                         continue
-                    tags.append(Tag(type=tag_type, name=tag_name))
+                    href = tag_link.get("href", "")
+                    match_keys: list[str] = []
+                    for k in extract_tag_match_keys_from_href(href):
+                        if k and k not in match_keys:
+                            match_keys.append(k)
+                    for k in _split_display_aliases(tag_name):
+                        if k and k not in match_keys:
+                            match_keys.append(k)
+                    if tag_name and tag_name not in match_keys:
+                        match_keys.append(tag_name)
+                    tags.append(Tag(type=tag_type, name=tag_name, match_keys=match_keys))
 
                     if tag_type == "artist":
                         artist = tag_name
@@ -611,7 +649,16 @@ class ExhentaiSite(SiteBase):
                         key = (tag_type, tag_name)
                         if tag_name and key not in seen:
                             seen.add(key)
-                            tags.append(Tag(type=tag_type, name=tag_name))
+                            match_keys: list[str] = []
+                            for k in extract_tag_match_keys_from_href(href):
+                                if k and k not in match_keys:
+                                    match_keys.append(k)
+                            for k in _split_display_aliases(tag_name):
+                                if k and k not in match_keys:
+                                    match_keys.append(k)
+                            if tag_name and tag_name not in match_keys:
+                                match_keys.append(tag_name)
+                            tags.append(Tag(type=tag_type, name=tag_name, match_keys=match_keys))
                             if tag_type == "artist" and not artist:
                                 artist = tag_name
                             elif tag_type == "group" and not group_name:

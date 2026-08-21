@@ -14,6 +14,7 @@ from ehlib.sites.nhentai import NhentaiSite
 from ehlib.sites.exhentai import ExhentaiSite
 from ehlib.sites.base import SiteBase
 from ehlib.storage.file_manager import FileManager
+from ehlib.utils.image_compression import ImageCompressor
 from ehlib.utils.logger import get_logger
 from ehlib.utils.progress import write_progress, remove_progress
 
@@ -35,6 +36,12 @@ class Downloader:
         self._max_concurrent = config.download.get("max_concurrent", 3)
         self._retry_times = config.download.get("retry_times", 3)
         self._retry_delay = config.download.get("retry_delay", 5)
+        self._image_compressor = ImageCompressor(
+            enabled=bool(config.download.get("convert_to_webp", True)),
+            quality=config.download.get("webp_quality", 88),
+            method=config.download.get("webp_method", 4),
+            min_savings_percent=config.download.get("webp_min_savings_percent", 5),
+        )
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
 
     async def download(self, source: str, identifier: str, force: bool = False, skip_existing: bool = False) -> Gallery:
@@ -67,6 +74,11 @@ class Downloader:
                 await self._db.save_gallery(gallery)
                 await self._db.register_completed_refresh_target(source, gallery.source_id)
                 return gallery
+            else:
+                skip_existing = True
+                logger.info(
+                    "Resuming incomplete gallery %s/%s and skipping existing pages.", source, gallery.source_id
+                )
 
         gallery_dir = self._file_manager.create_gallery_dir(source, gallery.source_id, gallery.title)
         gallery.local_path = str(gallery_dir)
@@ -460,8 +472,7 @@ class Downloader:
                 page_num, page_url = page_items[idx]
                 ext = self._extract_ext(page_url)
                 page_path = self._file_manager.page_path(gallery_dir, page_num, ext)
-                page_path.parent.mkdir(parents=True, exist_ok=True)
-                page_path.write_bytes(data)
+                await asyncio.to_thread(self._image_compressor.save_page_bytes, data, page_path)
 
             logger.info("Browser downloaded %d/%d pages", len(results), len(urls))
             if len(results) != len(urls):
@@ -530,14 +541,13 @@ class Downloader:
     ) -> None:
         for attempt in range(self._retry_times):
             try:
-                if path.exists() and path.stat().st_size > 0:
+                if self._image_compressor.find_existing_page_file(path) is not None:
                     return
                 if stats is not None and stats_key is not None:
                     stats[stats_key] = stats.get(stats_key, 0) + 1
                 response = await self._session.fetch(source, url)
                 response.raise_for_status()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(response.content)
+                await asyncio.to_thread(self._image_compressor.save_page_bytes, response.content, path)
                 return
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 403:
