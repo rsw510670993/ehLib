@@ -174,7 +174,16 @@ function confirmDialog(options) {
         document.addEventListener('keydown', _onKey, true);
         document.addEventListener('selectstart', _onSelStartOrEnd, true);
         document.addEventListener('selectend', _onSelStartOrEnd, true);
+        var backdropsBefore = new Set(document.querySelectorAll('body > .modal-backdrop'));
+        modalEl.addEventListener('hidden.bs.modal', function () {
+            if (document.querySelector('.modal.show')) document.body.classList.add('modal-open');
+        }, { once: true });
         modal.show();
+        var newBackdrops = Array.from(document.querySelectorAll('body > .modal-backdrop')).filter(function (el) {
+            return !backdropsBefore.has(el);
+        });
+        var confirmBackdrop = newBackdrops.length ? newBackdrops[newBackdrops.length - 1] : null;
+        if (confirmBackdrop) confirmBackdrop.classList.add('confirm-modal-backdrop');
     });
 }
 function promptDialog(options) {

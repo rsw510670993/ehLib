@@ -1101,6 +1101,8 @@ try {
                     $total_pages = (int)($row['total_pages'] ?? 0);
                     $downloaded_pages = count_downloaded_pages($row['local_path'] ?? '');
                     $is_complete = (int)($row['is_complete'] ?? 0) === 1;
+                    $compression_info = @json_decode((string)($row['compression_info'] ?? ''), true);
+                    if (!is_array($compression_info)) $compression_info = [];
                     $galleries[] = [
                         'id' => (int)($row['id'] ?? 0),
                         'source' => $row['source'] ?? '',
@@ -1111,6 +1113,9 @@ try {
                         'category' => $row['category'] ?? '',
                         'file_size' => (int)($row['file_size'] ?? 0),
                         'compression_status' => $row['compression_status'] ?? '',
+                        'compression_savings_pct' => isset($compression_info['savings_pct_overall'])
+                            ? (float)$compression_info['savings_pct_overall'] : null,
+                        'compression_used_count' => (int)($compression_info['used_webp_count'] ?? 0),
                         'pages' => $total_pages,
                         'total_pages' => $total_pages,
                         'downloaded_pages' => $downloaded_pages,

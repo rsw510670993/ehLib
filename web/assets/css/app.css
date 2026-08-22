@@ -21,6 +21,8 @@ body { background: #f5f7fa; }
 .output-box .error { color: #ef4444; }
 .output-box .warn { color: #eab308; }
 .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 9999; }
+#confirm_modal { z-index: 1085; }
+body > .modal-backdrop.confirm-modal-backdrop { z-index: 1080; }
 
 /* ─── Downloads Progress Tray ─── */
 .downloads-tray { flex-shrink: 0; background: #1e293b; color: #e2e8f0; font-size: .82rem; display: flex; flex-direction: column; }
@@ -66,22 +68,26 @@ body { background: #f5f7fa; }
          有副：主标题 2 行 + 副标题 1 行 = 精确 3 行总高；长标题在自己的盒子里截断
          无副：:only-child 主标题单独吞 3 行 + clamp:3
    绕开 Chromium -webkit-line-clamp 跨子元素合并为一行的老坑 */
-.gallery-card .card-body.card-info-body { row-gap: 3px; }
+.gallery-card .card-body.card-info-body {
+    justify-content: flex-start;
+    row-gap: 3px;
+}
 .gallery-card .card-info-body .card-info-row.card-row-top {
-    display: grid !important;
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
+    display: flex !important;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
+    overflow: hidden;
 }
 .gallery-card .card-info-body .card-info-row.card-row-top > * {
-    display: flex;
+    display: inline-flex;
     justify-content: center;
     align-items: center;
+    flex: 0 0 auto;
     min-width: 0;
     max-width: 100%;
 }
-.gallery-card .card-info-body .card-info-row.card-row-bottom { justify-content: flex-end; }
+.gallery-card .card-info-body .card-info-row.card-row-bottom { justify-content: flex-start; }
 .gallery-card .card-info-body .title-double-clamp {
     --title-lh: 1.25rem;
     display: flex; flex-direction: column; gap: 0;
@@ -115,6 +121,14 @@ body { background: #f5f7fa; }
 }
 .gallery-card .card-info-body .card-info-row { min-height: calc(1.4em + 2px); }
 .lang-badge { display: inline-block; padding: .35em .65em; font-size: .65rem; font-weight: 600; line-height: 1; border-radius: .375rem; box-shadow: inset 0 0 0 1px; white-space: nowrap; }
+.gallery-card .gallery-meta-chip { padding: .24em .42em; font-size: .62rem; line-height: 1; white-space: nowrap; }
+.gallery-card .gallery-page-count { font-size: .68rem; line-height: 1; white-space: nowrap; }
+.gallery-card .gallery-row-actions { display: inline-flex !important; align-items: center; gap: 2px; overflow: visible !important; }
+.gallery-card .gallery-row-actions .btn,
+.gallery-card .gallery-mini-btn { width: 22px; height: 20px; padding: 0 !important; font-size: .66rem; line-height: 18px; }
+.gallery-card .gallery-compression-row { min-width: 0; }
+.gallery-card .gallery-compress-state { font-size: .68rem; font-weight: 700; white-space: nowrap; }
+.gallery-card .gallery-compress-saving { font-size: .66rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gallery-flex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: .75rem; }
 .gallery-flex-grid > div, #cache_grid > div { min-width: 0; }
 /* 缓存页：卡片固定最小宽 → 在 max-width:1200px 容器内正好一排放 5 本（5×210 + 4×12 = 1098 < 1200，刚好）；再更大屏也不会 >5 列（通过限制 cache_grid 容器 max-width 实现，而图库是自然铺满） */
