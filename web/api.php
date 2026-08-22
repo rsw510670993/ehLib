@@ -204,6 +204,25 @@ function resolve_download_path() {
     return normalize_path($root . DIRECTORY_SEPARATOR . $download_path);
 }
 
+function resolve_compress_work_path() {
+    global $root;
+    // Keep this in sync with ehlib.cmd_compress's default work root.
+    return normalize_path($root . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'downloads' . DIRECTORY_SEPARATOR . 'compress_work');
+}
+
+function resolve_compress_info_work_dir($work_dir) {
+    global $root;
+    $work_dir = trim((string)$work_dir);
+    if ($work_dir === '') return '';
+    $is_absolute = preg_match('/^[A-Za-z]:[\\\\\/]/', $work_dir)
+        || substr($work_dir, 0, 1) === '/'
+        || substr($work_dir, 0, 2) === '\\\\';
+    if (!$is_absolute) {
+        $work_dir = $root . DIRECTORY_SEPARATOR . $work_dir;
+    }
+    return normalize_path($work_dir);
+}
+
 function is_path_within($child, $parent) {
     $child = rtrim(strtolower(normalize_path($child)), DIRECTORY_SEPARATOR);
     $parent = rtrim(strtolower(normalize_path($parent)), DIRECTORY_SEPARATOR);
@@ -415,7 +434,14 @@ function run_python($args, $timeout = 120) {
 }
 
 function run_python_background($args, $pid_file = null) {
+    return run_python_module_background('ehlib', $args, $pid_file);
+}
+
+function run_python_module_background($module, $args, $pid_file = null) {
     global $root, $python;
+    if (!preg_match('/^[A-Za-z0-9_.]+$/', (string)$module)) {
+        throw new InvalidArgumentException('Invalid Python module');
+    }
     $data_dir = $root . '/data';
     if (!is_dir($data_dir)) mkdir($data_dir, 0755, true);
     if ($pid_file === null) $pid_file = $data_dir . '/retry.pid';
@@ -423,7 +449,7 @@ function run_python_background($args, $pid_file = null) {
 
     $cmd_parts = [$python];
     $cmd_parts[] = '-m';
-    $cmd_parts[] = 'ehlib';
+    $cmd_parts[] = $module;
     foreach ($args as $a) {
         $cmd_parts[] = $a;
     }
@@ -1041,11 +1067,15 @@ try {
                     $downloaded_pages = count_downloaded_pages($row['local_path'] ?? '');
                     $is_complete = (int)($row['is_complete'] ?? 0) === 1;
                     $galleries[] = [
+                        'id' => (int)($row['id'] ?? 0),
                         'source' => $row['source'] ?? '',
                         'source_id' => $row['source_id'] ?? '',
                         'title' => $row['title'] ?? '',
                         'title_jp' => $row['title_jp'] ?? '',
                         'language' => $row['language'] ?? '',
+                        'category' => $row['category'] ?? '',
+                        'file_size' => (int)($row['file_size'] ?? 0),
+                        'compression_status' => $row['compression_status'] ?? '',
                         'pages' => $total_pages,
                         'total_pages' => $total_pages,
                         'downloaded_pages' => $downloaded_pages,
@@ -1282,6 +1312,12 @@ try {
                 if (!$row || empty($row['local_path'])) error_exit('Gallery not found');
                 $local_path = normalize_path($row['local_path']);
                 $download_base = resolve_download_path();
+                if (!is_dir($local_path) || !is_path_within($local_path, $download_base)) {
+                    $sourceDir = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$source);
+                    $sourceIdDir = str_replace('/', '_', (string)$source_id);
+                    $candidate = normalize_path($download_base . DIRECTORY_SEPARATOR . $sourceDir . DIRECTORY_SEPARATOR . $sourceIdDir);
+                    if (is_dir($candidate) && is_path_within($candidate, $download_base)) $local_path = $candidate;
+                }
                 if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
                 $total_pages = (int)$row['total_pages'];
                 $images = [];
@@ -1372,6 +1408,12 @@ try {
                 if (!$row || empty($row['local_path'])) error_exit('Gallery not found');
                 $local_path = normalize_path($row['local_path']);
                 $download_base = resolve_download_path();
+                if (!is_dir($local_path) || !is_path_within($local_path, $download_base)) {
+                    $sourceDir = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$source);
+                    $sourceIdDir = str_replace('/', '_', (string)$source_id);
+                    $candidate = normalize_path($download_base . DIRECTORY_SEPARATOR . $sourceDir . DIRECTORY_SEPARATOR . $sourceIdDir);
+                    if (is_dir($candidate) && is_path_within($candidate, $download_base)) $local_path = $candidate;
+                }
                 if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
                 $img_path = find_gallery_image_path($local_path, $page);
                 if (!$img_path || !is_file($img_path)) error_exit('Image file not found');
@@ -2802,6 +2844,248 @@ try {
                     'error' => ($result['stderr'] ?: $result['stdout'] ?: 'unknown error'),
                     'exit_code' => $result['exit_code'] ?? -1,
                 ], false);
+            }
+            break;
+
+        // ─── Compress Compare Phase 2B actions ───
+        case 'get_compress_review_one':
+            $gallery_id = $_POST['gallery_id'] ?? ($_GET['gallery_id'] ?? '');
+            if ($gallery_id === '' || $gallery_id === null) error_exit('gallery_id required');
+            $gallery_id = (int)$gallery_id;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                // 1. 取 gallery 基本行（compression_status 在内）
+                $stmt = $pdo->prepare(
+                    "SELECT id, source, source_id, title, title_jp, artist, language, category, total_pages,
+                            uploaded_at, file_size, local_path, compression_status, compression_info
+                     FROM galleries WHERE id=?"
+                );
+                $stmt->execute([$gallery_id]);
+                $g = $stmt->fetch();
+                if (!$g) {
+                    json_exit(['ok' => false, 'error' => '找不到画廊 id=' . $gallery_id], false);
+                }
+                $infoTxt = (string)($g['compression_info'] ?? '');
+                $info = null;
+                if ($infoTxt !== '') {
+                    $info = @json_decode($infoTxt, true);
+                    if (!is_array($info)) $info = null;
+                }
+                if ($info === null) {
+                    json_exit(['ok' => false, 'error' => '这本漫画尚未生成压缩候选，请先跑 Phase 1 CLI。'], false);
+                }
+                $downloadBase = resolve_download_path();
+                $galleryLocalPath = normalize_path($g['local_path'] ?? '');
+                if ($galleryLocalPath === '' || !is_dir($galleryLocalPath) || !is_path_within($galleryLocalPath, $downloadBase)) {
+                    $sourceDir = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)($g['source'] ?? ''));
+                    $sourceIdDir = str_replace('/', '_', (string)($g['source_id'] ?? ''));
+                    $candidate = normalize_path($downloadBase . DIRECTORY_SEPARATOR . $sourceDir . DIRECTORY_SEPARATOR . $sourceIdDir);
+                    if (is_dir($candidate) && is_path_within($candidate, $downloadBase)) $galleryLocalPath = $candidate;
+                }
+                // 2. work_dir 存在性 + 读权限校验（serve 接口会再做）
+                $workDir = resolve_compress_info_work_dir($info['work_dir'] ?? '');
+                $compressRoot = resolve_compress_work_path();
+                $workDirServed = (
+                    $workDir !== ''
+                    && is_path_within($workDir, $compressRoot)
+                    && is_dir($workDir)
+                    && is_readable($workDir)
+                );
+                // 3. 取原图像素尺寸（让前端 meta 行能显示 w×h；读不到也不致命，返回 []）
+                $pageSizes = [];
+                $pages = $info['pages'] ?? [];
+                if (is_array($pages) && !empty($pages)) {
+                    // 优先用 compression_info.pages[].width/height（Phase 1 CLI 已填）
+                    $missing = false;
+                    foreach ($pages as $p) {
+                        $w = $p['width'] ?? null; $h = $p['height'] ?? null;
+                        if ($w === null || $h === null) { $missing = true; break; }
+                    }
+                    if (!$missing) {
+                        foreach ($pages as $idx => $p) {
+                            $pageIdx = isset($p['page_index']) ? (int)$p['page_index'] : $idx;
+                            $pageSizes[] = [
+                                'page_idx' => $pageIdx,
+                                'name' => (string)($p['name'] ?? ''),
+                                'w' => (int)$p['width'],
+                                'h' => (int)$p['height']
+                            ];
+                        }
+                    } else {
+                        // 兜底：逐个找原图本地文件读 getimagesize
+                        $localPath = $galleryLocalPath;
+                        if ($localPath !== '' && is_dir($localPath) && is_path_within($localPath, $downloadBase)) {
+                            foreach ($pages as $idx => $p) {
+                                $pageIdx = isset($p['page_index']) ? (int)$p['page_index'] : $idx;
+                                $pageNo = $pageIdx + 1;
+                                $imgPath = find_gallery_image_path($localPath, $pageNo);
+                                if ($imgPath && is_file($imgPath)) {
+                                    $rp = realpath($imgPath);
+                                    if ($rp !== false && is_path_within($rp, $downloadBase)) {
+                                        $wh = @getimagesize($rp);
+                                        if (is_array($wh) && count($wh) >= 2) {
+                                            $pageSizes[] = [
+                                                'page_idx' => $pageIdx,
+                                                'name' => (string)($p['name'] ?? basename($imgPath)),
+                                                'w' => (int)$wh[0],
+                                                'h' => (int)$wh[1]
+                                            ];
+                                            continue;
+                                        }
+                                    }
+                                }
+                                $pageSizes[] = [
+                                    'page_idx' => $pageIdx,
+                                    'name' => (string)($p['name'] ?? ''),
+                                    'w' => null,
+                                    'h' => null
+                                ];
+                            }
+                        }
+                    }
+                }
+                $galleries_out = [
+                    'id' => (int)$g['id'],
+                    'source' => (string)($g['source'] ?? ''),
+                    'source_id' => (string)($g['source_id'] ?? ''),
+                    'title' => (string)($g['title'] ?? ''),
+                    'title_jp' => (string)($g['title_jp'] ?? ''),
+                    'artist' => (string)($g['artist'] ?? ''),
+                    'language' => (string)($g['language'] ?? ''),
+                    'category' => (string)($g['category'] ?? ''),
+                    'total_pages' => (int)($g['total_pages'] ?? 0),
+                    'uploaded_at' => (string)($g['uploaded_at'] ?? ''),
+                    'file_size' => (int)($g['file_size'] ?? 0),
+                    'local_path' => (string)$galleryLocalPath,
+                    'compression_status' => (string)($g['compression_status'] ?? ''),
+                ];
+                json_exit([
+                    'ok' => true,
+                    'gallery' => $galleries_out,
+                    'info' => $info,
+                    'page_sizes' => $pageSizes,
+                    'work_dir_served' => $workDirServed,
+                ], true);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '加载压缩审核信息异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'serve_compress_work_image':
+            // 注意：安全模型与 serve_image 相同，但是沙箱根是 compress_work 目录，不再是 downloads
+            $gallery_id = $_GET['gallery_id'] ?? '';
+            $file_req = $_GET['file'] ?? '';
+            if ($gallery_id === '' || $file_req === '') error_exit('gallery_id and file required');
+            $gallery_id = (int)$gallery_id;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                $stmt = $pdo->prepare("SELECT compression_info FROM galleries WHERE id=?");
+                $stmt->execute([$gallery_id]);
+                $row = $stmt->fetchColumn();
+                if ($row === false || $row === null || $row === '') error_exit('未找到该 gallery 或尚未生成压缩候选');
+                $info = @json_decode((string)$row, true);
+                if (!is_array($info) || !isset($info['work_dir'])) error_exit('压缩信息不完整（缺 work_dir）');
+                $workDirRaw = (string)$info['work_dir'];
+                $workDir = resolve_compress_info_work_dir($workDirRaw);
+                if ($workDir === '' || !is_dir($workDir)) error_exit('work_dir 不存在: ' . basename($workDirRaw));
+                // 沙箱根与 Phase 1 CLI 的默认 work root 保持一致。
+                $compressRoot = resolve_compress_work_path();
+                if (!is_dir($compressRoot)) error_exit('compress_work 根目录不存在');
+                if (!is_path_within($workDir, $compressRoot)) error_exit('Path outside compress_work directory');
+                // 必须原样就是 basename；不能悄悄把 ../../001.webp 降级为 001.webp。
+                $fileName = basename($file_req);
+                if ($fileName === '' || $fileName !== $file_req) error_exit('Invalid file name');
+                // 扩展名白名单：只允许 webp（给前端查看候选）；json 虽允许但走独立 route 更安全，此处暂只放 webp
+                $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+                $allowedExts = ['webp'];
+                if (!in_array($ext, $allowedExts, true)) error_exit('Invalid image extension');
+                $target = $workDir . DIRECTORY_SEPARATOR . $fileName;
+                $rp = realpath($target);
+                if ($rp === false || !is_file($rp)) error_exit('候选文件不存在');
+                if (!is_path_within($rp, $workDir)) error_exit('Path outside work directory');
+                // MIME + 输出
+                $mime = 'image/webp';
+                header('Content-Type: ' . $mime);
+                header('Cache-Control: private, max-age=3600');
+                header('Content-Length: ' . (int)@filesize($rp));
+                readfile($rp);
+                exit;
+            } catch (Throwable $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'approve_compress_whole':
+            $gallery_id = $_POST['gallery_id'] ?? '';
+            if ($gallery_id === '') json_exit(['ok' => false, 'error' => 'gallery_id required'], false);
+            $gallery_id = (int)$gallery_id;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                // 幂等：严格遵循 Phase 2B 的整本状态机。
+                $stmt = $pdo->prepare(
+                    "UPDATE galleries
+                        SET compression_status='approved_pending_apply',
+                            updated_at=?
+                      WHERE id=?
+                        AND compression_status IN ('user_review_required','failed','approved_pending_apply')"
+                );
+                $stmt->execute([gmdate('c'), $gallery_id]);
+                $rows = $stmt->rowCount();
+                if ($rows < 1) {
+                    json_exit(['ok' => false, 'error' => '当前状态不允许批准，或 gallery 不存在'], false);
+                }
+                json_exit([
+                    'ok' => true,
+                    'updated_rows' => (int)$rows,
+                    'new_status' => 'approved_pending_apply'
+                ], true);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '批准异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'rerun_compress_default':
+            $gallery_id = $_POST['gallery_id'] ?? '';
+            if ($gallery_id === '') json_exit(['ok' => false, 'error' => 'gallery_id required'], false);
+            $gallery_id = (int)$gallery_id;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                $stmt = $pdo->prepare("SELECT compression_status FROM galleries WHERE id=?");
+                $stmt->execute([$gallery_id]);
+                $currentStatus = $stmt->fetchColumn();
+                if ($currentStatus === false) {
+                    json_exit(['ok' => false, 'error' => '找不到画廊 id=' . $gallery_id], false);
+                }
+                if (!in_array((string)$currentStatus, ['user_review_required', 'failed', 'approved_pending_apply'], true)) {
+                    json_exit(['ok' => false, 'error' => '当前状态不允许重做: ' . (string)$currentStatus], false);
+                }
+                // 重置 status（让 CLI 抢到锁）；compression_info 保留（能在 UI 上看到旧 summary，等 CLI 跑完会覆盖）
+                $pdo->prepare("UPDATE galleries SET compression_status='', updated_at=? WHERE id=?")
+                    ->execute([gmdate('c'), $gallery_id]);
+                // 后台启动 CLI： python -m ehlib.cmd_compress --gallery-id <id> --force
+                // 和 verify/start_verify 一样走 run_python_background（避免 HTTP 同步等待）
+                $args = [
+                    '--gallery-id', (string)$gallery_id,
+                    '--work-root', resolve_compress_work_path(),
+                    '--force',
+                    '--force-candidates'
+                ];
+                $pid_file = $root . '/data/run_compress_' . $gallery_id . '.pid';
+                $pid = run_python_module_background('ehlib.cmd_compress', $args, $pid_file);
+                json_exit([
+                    'pid' => $pid,
+                    'message' => '重做已启动，完成后自动刷新卡片',
+                ], true);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '启动重跑异常: ' . $e->getMessage()], false);
             }
             break;
 

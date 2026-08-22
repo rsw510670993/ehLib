@@ -1672,3 +1672,25 @@ class Database:
             await db.commit()
         return stats
 
+
+def ensure_gallery_compression_columns_v1(conn) -> None:
+    """幂等新增 galleries 表两列：compression_status / compression_info。
+
+    Phase 1 起步仅 2 列；列若已存在（含 PR#10 残留）则跳过，不抛错。
+    不走 user_version，避免与现有 downloads_dir / galleries 其他迁移冲突。
+    """
+    import sqlite3
+    if not isinstance(conn, sqlite3.Connection):
+        raise TypeError("ensure_gallery_compression_columns_v1 expects sync sqlite3.Connection")
+    cur = conn.execute("PRAGMA table_info(galleries)")
+    existing = {row[1] for row in cur.fetchall()}
+    if "compression_status" not in existing:
+        conn.execute(
+            "ALTER TABLE galleries ADD COLUMN compression_status TEXT NOT NULL DEFAULT ''"
+        )
+    if "compression_info" not in existing:
+        conn.execute(
+            "ALTER TABLE galleries ADD COLUMN compression_info TEXT NOT NULL DEFAULT ''"
+        )
+    conn.commit()
+

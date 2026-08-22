@@ -81,6 +81,19 @@ async function loadGalleries(filters) {
             var readBtn = isComplete
                 ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="event.stopPropagation();openReader(\'' + g.source + '\',\'' + g.source_id + '\')" title="本地阅览"><i class="fas fa-book-open"></i></button>'
                 : '<button class="btn btn-sm btn-outline-warning py-0 px-1" onclick="event.stopPropagation();openIncompleteGalleryRetry(\'' + g.source + '\',\'' + g.source_id + '\')" title="继续下载"><i class="fas fa-redo-alt"></i></button>';
+            var compressStatus = (g.compression_status || '').toString();
+            var compressBadge = '';
+            var compressBtn = '';
+            if (compressStatus === 'user_review_required') {
+                compressBadge = '<div class="gallery-compress-badge text-bg-warning">待审核</div>';
+            } else if (compressStatus === 'approved_pending_apply') {
+                compressBadge = '<div class="gallery-compress-badge text-bg-success">已批准待应用</div>';
+            } else if (compressStatus === 'failed') {
+                compressBadge = '<div class="gallery-compress-badge text-bg-danger">压缩失败</div>';
+            }
+            if (['user_review_required', 'failed', 'approved_pending_apply'].includes(compressStatus)) {
+                compressBtn = '<button class="btn btn-sm btn-outline-warning py-0 px-1" data-compare-gallery="' + escapeAttr(String(g.id ?? '')) + '" data-source="' + escapeAttr(g.source) + '" data-source-id="' + escapeAttr(g.source_id || '') + '" title="压缩对比"><i class="fas fa-code-compare"></i></button>';
+            }
             var escapedSid = escapeAttr(g.source_id || '');
             var exLink = (g.source && g.source.toLowerCase() === 'exhentai')
                 ? '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>'
@@ -91,6 +104,7 @@ async function loadGalleries(filters) {
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
                 '<img src="' + imgUrl + '" data-fallback="' + fallbackImgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="fallbackImageOnError(this)" onload="onCoverLoad(this)">' +
                 statusBadge +
+                compressBadge +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitles.primary) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
                 '<div class="card-body px-2 py-1 card-info-body">' +
@@ -107,9 +121,9 @@ async function loadGalleries(filters) {
                 sourceBadge +
                 '<span class="' + progressClass + '">' + progressText + '</span>' +
                 '</div>' +
-                // 第5行（右对齐）：阅读/重试按钮 + ExHentai 外链
+                // 第5行（右对齐）：阅读/重试按钮 + 压缩对比 + ExHentai 外链
                 '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom">' +
-                '<span class="d-inline-flex gap-1">' + readBtn + exLink + '</span>' +
+                '<span class="d-inline-flex gap-1">' + readBtn + compressBtn + exLink + '</span>' +
                 '</div>' +
                 '</div>' +
                 '</div>' +
@@ -119,6 +133,37 @@ async function loadGalleries(filters) {
 
     renderGalleryPagination();
 }
+
+// ═══ Compress compare entry: 事件委托 ═══
+// 注意：画廊卡片主体会被完全替换（innerHTML），因此按钮委托绑在 #gallery_grid_body 上，
+// 防止 onclick 字符串拼接用户可控数据带来的转义和语法风险。
+document.addEventListener('DOMContentLoaded', function () {
+    var body = document.getElementById('gallery_grid_body');
+    if (!body) return;
+    body.addEventListener('click', function (ev) {
+        var t = ev.target && ev.target.closest ? ev.target.closest('[data-compare-gallery]') : null;
+        if (t && body.contains(t)) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var gid = t.getAttribute('data-compare-gallery') || '';
+            var src = t.getAttribute('data-source') || '';
+            var sid = t.getAttribute('data-source-id') || '';
+            if (!gid || !src || !sid) {
+                showToast('压缩对比：缺少 gallery_id/source/source_id', 'warning');
+                return;
+            }
+            if (typeof openCompressCompare !== 'function') {
+                showToast('压缩对比模块尚未加载，请刷新页面重试', 'danger');
+                return;
+            }
+            openCompressCompare({
+                gallery_id: gid,
+                source: src,
+                source_id: sid
+            });
+        }
+    }, true);
+});
 
 function renderGalleryPagination() {
     const el = document.getElementById('gallery_pagination');

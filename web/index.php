@@ -12,7 +12,7 @@ $projectPath = realpath(__DIR__ . '/..');
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=27">
+    <link rel="stylesheet" href="assets/css/app.css?v=28">
 </head>
 <body>
 
@@ -118,6 +118,91 @@ $projectPath = realpath(__DIR__ . '/..');
             </div>
         </div>
 
+        <!-- ═══ 压缩审核比较 Modal（单本）════ -->
+        <div class="modal fade compress-compare-modal" id="compress_compare_modal" tabindex="-1" aria-hidden="true"
+             data-bs-backdrop="static">
+            <div class="modal-dialog modal-fullscreen-xl-down modal-dialog-centered modal-dialog-scrollable" style="max-width:98vw;">
+                <div class="modal-content">
+                    <div class="modal-header py-2 align-items-start">
+                        <div style="flex:1;min-width:0">
+                            <h5 class="modal-title d-inline-block me-2" id="cc_title">压缩审核比较</h5>
+                            <span id="cc_badge" class="badge me-2"></span>
+                            <div class="small text-muted mt-1" id="cc_meta"></div>
+                            <div class="small text-muted" id="cc_params" style="margin-top:2px;"></div>
+                            <div id="cc_upgrade_hint" class="small text-info mt-1" style="display:none">
+                                <i class="fas fa-info-circle me-1"></i>
+                                本次仅"先可用再扩展"，如需批量处理待审核漫画，建议升级到方案 A（工具页新增「压缩审核列表」Tab）。
+                            </div>
+                        </div>
+                        <div class="d-flex flex-wrap gap-1 align-items-start">
+                            <button type="button" class="btn btn-sm btn-success me-1" id="cc_btn_approve" title="批准整本：compression_status -> approved_pending_apply（不立即替换磁盘，等 Phase 2）">
+                                <i class="fas fa-check me-1"></i>整本批准
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-warning me-1" id="cc_btn_rerun" title="用默认参数 88/4/5% 重跑一次整本压缩">
+                                <i class="fas fa-arrows-rotate me-1"></i>整本重做（默认参数）
+                            </button>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                    </div>
+                    <div class="modal-body p-0" style="display:flex;min-height:78vh;max-height:82vh;">
+                        <div id="cc_thumbs" class="cc-thumbs"></div>
+                        <div id="cc_main" class="cc-main" style="flex:1;display:flex;flex-direction:column;min-width:0;background:#111;color:#e2e8f0;">
+                            <div id="cc_toolbar" class="cc-toolbar d-none">
+                                <div class="cc-page-nav">
+                                    <button id="cc_prev" class="btn btn-sm btn-dark"><i class="fas fa-chevron-left"></i></button>
+                                    <span id="cc_page_label" class="small mx-2">1 / 7</span>
+                                    <button id="cc_next" class="btn btn-sm btn-dark"><i class="fas fa-chevron-right"></i></button>
+                                </div>
+                                <div class="small text-muted flex-grow-1 text-center">← / → 翻页 · 1 = Fit · 2 = 100% · Esc 关闭</div>
+                            </div>
+                            <div id="cc_pane_row" class="d-none" style="flex:1;display:flex;gap:2px;min-height:0;border-top:1px solid #1e293b;">
+                                <div class="cc-pane" data-side="orig">
+                                    <div class="cc-pane-head small" style="background:#1e293b;color:#94a3b8;padding:2px 6px;display:flex;justify-content:space-between;align-items:center;">
+                                        <span><i class="fas fa-file-image me-1"></i>原图 <span id="cc_orig_tag"></span></span>
+                                        <span class="d-flex align-items-center gap-1">
+                                            <span class="btn-group btn-group-sm">
+                                                <button class="btn btn-dark cc-zoom" data-zoom="fit" data-side="orig">Fit</button>
+                                                <button class="btn btn-dark cc-zoom" data-zoom="100" data-side="orig">100%</button>
+                                                <button class="btn btn-dark cc-zoom" data-zoom="200" data-side="orig">200%</button>
+                                            </span>
+                                            <button class="btn btn-dark btn-sm cc-copy-path" data-side="orig" title="复制此图磁盘路径"><i class="far fa-copy"></i></button>
+                                        </span>
+                                    </div>
+                                    <div class="cc-scroll" id="cc_scroll_orig"><img id="cc_img_orig" alt=""></div>
+                                    <div class="cc-meta small" id="cc_meta_orig" style="background:#1e293b;color:#94a3b8;padding:2px 6px;min-height:22px;"></div>
+                                </div>
+                                <div class="cc-pane-divider"></div>
+                                <div class="cc-pane" data-side="cmp">
+                                    <div class="cc-pane-head small" style="background:#1e293b;color:#94a3b8;padding:2px 6px;display:flex;justify-content:space-between;align-items:center;">
+                                        <span><i class="fas fa-compress me-1"></i>压缩候选 <span id="cc_cmp_tag"></span></span>
+                                        <span class="d-flex align-items-center gap-1">
+                                            <span class="btn-group btn-group-sm">
+                                                <button class="btn btn-dark cc-zoom" data-zoom="fit" data-side="cmp">Fit</button>
+                                                <button class="btn btn-dark cc-zoom" data-zoom="100" data-side="cmp">100%</button>
+                                                <button class="btn btn-dark cc-zoom" data-zoom="200" data-side="cmp">200%</button>
+                                            </span>
+                                            <button class="btn btn-dark btn-sm cc-copy-path" data-side="cmp" title="复制此图磁盘路径"><i class="far fa-copy"></i></button>
+                                        </span>
+                                    </div>
+                                    <div class="cc-scroll" id="cc_scroll_cmp">
+                                        <div id="cc_cmp_placeholder" class="text-center text-muted px-3" style="display:none"></div>
+                                        <img id="cc_img_cmp" alt="">
+                                    </div>
+                                    <div class="cc-meta small" id="cc_meta_cmp" style="background:#1e293b;color:#94a3b8;padding:2px 6px;min-height:22px;"></div>
+                                </div>
+                            </div>
+                            <div id="cc_empty" class="d-flex align-items-center justify-content-center h-100 text-muted">
+                                <div class="text-center">
+                                    <i class="fas fa-hourglass-half fa-3x mb-2"></i>
+                                    <div id="cc_empty_text">加载压缩审核信息…</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <!-- ═══ Persistent Downloads Progress Tray ═══ -->
@@ -136,7 +221,8 @@ $projectPath = realpath(__DIR__ . '/..');
 <script src="assets/js/config.js?v=2"></script>
 <script src="assets/js/download.js?v=3"></script>
 <script src="assets/js/cache.js?v=29"></script>
-<script src="assets/js/gallery.js?v=13"></script>
+<script src="assets/js/gallery.js?v=14"></script>
+<script src="assets/js/compress_compare.js?v=2"></script>
 <script src="assets/js/reader.js?v=2"></script>
 <script src="assets/js/export.js"></script>
 <script src="assets/js/refresh_targets.js?v=4"></script>

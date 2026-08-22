@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from io import BytesIO
 from pathlib import Path
 
@@ -80,6 +81,69 @@ class ImageCompressionTests(unittest.TestCase):
             with Image.open(saved_path) as result:
                 self.assertEqual(result.size, (640, 960))
                 self.assertEqual(result.format, "WEBP")
+
+    def test_force_candidate_reencodes_existing_webp_even_without_savings(self):
+        try:
+            from PIL import Image, features
+        except ImportError:
+            self.skipTest("Pillow is not installed in this development environment")
+        if not features.check("webp"):
+            self.skipTest("Pillow WebP encoder is unavailable")
+
+        source = BytesIO()
+        Image.new("RGB", (80, 120), "navy").save(source, format="WEBP", quality=88)
+        compressor = ImageCompressor(quality=88, method=4, min_savings_percent=100)
+
+        used, candidate, normal_stats = compressor._encode_one_page(source.getvalue())
+        self.assertFalse(used)
+        self.assertIsNone(candidate)
+        self.assertEqual(normal_stats["src_format"], "WEBP")
+
+        used, candidate, forced_stats = compressor._encode_one_page(
+            source.getvalue(), force_candidate=True
+        )
+        self.assertTrue(used)
+        self.assertTrue(candidate)
+        self.assertTrue(forced_stats["forced_candidate"])
+        self.assertTrue(forced_stats["no_savings"])
+
+    def test_force_candidates_workdir_scans_existing_webp_pages(self):
+        try:
+            from PIL import Image, features
+        except ImportError:
+            self.skipTest("Pillow is not installed in this development environment")
+        if not features.check("webp"):
+            self.skipTest("Pillow WebP encoder is unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            gallery_dir = root / "gallery"
+            gallery_dir.mkdir()
+            Image.new("RGB", (60, 90), "red").save(gallery_dir / "001.webp", format="WEBP")
+            Image.new("RGB", (60, 90), "blue").save(gallery_dir / "002.webp", format="WEBP")
+            conn = sqlite3.connect(root / "test.db")
+            try:
+                conn.execute(
+                    "CREATE TABLE galleries (id INTEGER PRIMARY KEY, compression_status TEXT NOT NULL DEFAULT '', compression_info TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT '')"
+                )
+                conn.execute("INSERT INTO galleries(id) VALUES (54)")
+                conn.commit()
+                status, info = ImageCompressor().compress_gallery_to_workdir(
+                    54,
+                    gallery_dir,
+                    root / "compress_work",
+                    force=True,
+                    force_candidates=True,
+                    db_conn=conn,
+                )
+            finally:
+                conn.close()
+
+            self.assertEqual(status, "user_review_required")
+            self.assertEqual(info["total_pages"], 2)
+            self.assertEqual(info["used_webp_count"], 2)
+            self.assertTrue(info["force_candidates"])
+            self.assertEqual(len(list((root / "compress_work" / "54").glob("*.webp"))), 2)
 
 
 if __name__ == "__main__":
