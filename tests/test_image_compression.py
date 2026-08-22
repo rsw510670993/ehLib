@@ -82,7 +82,7 @@ class ImageCompressionTests(unittest.TestCase):
                 self.assertEqual(result.size, (640, 960))
                 self.assertEqual(result.format, "WEBP")
 
-    def test_force_candidate_reencodes_existing_webp_even_without_savings(self):
+    def test_force_candidate_never_keeps_a_larger_existing_webp(self):
         try:
             from PIL import Image, features
         except ImportError:
@@ -102,8 +102,8 @@ class ImageCompressionTests(unittest.TestCase):
         used, candidate, forced_stats = compressor._encode_one_page(
             source.getvalue(), force_candidate=True
         )
-        self.assertTrue(used)
-        self.assertTrue(candidate)
+        self.assertFalse(used)
+        self.assertIsNone(candidate)
         self.assertTrue(forced_stats["forced_candidate"])
         self.assertTrue(forced_stats["no_savings"])
 
@@ -121,7 +121,10 @@ class ImageCompressionTests(unittest.TestCase):
             gallery_dir.mkdir()
             Image.new("RGB", (60, 90), "red").save(gallery_dir / "001.webp", format="WEBP")
             Image.new("RGB", (60, 90), "blue").save(gallery_dir / "002.webp", format="WEBP")
+            Image.new("RGB", (600, 900), "green").save(gallery_dir / "003.jpg", format="JPEG", quality=100)
+            Image.new("RGB", (60, 90), "black").save(gallery_dir / "cover.webp", format="WEBP")
             conn = sqlite3.connect(root / "test.db")
+            progress_events = []
             try:
                 conn.execute(
                     "CREATE TABLE galleries (id INTEGER PRIMARY KEY, compression_status TEXT NOT NULL DEFAULT '', compression_info TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT '')"
@@ -134,16 +137,70 @@ class ImageCompressionTests(unittest.TestCase):
                     root / "compress_work",
                     force=True,
                     force_candidates=True,
+                    progress_callback=progress_events.append,
                     db_conn=conn,
                 )
             finally:
                 conn.close()
 
             self.assertEqual(status, "user_review_required")
-            self.assertEqual(info["total_pages"], 2)
-            self.assertEqual(info["used_webp_count"], 2)
+            self.assertEqual(info["total_pages"], 3)
+            self.assertEqual(info["used_webp_count"], 1)
+            self.assertEqual(info["discarded_pages_count"], 2)
+            self.assertGreater(info["savings_pct_overall"], 0)
             self.assertTrue(info["force_candidates"])
-            self.assertEqual(len(list((root / "compress_work" / "54").glob("*.webp"))), 2)
+            self.assertEqual(
+                [path.name for path in (root / "compress_work" / "54").glob("*.webp")],
+                ["003.webp"],
+            )
+            self.assertEqual([event["current"] for event in progress_events], [0, 1, 2, 3])
+            self.assertTrue(all(event["total"] == 3 for event in progress_events))
+
+    def test_result_database_write_failure_is_not_reported_as_success(self):
+        try:
+            from PIL import Image, features
+        except ImportError:
+            self.skipTest("Pillow is not installed in this development environment")
+        if not features.check("webp"):
+            self.skipTest("Pillow WebP encoder is unavailable")
+
+        class FailingResultConnection:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, sql, params=()):
+                if "compression_info = ?" in sql:
+                    raise sqlite3.OperationalError("simulated result write failure")
+                return self.connection.execute(sql, params)
+
+            def commit(self):
+                return self.connection.commit()
+
+            def rollback(self):
+                return self.connection.rollback()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            gallery_dir = root / "gallery"
+            gallery_dir.mkdir()
+            Image.new("RGB", (60, 90), "red").save(gallery_dir / "001.jpg", format="JPEG")
+            conn = sqlite3.connect(root / "test.db")
+            try:
+                conn.execute(
+                    "CREATE TABLE galleries (id INTEGER PRIMARY KEY, compression_status TEXT NOT NULL DEFAULT '', compression_info TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT '')"
+                )
+                conn.execute("INSERT INTO galleries(id) VALUES (54)")
+                conn.commit()
+                with self.assertRaisesRegex(RuntimeError, "failed to persist compression result"):
+                    ImageCompressor().compress_gallery_to_workdir(
+                        54,
+                        gallery_dir,
+                        root / "compress_work",
+                        force=True,
+                        db_conn=FailingResultConnection(conn),
+                    )
+            finally:
+                conn.close()
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 import argparse
+import json
 import logging
+import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ehlib.models.database import DB_PATH, ensure_gallery_compression_columns_v1
@@ -57,7 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force-candidates",
         action="store_true",
-        help="为所有静态页生成审核候选（包括原本已是 WebP 或节省不足的页）；仍不改原图",
+        help="忽略最小节省率保留所有变小候选；相等或增大的结果仍会丢弃",
     )
     parser.add_argument("--quality", type=int, default=None, help="覆盖 ImageCompressor.quality (1..100)")
     parser.add_argument("--method", type=int, default=None, help="覆盖 ImageCompressor.method (0..6)")
@@ -74,12 +77,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Python logging 级别",
     )
     parser.add_argument(
+        "--progress-file",
+        type=str,
+        default=None,
+        help="可选：把页级进度原子写入 JSON 文件，供 Web 维护页轮询",
+    )
+    parser.add_argument(
         "--db-path",
         type=str,
         default=None,
         help=f"覆盖默认 DB 路径 (默认 {DB_PATH})",
     )
     return parser
+
+
+def _write_progress(path: Path | None, payload: dict) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = dict(payload)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp_path, path)
 
 
 def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -172,6 +192,20 @@ def main(argv: list[str] | None = None) -> int:
     if rc != 0:
         return rc
 
+    progress_path = Path(args.progress_file) if args.progress_file else None
+    progress_gallery_id = int(args.gallery_id) if args.gallery_id is not None else None
+
+    def report_progress(status: str, message: str, **extra) -> None:
+        payload = {
+            "gallery_id": progress_gallery_id,
+            "status": status,
+            "message": message,
+            "current": 0,
+            "total": 0,
+        }
+        payload.update(extra)
+        _write_progress(progress_path, payload)
+
     db_path = Path(args.db_path) if args.db_path else Path(DB_PATH)
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -181,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             ensure_gallery_compression_columns_v1(db_conn)
         except Exception as exc:
             logger.error("DB 迁移失败: %s", exc)
+            report_progress("failed", f"DB 迁移失败: {exc}")
             return _EXIT_NOT_FOUND
 
         try:
@@ -198,11 +233,15 @@ def main(argv: list[str] | None = None) -> int:
                 else f"source={args.source!r}, source_id={args.source_id!r}"
             )
             print(f"找不到 {ident}", file=sys.stderr)
+            report_progress("failed", f"找不到 {ident}")
             return _EXIT_NOT_FOUND
+
+        progress_gallery_id = int(gallery["id"])
 
         gallery_dir_raw = gallery.get("_resolved_dir", "") or ""
         if not gallery_dir_raw:
             print("该 gallery 没有可用的 local_path/file_path 列，请确认漫画已下载完成且路径可读", file=sys.stderr)
+            report_progress("failed", "该 gallery 没有可用的本地路径")
             return _EXIT_NOT_FOUND
 
         gallery_dir = Path(gallery_dir_raw)
@@ -211,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"gallery_dir 不存在或不是目录: {gallery_dir}。请确认漫画已下载完成且路径可读。",
                 file=sys.stderr,
             )
+            report_progress("failed", f"gallery_dir 不存在或不是目录: {gallery_dir}")
             return _EXIT_NOT_FOUND
 
         if not int(gallery.get("is_complete") or 0):
@@ -218,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.dry_run:
             _print_dry_run(gallery, gallery_dir)
+            report_progress("completed", "dry-run 完成")
             return _EXIT_OK
 
         compressor = ImageCompressor(
@@ -233,16 +274,50 @@ def main(argv: list[str] | None = None) -> int:
         if args.min_savings is not None:
             compressor.min_savings_percent = float(args.min_savings)
 
-        final_status, info = compressor.compress_gallery_to_workdir(
-            int(gallery["id"]),
-            gallery_dir,
-            Path(args.work_root),
-            quality_override=args.quality,
-            method_override=args.method,
-            min_savings_override=args.min_savings,
-            force=bool(args.force),
-            force_candidates=bool(args.force_candidates),
-            db_conn=db_conn,
+        def on_page_progress(event: dict) -> None:
+            current = int(event.get("current", 0) or 0)
+            total = int(event.get("total", 0) or 0)
+            page_name = str(event.get("page_name", "") or "")
+            message = f"正在处理 {page_name}" if page_name else "正在准备图片列表"
+            report_progress("running", message, **event)
+
+        report_progress("running", "正在启动压缩")
+        try:
+            final_status, info = compressor.compress_gallery_to_workdir(
+                int(gallery["id"]),
+                gallery_dir,
+                Path(args.work_root),
+                quality_override=args.quality,
+                method_override=args.method,
+                min_savings_override=args.min_savings,
+                force=bool(args.force),
+                force_candidates=bool(args.force_candidates),
+                progress_callback=on_page_progress,
+                db_conn=db_conn,
+            )
+        except Exception as exc:
+            logger.exception("压缩任务异常: %s", exc)
+            report_progress("failed", f"压缩任务异常: {type(exc).__name__}: {exc}")
+            try:
+                db_conn.execute(
+                    "UPDATE galleries SET compression_status='failed',updated_at=? WHERE id=?",
+                    (datetime.now(timezone.utc).isoformat(timespec="seconds"), int(gallery["id"])),
+                )
+                db_conn.commit()
+            except Exception:
+                logger.exception("写回 failed 状态失败")
+            return _EXIT_FAILED
+
+        progress_status = "completed" if final_status == "user_review_required" else final_status
+        report_progress(
+            progress_status,
+            "压缩完成，等待人工审核" if final_status == "user_review_required" else f"压缩结束: {final_status}",
+            current=int(info.get("total_pages", 0) or 0),
+            total=int(info.get("total_pages", 0) or 0),
+            used_webp_count=int(info.get("used_webp_count", 0) or 0),
+            failed_pages_count=int(info.get("failed_pages_count", 0) or 0),
+            savings_pct_overall=float(info.get("savings_pct_overall", 0.0) or 0.0),
+            compression_status=final_status,
         )
 
         if final_status == "user_review_required":

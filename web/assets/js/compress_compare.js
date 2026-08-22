@@ -130,11 +130,13 @@ async function _ccFetchInfo() {
         }
         _cc_ctx.gallery = r.gallery || {};
         _cc_ctx.info = r.info || null;
-        _cc_ctx.pages = ((r.info && r.info.pages) ? r.info.pages.slice() : []);
+        _cc_ctx.pages = ((r.info && r.info.pages) ? r.info.pages.filter(function (page) {
+            return page && page.used_webp;
+        }) : []);
         _cc_ctx.work_dir_exists = !!r.work_dir_served;
         _cc_ctx.page_sizes = r.page_sizes || [];
         if (_cc_ctx.pages.length === 0) {
-            _ccSetEmpty('compression_info 为空，尚未生成压缩候选。请先跑 CLI 然后再点「整本重做」。');
+            _ccSetEmpty('本次没有体积变小的候选，无需审核。可调整参数后点「整本重做」。');
             return;
         }
         if (_cc_ctx.cur_idx >= _cc_ctx.pages.length) _cc_ctx.cur_idx = 0;
@@ -180,9 +182,9 @@ function _ccRenderHeader() {
     params.push('method=' + (s.method ?? '?'));
     params.push('min_savings=' + (s.min_savings_percent ?? '?') + '%');
     if (s.override_used) params.push('override_used=true');
-    if (s.force_candidates) params.push('全页候选=true');
-    params.push('orig ' + (s.orig_bytes_total ?? 0).toLocaleString() + 'B');
-    params.push('webp ' + (s.webp_bytes_total ?? 0).toLocaleString() + 'B');
+    if (s.force_candidates) params.push('忽略节省率阈值=true');
+    params.push('原整本 ' + (s.orig_bytes_total ?? 0).toLocaleString() + 'B');
+    params.push('预计整本 ' + (s.webp_bytes_total ?? 0).toLocaleString() + 'B');
     var sp = parseFloat(s.savings_pct_overall ?? 0);
     params.push('节省 ' + sp.toFixed(2) + '%');
     if (s.used_webp_count != null) params.push('used=' + s.used_webp_count + '/' + (s.total_pages ?? _cc_ctx.pages.length));
@@ -259,7 +261,7 @@ function _ccRenderPage() {
         if (pageSize) { wh.w = pageSize.w || ''; wh.h = pageSize.h || ''; }
     }
     // 设置页码 label
-    document.getElementById('cc_page_label').textContent = pageNo + ' / ' + _cc_ctx.pages.length;
+    document.getElementById('cc_page_label').textContent = '原第 ' + pageNo + ' 页 · 候选 ' + (i + 1) + ' / ' + _cc_ctx.pages.length;
     // 缩略图 active 同步（cur_idx 没变也不担心重绘闪烁）
     document.querySelectorAll('#cc_thumbs .cc-thumb').forEach(function (t) {
         if (parseInt(t.dataset.idx, 10) === i) t.classList.add('active'); else t.classList.remove('active');

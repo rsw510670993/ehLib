@@ -562,6 +562,7 @@
             <ul class="nav nav-tabs mb-3" role="tablist">
                 <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab_tools_dash">仪表盘</button></li>
                 <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_tools_verify">校对</button></li>
+                <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_tools_compression"><i class="fas fa-compress me-1"></i>图片压缩</button></li>
                 <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_tools_export">数据导出</button></li>
             </ul>
             <div class="tab-content">
@@ -640,6 +641,81 @@
                             </div>
                             <div id="tv_result" class="output-box mt-3"></div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- 图片压缩 -->
+                <div class="tab-pane fade" id="tab_tools_compression">
+                    <div class="row g-2 mb-3" id="compression_stats">
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value" id="compress_stat_total">-</div><div class="stat-label">可压缩漫画</div></div></div>
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value text-secondary" id="compress_stat_not_started">-</div><div class="stat-label">尚未压缩</div></div></div>
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value text-info" id="compress_stat_running">-</div><div class="stat-label">排队 / 运行中</div></div></div>
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value text-warning" id="compress_stat_review">-</div><div class="stat-label">等待审核</div></div></div>
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value text-danger" id="compress_stat_failed">-</div><div class="stat-label">失败</div></div></div>
+                    </div>
+
+                    <div class="card mb-3">
+                        <div class="card-header"><i class="fas fa-play-circle me-1"></i>手动发起单本压缩</div>
+                        <div class="card-body">
+                            <div class="row g-3 align-items-end">
+                                <div class="col-lg-4">
+                                    <label class="form-label" for="compress_gallery_id">Gallery ID</label>
+                                    <input type="number" min="1" class="form-control" id="compress_gallery_id" placeholder="从下方列表选择，或直接输入 ID">
+                                </div>
+                                <div class="col-6 col-lg-2">
+                                    <label class="form-label" for="compress_quality">Quality</label>
+                                    <input type="number" min="1" max="100" value="88" class="form-control" id="compress_quality">
+                                </div>
+                                <div class="col-6 col-lg-2">
+                                    <label class="form-label" for="compress_method">Method</label>
+                                    <select class="form-select" id="compress_method">
+                                        <option value="0">0（最快）</option><option value="1">1</option><option value="2">2</option>
+                                        <option value="3">3</option><option value="4" selected>4（默认）</option><option value="5">5</option><option value="6">6（最慢）</option>
+                                    </select>
+                                </div>
+                                <div class="col-6 col-lg-2">
+                                    <label class="form-label" for="compress_min_savings">最小节省率 %</label>
+                                    <input type="number" min="0" max="100" step="0.1" value="5" class="form-control" id="compress_min_savings">
+                                </div>
+                                <div class="col-6 col-lg-2 d-grid">
+                                    <button class="btn btn-primary" id="compress_start_btn" onclick="startCompressionTask()"><i class="fas fa-play me-1"></i>开始压缩</button>
+                                </div>
+                                <div class="col-12">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="compress_force_candidates">
+                                        <label class="form-check-label" for="compress_force_candidates">忽略最小节省率，保留所有变小候选（相等或增大的结果仍会丢弃；不修改原图）</label>
+                                    </div>
+                                    <div class="small text-muted mt-1" id="compress_selected_hint">尚未选择漫画。</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card mb-3">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <span><i class="fas fa-bars-progress me-1"></i>任务进度</span>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadCompressionPage()" title="立即刷新"><i class="fas fa-sync"></i></button>
+                        </div>
+                        <div class="card-body" id="compression_active_tasks">
+                            <div class="text-muted small">当前没有运行中的压缩任务。</div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="row g-2 align-items-center">
+                                <div class="col-md-7"><div class="input-group input-group-sm"><span class="input-group-text"><i class="fas fa-search"></i></span><input class="form-control" id="compress_search" placeholder="搜索标题、作者、source_id 或 Gallery ID" onkeydown="if(event.key==='Enter'){compressionApplyFilter()}"><button class="btn btn-outline-primary" onclick="compressionApplyFilter()">搜索</button></div></div>
+                                <div class="col-md-3"><select class="form-select form-select-sm" id="compress_status_filter" onchange="compressionApplyFilter()"><option value="all">全部状态</option><option value="not_started">尚未压缩</option><option value="queued">已排队</option><option value="compressing">压缩中</option><option value="user_review_required">等待审核</option><option value="failed">失败</option><option value="approved_pending_apply">已批准待应用</option><option value="skipped">已跳过</option></select></div>
+                                <div class="col-md-2 text-md-end"><span class="small text-muted" id="compression_result_count"></span></div>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover align-middle mb-0 compression-table">
+                                <thead><tr><th>ID / 来源</th><th>标题</th><th>页数</th><th>状态</th><th>候选 / 节省率</th><th>更新时间</th><th class="text-end">操作</th></tr></thead>
+                                <tbody id="compression_table_body"><tr><td colspan="7" class="text-center text-muted py-4">加载中…</td></tr></tbody>
+                            </table>
+                        </div>
+                        <div class="card-footer" id="compression_pagination"></div>
                     </div>
                 </div>
 

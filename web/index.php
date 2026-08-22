@@ -12,7 +12,7 @@ $projectPath = realpath(__DIR__ . '/..');
     <title>ehLib 管理面板</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="assets/css/app.css?v=28">
+    <link rel="stylesheet" href="assets/css/app.css?v=30">
 </head>
 <body>
 
@@ -131,7 +131,7 @@ $projectPath = realpath(__DIR__ . '/..');
                             <div class="small text-muted" id="cc_params" style="margin-top:2px;"></div>
                             <div id="cc_upgrade_hint" class="small text-info mt-1" style="display:none">
                                 <i class="fas fa-info-circle me-1"></i>
-                                本次仅"先可用再扩展"，如需批量处理待审核漫画，建议升级到方案 A（工具页新增「压缩审核列表」Tab）。
+                                如需发起其他漫画的压缩或查看任务进度，请前往「工具 & 维护 → 图片压缩」。
                             </div>
                         </div>
                         <div class="d-flex flex-wrap gap-1 align-items-start">
@@ -222,7 +222,8 @@ $projectPath = realpath(__DIR__ . '/..');
 <script src="assets/js/download.js?v=3"></script>
 <script src="assets/js/cache.js?v=29"></script>
 <script src="assets/js/gallery.js?v=14"></script>
-<script src="assets/js/compress_compare.js?v=2"></script>
+<script src="assets/js/compress_compare.js?v=3"></script>
+<script src="assets/js/compression.js?v=2"></script>
 <script src="assets/js/reader.js?v=2"></script>
 <script src="assets/js/export.js"></script>
 <script src="assets/js/refresh_targets.js?v=4"></script>

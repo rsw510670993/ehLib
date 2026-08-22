@@ -360,6 +360,25 @@ body { background: #f5f7fa; }
 
 .cc-zoom.active { background: #0d6efd !important; border-color: #0d6efd !important; color:#fff !important; }
 
+/* ═══ Compression maintenance page ═══ */
+.compression-table th { white-space: nowrap; font-size: .78rem; color: #64748b; }
+.compression-table td { vertical-align: middle; }
+.compression-table th:first-child,
+.compression-table td:first-child,
+.compression-table th:last-child,
+.compression-table td:last-child {
+    padding-left: calc(.25rem + 2px);
+    padding-right: calc(.25rem + 2px);
+}
+.compression-task { padding: .65rem .75rem; border: 1px solid #dbe4ee; border-radius: .5rem; background: #f8fafc; }
+.compression-task:last-child { margin-bottom: 0 !important; }
+#tab_tools_compression .stat-card { min-height: 86px; }
+#tab_tools_compression .stat-value { font-size: 1.5rem; }
+
+@media (prefers-color-scheme: dark) {
+    .compression-task { background: #111827; border-color: #334155; }
+}
+
 @media (max-width: 768px) {
     .cc-thumbs { width: 70px; }
     .compress-compare-modal .modal-dialog { max-width: 100vw; margin: 0; }

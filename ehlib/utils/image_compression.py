@@ -6,7 +6,7 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,7 @@ class ImageCompressor:
             "has_alpha": False,
             "is_animated": False,
             "forced_candidate": False,
+            "below_min_savings": False,
             "exception": None,
         }
 
@@ -171,7 +172,7 @@ class ImageCompressor:
                 is_animated = bool(getattr(source_image, "is_animated", False))
                 stats["is_animated"] = is_animated
 
-                if is_animated or (source_format == "WEBP" and not force_candidate):
+                if is_animated:
                     return False, None, stats
 
                 source_image.load()
@@ -197,14 +198,19 @@ class ImageCompressor:
                 stats["savings_pct"] = round((1.0 - len(webp_data) / orig_len) * 100.0, 2)
             stats["poor_ratio"] = 0.0 < stats["savings_pct"] < 50.0
 
-            minimum_saving = orig_len * (ms / 100.0)
-            if orig_len - len(webp_data) < minimum_saving:
+            saved_bytes = orig_len - len(webp_data)
+            stats["forced_candidate"] = bool(force_candidate)
+            if saved_bytes <= 0:
                 stats["no_savings"] = True
+                return False, None, stats
+
+            minimum_saving = orig_len * (ms / 100.0)
+            if saved_bytes < minimum_saving:
+                stats["below_min_savings"] = True
                 if not force_candidate:
                     return False, None, stats
 
             stats["used_webp"] = True
-            stats["forced_candidate"] = bool(force_candidate)
             return True, webp_data, stats
         except Exception as exc:
             stats["exception"] = f"{type(exc).__name__}: {exc!s}"
@@ -268,13 +274,14 @@ class ImageCompressor:
         used_webp_count = sum(1 for p in pages_stats if p.get("used_webp"))
         failed_pages_count = len(failed_pages_list)
         skipped_pages_count = sum(
-            1 for p in pages_stats
-            if not p.get("used_webp")
-            and not p.get("exception")
-            and (p.get("src_format") in ("WEBP", "GIF") or p.get("is_animated"))
+            1 for p in pages_stats if not p.get("used_webp") and not p.get("exception")
         )
         orig_total = sum(int(p.get("orig_bytes", 0)) for p in pages_stats)
-        webp_total = sum(int(p.get("webp_bytes", 0)) for p in pages_stats)
+        encoded_webp_total = sum(int(p.get("webp_bytes", 0)) for p in pages_stats)
+        webp_total = sum(
+            int(p.get("webp_bytes", 0)) if p.get("used_webp") else int(p.get("orig_bytes", 0))
+            for p in pages_stats
+        )
         if orig_total > 0:
             savings_pct_overall = round((1.0 - webp_total / orig_total) * 100.0, 2)
         else:
@@ -287,9 +294,13 @@ class ImageCompressor:
         work_dir_ok = not (disk_write_failures >= 3 and failed_pages_count / max(total_pages, 1) < 0.10)
 
         pages_out: list[dict] = []
-        for p in pages_stats:
+        for idx, p in enumerate(pages_stats):
+            page_name = str(p.get("name", ""))
+            page_stem = Path(page_name).stem
+            page_index = max(0, int(page_stem) - 1) if page_stem.isdigit() else idx
             pages_out.append({
-                "name": str(p.get("name", "")),
+                "name": page_name,
+                "page_index": page_index,
                 "orig_bytes": int(p.get("orig_bytes", 0)),
                 "webp_bytes": int(p.get("webp_bytes", 0)),
                 "savings_pct": float(p.get("savings_pct", 0.0)),
@@ -299,6 +310,7 @@ class ImageCompressor:
                 "is_animated": bool(p.get("is_animated", False)),
                 "forced_candidate": bool(p.get("forced_candidate", False)),
                 "no_savings": bool(p.get("no_savings", False)),
+                "below_min_savings": bool(p.get("below_min_savings", False)),
                 "poor_ratio": bool(p.get("poor_ratio", False)),
                 "exception": p.get("exception"),
             })
@@ -318,8 +330,10 @@ class ImageCompressor:
             "used_webp_count": int(used_webp_count),
             "failed_pages_count": int(failed_pages_count),
             "skipped_pages_count": int(skipped_pages_count),
+            "discarded_pages_count": int(skipped_pages_count),
             "orig_bytes_total": int(orig_total),
             "webp_bytes_total": int(webp_total),
+            "encoded_webp_bytes_total": int(encoded_webp_total),
             "savings_pct_overall": float(savings_pct_overall),
             "failed_pages": list(failed_pages_list),
             "work_dir_ok": bool(work_dir_ok),
@@ -339,6 +353,7 @@ class ImageCompressor:
         min_savings_override: float | None = None,
         force: bool = False,
         force_candidates: bool = False,
+        progress_callback: Callable[[dict], None] | None = None,
         db_conn=None,
     ) -> tuple[str, dict]:
         """Phase 1 两阶段核心：第一阶段 → 只写候选 webp 到 compress_work，不碰原图。
@@ -414,13 +429,13 @@ class ImageCompressor:
             return "skipped", {"reason": "lock_not_acquired", "gallery_id": gallery_id}
 
         page_files: list[Path] = []
-        page_exts = _COMPRESSIBLE_PAGE_EXTS + ((".webp",) if force_candidates else ())
+        page_exts = _COMPRESSIBLE_PAGE_EXTS + (".webp",)
         if gallery_dir.exists() and gallery_dir.is_dir():
             for entry in sorted(gallery_dir.glob("*")):
                 if not entry.is_file():
                     continue
                 ext = entry.suffix.lower()
-                if ext in page_exts:
+                if ext in page_exts and entry.stem.isdigit():
                     page_files.append(entry)
         if not page_files:
             try:
@@ -432,6 +447,18 @@ class ImageCompressor:
             except Exception:
                 pass
             return "skipped", {"reason": "no_pages_found", "gallery_dir": str(gallery_dir)}
+
+        if progress_callback is not None:
+            try:
+                progress_callback({
+                    "current": 0,
+                    "total": len(page_files),
+                    "page_name": "",
+                    "used_webp_count": 0,
+                    "failed_pages_count": 0,
+                })
+            except Exception:
+                logger.debug("compression progress callback failed at start", exc_info=True)
 
         started_at = datetime.now(timezone.utc)
         pages_stats: list[dict] = []
@@ -478,6 +505,17 @@ class ImageCompressor:
                 page_stat.setdefault("forced_candidate", False)
                 failed_pages_list.append({"name": page_path.name, "reason": page_stat["exception"]})
             pages_stats.append(page_stat)
+            if progress_callback is not None:
+                try:
+                    progress_callback({
+                        "current": len(pages_stats),
+                        "total": len(page_files),
+                        "page_name": page_path.name,
+                        "used_webp_count": sum(1 for item in pages_stats if item.get("used_webp")),
+                        "failed_pages_count": len(failed_pages_list),
+                    })
+                except Exception:
+                    logger.debug("compression progress callback failed", exc_info=True)
 
         finished_at = datetime.now(timezone.utc)
         info_dict = self._build_compression_info_json(
@@ -506,7 +544,12 @@ class ImageCompressor:
 
         total_matched = len(page_files)
         fail_ratio = (len(failed_pages_list) / total_matched) if total_matched > 0 else 0.0
-        final_status = "failed" if fail_ratio >= 0.10 else "user_review_required"
+        if fail_ratio >= 0.10:
+            final_status = "failed"
+        elif int(info_dict.get("used_webp_count", 0)) > 0:
+            final_status = "user_review_required"
+        else:
+            final_status = "skipped"
 
         info_bytes_for_db = json.dumps(info_dict, ensure_ascii=False, indent=2).encode("utf-8").decode("utf-8")
         finish_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -524,5 +567,10 @@ class ImageCompressor:
             db_conn.commit()
         except Exception as exc:
             logger.error("DB write compression_status/info failed for gallery_id=%s: %s", gallery_id, exc)
+            try:
+                db_conn.rollback()
+            except Exception:
+                logger.debug("DB rollback failed after compression result write error", exc_info=True)
+            raise RuntimeError(f"failed to persist compression result for gallery_id={gallery_id}") from exc
 
         return final_status, info_dict
