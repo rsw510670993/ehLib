@@ -11,7 +11,8 @@ const COMPRESSION_STATUS_META = {
     compressing: { label: '压缩中', cls: 'bg-info text-dark' },
     user_review_required: { label: '等待审核', cls: 'bg-warning text-dark' },
     failed: { label: '失败', cls: 'bg-danger' },
-    approved_pending_apply: { label: '已批准待应用', cls: 'bg-success' },
+    applied: { label: '已应用', cls: 'bg-success' },
+    compressed: { label: '已压缩（旧记录）', cls: 'bg-success' },
     skipped: { label: '已跳过', cls: 'bg-secondary' }
 };
 
@@ -77,7 +78,7 @@ function renderCompressionRows() {
         var candidate = used > 0
             ? used + '/' + pages + ' · <span class="' + (savings >= 0 ? 'text-success' : 'text-danger') + '">' + savings.toFixed(2) + '%</span>'
             : '<span class="text-muted">—</span>';
-        var compareBtn = ['user_review_required', 'failed', 'approved_pending_apply'].includes(String(row.compression_status || ''))
+        var compareBtn = ['user_review_required', 'failed'].includes(String(row.compression_status || ''))
             ? '<button class="btn btn-sm btn-outline-warning" onclick="compressionOpenCompare(' + Number(row.id) + ')" title="打开压缩对比"><i class="fas fa-code-compare"></i></button>'
             : '';
         var startDisabled = row.running ? ' disabled' : '';

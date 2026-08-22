@@ -705,7 +705,7 @@
                         <div class="card-header">
                             <div class="row g-2 align-items-center">
                                 <div class="col-md-7"><div class="input-group input-group-sm"><span class="input-group-text"><i class="fas fa-search"></i></span><input class="form-control" id="compress_search" placeholder="搜索标题、作者、source_id 或 Gallery ID" onkeydown="if(event.key==='Enter'){compressionApplyFilter()}"><button class="btn btn-outline-primary" onclick="compressionApplyFilter()">搜索</button></div></div>
-                                <div class="col-md-3"><select class="form-select form-select-sm" id="compress_status_filter" onchange="compressionApplyFilter()"><option value="all">全部状态</option><option value="not_started">尚未压缩</option><option value="queued">已排队</option><option value="compressing">压缩中</option><option value="user_review_required">等待审核</option><option value="failed">失败</option><option value="approved_pending_apply">已批准待应用</option><option value="skipped">已跳过</option></select></div>
+                                <div class="col-md-3"><select class="form-select form-select-sm" id="compress_status_filter" onchange="compressionApplyFilter()"><option value="all">全部状态</option><option value="not_started">尚未压缩</option><option value="queued">已排队</option><option value="compressing">压缩中</option><option value="user_review_required">等待审核</option><option value="failed">失败</option><option value="applied">已应用</option><option value="skipped">已跳过</option></select></div>
                                 <div class="col-md-2 text-md-end"><span class="small text-muted" id="compression_result_count"></span></div>
                             </div>
                         </div>

@@ -1,5 +1,5 @@
 // ─── Compress Compare ───
-// 方案 B（先可用再扩展）：单本 Modal 并排比较 + 整本批准 / 整本重做
+// 单本 Modal 并排比较 + 审核通过后立即应用 / 整本重做
 // 入口：gallery.js 事件委托 → data-compare-gallery 按钮 → openCompressCompare({gallery_id, source, source_id})
 let _cc_ctx = {
     modal: null,        // Bootstrap Modal instance
@@ -163,12 +163,12 @@ function _ccRenderHeader() {
     var badgeEl = document.getElementById('cc_badge');
     var badgeCls = 'bg-secondary', badgeText = status || '—';
     if (status === 'user_review_required') { badgeCls = 'bg-warning text-dark'; badgeText = '待审核'; }
-    else if (status === 'approved_pending_apply') { badgeCls = 'bg-success'; badgeText = '已批准待应用'; }
+    else if (status === 'applied') { badgeCls = 'bg-success'; badgeText = '已应用'; }
     else if (status === 'failed') { badgeCls = 'bg-danger'; badgeText = '压缩失败'; }
     else if (status === 'compressing') { badgeCls = 'bg-info text-dark'; badgeText = '压缩中…'; }
     badgeEl.className = 'badge me-2 ' + badgeCls;
     badgeEl.textContent = badgeText;
-    document.getElementById('cc_btn_approve').disabled = (status === 'approved_pending_apply');
+    document.getElementById('cc_btn_approve').disabled = (status !== 'user_review_required');
 
     document.getElementById('cc_title').textContent = (g.title || g.title_jp || '未命名') + '  （id=' + (_cc_ctx.gallery_id) + '）';
     var meta = [];
@@ -205,9 +205,6 @@ function _ccRenderThumbs() {
         var dotClass = 'dot-skipped', dotLetter = 'Skipped';
         if (p.exception) { dotClass = 'dot-failed'; dotLetter = 'Failed'; }
         else if (p.used_webp) { dotClass = 'dot-used'; dotLetter = 'Used'; }
-        if ((_cc_ctx.gallery || {}).compression_status === 'approved_pending_apply' && p.used_webp) {
-            dotClass = 'dot-approved'; dotLetter = 'Approved';
-        }
         var thumb = document.createElement('div');
         thumb.className = 'cc-thumb' + (i === _cc_ctx.cur_idx ? ' active' : '');
         thumb.dataset.idx = String(i);
@@ -431,30 +428,33 @@ function _ccSetEmpty(msg) {
     document.getElementById('cc_badge').textContent = '—';
 }
 
-// ═══ 整本批准 ═══
+// ═══ 审核通过并立即应用 ═══
 async function _ccOnApprove() {
     var btn = document.getElementById('cc_btn_approve');
     if (!_cc_ctx.info) { showToast('还未加载压缩信息', 'warning'); return; }
     var ok = await confirmDialog({
-        title: '确认批准整本压缩？',
-        message: '批准后状态将变为 approved_pending_apply，等待 Phase 2 真正替换磁盘文件。',
-        detail: '当前仍可点「整本重做」撤销批准并重新跑压缩。',
-        okText: '整本批准',
+        title: '确认通过并应用整本压缩？',
+        message: '将立即用体积变小的 WebP 候选替换对应原图。',
+        detail: '应用成功后原图和候选文件都会删除，无法回退；应用中途失败会自动恢复原图。',
+        okText: '通过并应用',
         okClass: 'btn-success'
     });
     if (!ok) return;
     btn.disabled = true;
     try {
         const r = await api('approve_compress_whole', { form: { gallery_id: _cc_ctx.gallery_id } });
-        if (!r || !r.ok) { showToast('批准失败: ' + ((r && r.error) || '未知错误'), 'danger'); return; }
-        showToast('已批准（approved_pending_apply）。等 Phase 2 apply 时才会真正替换磁盘。', 'success');
-        // 刷新当前 modal + 若 Gallery 页在，触发 loadGalleries 同步刷新角标
-        if (_cc_ctx.gallery) _cc_ctx.gallery.compression_status = 'approved_pending_apply';
-        _ccRenderHeader();
-        _ccRenderThumbs();
+        if (!r || !r.ok) { showToast('批准并应用失败: ' + ((r && r.error) || '未知错误'), 'danger'); return; }
+        var saved = parseInt(r.saved_bytes || 0, 10) || 0;
+        showToast(
+            r.cleanup_warning || ('已应用 ' + (parseInt(r.applied_pages_count || 0, 10) || 0) + ' 页，节省 ' + formatFileSize(saved)),
+            r.cleanup_warning ? 'warning' : 'success'
+        );
+        if (_cc_ctx.gallery) _cc_ctx.gallery.compression_status = 'applied';
+        _ccHideModal();
         if (typeof loadGalleries === 'function') loadGalleries();
+        if (typeof loadCompressionPage === 'function') loadCompressionPage();
     } finally {
-        btn.disabled = !!(_cc_ctx.gallery && _cc_ctx.gallery.compression_status === 'approved_pending_apply');
+        btn.disabled = !!(_cc_ctx.gallery && _cc_ctx.gallery.compression_status !== 'user_review_required');
     }
 }
 
@@ -464,7 +464,7 @@ async function _ccOnRerun() {
     var ok = await confirmDialog({
         title: '确认整本重做压缩？',
         message: '会以默认参数 quality=88 / method=4 / min_savings=5% 重跑 Phase 1 CLI。',
-        detail: '会为所有静态页生成审核候选（包括原本已是 WebP 的页），不修改原图；批准状态会被重置。',
+        detail: '会检查所有静态页，只保留体积严格变小的候选，不修改原图；现有审核结果会被重置。',
         okText: '开始重做',
         okClass: 'btn-warning'
     });
@@ -493,7 +493,9 @@ async function _ccOnRerun() {
                         showToast('重跑完成，状态=' + gst, (gst === 'failed' ? 'danger' : 'success'));
                         _cc_ctx.gallery = rr.gallery || {};
                         _cc_ctx.info = rr.info || null;
-                        _cc_ctx.pages = (rr.info && rr.info.pages) ? rr.info.pages.slice() : [];
+                        _cc_ctx.pages = (rr.info && rr.info.pages) ? rr.info.pages.filter(function (page) {
+                            return page && page.used_webp;
+                        }) : [];
                         _cc_ctx.work_dir_exists = !!rr.work_dir_served;
                         _cc_ctx.page_sizes = rr.page_sizes || [];
                         _cc_ctx.cur_idx = 0;

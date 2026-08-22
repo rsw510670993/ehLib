@@ -437,6 +437,92 @@ function run_python_background($args, $pid_file = null) {
     return run_python_module_background('ehlib', $args, $pid_file);
 }
 
+function check_compression_python_runtime() {
+    global $root, $python;
+    $probe = <<<'PY'
+import glob
+import json
+import os
+import sys
+
+matches = glob.glob(os.path.join(sys.prefix, "lib", "python*", "site-packages", "PIL", "_imaging*.so"))
+target = matches[0] if matches else ""
+bundled_matches = glob.glob(os.path.join(sys.prefix, "lib", "python*", "site-packages", "pillow.libs", "*"))
+def inspect_path(path):
+    try:
+        st = os.stat(path)
+        return {
+            "path": path,
+            "mode": oct(st.st_mode & 0o777),
+            "uid": st.st_uid,
+            "gid": st.st_gid,
+            "readable": os.access(path, os.R_OK),
+            "executable": os.access(path, os.X_OK),
+        }
+    except Exception as exc:
+        return {"path": path, "stat_error": repr(exc)}
+
+parents = []
+cursor = os.path.dirname(target) if target else ""
+while cursor and cursor.startswith(sys.prefix):
+    parents.append(inspect_path(cursor))
+    if cursor == sys.prefix:
+        break
+    cursor = os.path.dirname(cursor)
+
+print("EH_RUNTIME=" + json.dumps({
+    "executable": sys.executable,
+    "prefix": sys.prefix,
+    "cwd": os.getcwd(),
+    "euid": os.geteuid(),
+    "egid": os.getegid(),
+    "groups": os.getgroups(),
+    "ld_library_path": os.environ.get("LD_LIBRARY_PATH", ""),
+    "imaging": inspect_path(target) if target else {"path": "", "stat_error": "not found"},
+    "bundled_unreadable": [inspect_path(path) for path in bundled_matches if not os.access(path, os.R_OK)],
+    "bundled_sample": [inspect_path(path) for path in bundled_matches[:3]],
+    "parents": parents,
+}, ensure_ascii=False))
+from PIL import features
+assert features.check("webp"), "Pillow WebP encoder unavailable"
+PY;
+    $cmd = escapeshellarg($python) . ' -c ' . escapeshellarg($probe) . ' 2>&1';
+    $output = [];
+    $exit_code = -1;
+    @exec($cmd, $output, $exit_code);
+    if ($exit_code === 0) {
+        return ['ok' => true, 'python' => $python];
+    }
+    $detail = trim(implode("\n", $output));
+    $bundled_lib_missing = '';
+    if (preg_match('/ImportError:\\s+([^:\\r\\n]+): cannot open shared object file: No such file or directory/i', $detail, $match)) {
+        $bundled_lib_missing = basename(trim((string)$match[1]));
+    }
+    $bundled_lib_matches = $bundled_lib_missing === ''
+        ? []
+        : (glob($root . '/venv/lib/python*/site-packages/pillow.libs/' . $bundled_lib_missing) ?: []);
+    if (!empty($bundled_lib_matches)) {
+        $repair = 'cd ' . escapeshellarg($root)
+            . ' && chmod a+r ./venv/lib/python3.12/site-packages/pillow.libs/*.so*';
+        $reason = 'Pillow 随附动态库对网页后台不可读：' . $bundled_lib_missing;
+    } elseif (stripos($detail, 'Permission denied') !== false && stripos($detail, '/PIL/') !== false) {
+        $repair = '';
+        $reason = '网页后台进程无法加载 Pillow 动态库（viz 用户可用，需核对服务账户或运行隔离）';
+    } else {
+        $repair = 'cd ' . escapeshellarg($root)
+            . ' && ./venv/bin/python -m pip install --upgrade --force-reinstall '
+            . escapeshellarg('Pillow>=10.0.0');
+        $reason = 'Pillow 未安装或 WebP 编码器不可用';
+    }
+    return [
+        'ok' => false,
+        'python' => $python,
+        'detail' => $detail,
+        'reason' => $reason,
+        'repair_command' => $repair,
+    ];
+}
+
 function run_python_module_background($module, $args, $pid_file = null) {
     global $root, $python;
     if (!preg_match('/^[A-Za-z0-9_.]+$/', (string)$module)) {
@@ -938,6 +1024,8 @@ function _open_sqlite($db_path) {
 }
 
 // --- Route actions ---
+require_once __DIR__ . '/compression_apply_lib.php';
+
 try {
     // 全局 PDO：所有 sqlite 连接统一走 _open_sqlite（PRAGMA + 索引初始化）
     function _pdo($path = null) {
@@ -2892,7 +2980,7 @@ try {
             $q = trim((string)($_GET['q'] ?? $_POST['q'] ?? ''));
             if (strlen($q) > 120) $q = substr($q, 0, 120);
             $statusFilter = (string)($_GET['status'] ?? $_POST['status'] ?? 'all');
-            $allowedStatuses = ['all', 'not_started', 'queued', 'compressing', 'user_review_required', 'failed', 'approved_pending_apply', 'skipped'];
+            $allowedStatuses = ['all', 'not_started', 'queued', 'compressing', 'user_review_required', 'failed', 'applied', 'skipped'];
             if (!in_array($statusFilter, $allowedStatuses, true)) $statusFilter = 'all';
             $page = max(1, (int)($_GET['page'] ?? $_POST['page'] ?? 1));
             $perPage = max(10, min(100, (int)($_GET['per_page'] ?? $_POST['per_page'] ?? 30)));
@@ -2996,7 +3084,7 @@ try {
                     ];
                 }
 
-                $counts = ['total' => 0, 'not_started' => 0, 'queued' => 0, 'compressing' => 0, 'user_review_required' => 0, 'failed' => 0, 'approved_pending_apply' => 0, 'skipped' => 0];
+                $counts = ['total' => 0, 'not_started' => 0, 'queued' => 0, 'compressing' => 0, 'user_review_required' => 0, 'failed' => 0, 'applied' => 0, 'skipped' => 0];
                 foreach ($pdo->query("SELECT COALESCE(NULLIF(compression_status,''),'not_started') AS status_key,COUNT(*) AS n FROM galleries WHERE is_complete=1 AND COALESCE(local_path,'')<>'' GROUP BY status_key")->fetchAll() as $countRow) {
                     $key = (string)$countRow['status_key'];
                     if (array_key_exists($key, $counts)) $counts[$key] = (int)$countRow['n'];
@@ -3033,6 +3121,16 @@ try {
                 if (!$gallery) json_exit(['ok' => false, 'error' => '找不到画廊 id=' . $galleryId], false);
                 if ((int)($gallery['is_complete'] ?? 0) !== 1 || trim((string)($gallery['local_path'] ?? '')) === '') {
                     json_exit(['ok' => false, 'error' => '该画廊尚未完整下载，不能压缩'], false);
+                }
+                $runtime = check_compression_python_runtime();
+                if (empty($runtime['ok'])) {
+                    json_exit([
+                        'ok' => false,
+                        'error' => 'NAS 压缩环境不可用：' . $runtime['reason']
+                            . (empty($runtime['repair_command']) ? '' : '。请执行：' . $runtime['repair_command']),
+                        'python' => $runtime['python'],
+                        'runtime_detail' => $runtime['detail'],
+                    ], false);
                 }
                 $pidFile = $root . '/data/run_compress_' . $galleryId . '.pid';
                 if (is_file($pidFile)) {
@@ -3277,26 +3375,10 @@ try {
             if (!is_file($db_path)) error_exit('Database not found');
             try {
                 $pdo = _pdo($db_path);
-                // 幂等：严格遵循 Phase 2B 的整本状态机。
-                $stmt = $pdo->prepare(
-                    "UPDATE galleries
-                        SET compression_status='approved_pending_apply',
-                            updated_at=?
-                      WHERE id=?
-                        AND compression_status IN ('user_review_required','failed','approved_pending_apply')"
-                );
-                $stmt->execute([gmdate('c'), $gallery_id]);
-                $rows = $stmt->rowCount();
-                if ($rows < 1) {
-                    json_exit(['ok' => false, 'error' => '当前状态不允许批准，或 gallery 不存在'], false);
-                }
-                json_exit([
-                    'ok' => true,
-                    'updated_rows' => (int)$rows,
-                    'new_status' => 'approved_pending_apply'
-                ], true);
+                $result = apply_compression_candidates_pdo($pdo, $gallery_id);
+                json_exit(array_merge(['ok' => true], $result), true);
             } catch (Throwable $e) {
-                json_exit(['ok' => false, 'error' => '批准异常: ' . $e->getMessage()], false);
+                json_exit(['ok' => false, 'error' => '批准并应用异常: ' . $e->getMessage()], false);
             }
             break;
 
@@ -3314,7 +3396,7 @@ try {
                 if ($currentStatus === false) {
                     json_exit(['ok' => false, 'error' => '找不到画廊 id=' . $gallery_id], false);
                 }
-                if (!in_array((string)$currentStatus, ['user_review_required', 'failed', 'approved_pending_apply'], true)) {
+                if (!in_array((string)$currentStatus, ['user_review_required', 'failed'], true)) {
                     json_exit(['ok' => false, 'error' => '当前状态不允许重做: ' . (string)$currentStatus], false);
                 }
                 // 标记 queued（CLI force 可抢锁）；compression_info 保留到新结果覆盖。

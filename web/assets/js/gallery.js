@@ -138,11 +138,11 @@ async function loadGalleries(filters) {
             var compressStateClass = 'text-secondary';
             var savings = Number(g.compression_savings_pct);
             var hasSavings = g.compression_savings_pct !== null && g.compression_savings_pct !== '' && isFinite(savings);
-            var completedCompression = ['user_review_required', 'approved_pending_apply', 'skipped'].includes(compressStatus);
+            var hasCompressionResult = ['user_review_required', 'applied', 'compressed', 'skipped'].includes(compressStatus);
             if (compressStatus === 'user_review_required') {
                 compressStateLabel = '待审';
                 compressStateClass = 'text-warning';
-            } else if (completedCompression) {
+            } else if (['applied', 'compressed', 'skipped'].includes(compressStatus)) {
                 compressStateLabel = '已压';
                 compressStateClass = 'text-success';
             } else if (compressStatus === 'queued' || compressStatus === 'compressing') {
@@ -153,13 +153,13 @@ async function loadGalleries(filters) {
                 compressStateClass = 'text-danger';
             }
             var compressState = '<span class="gallery-compress-state ' + compressStateClass + '">' + compressStateLabel + '</span>';
-            var savingsBadge = completedCompression && hasSavings
+            var savingsBadge = hasCompressionResult && hasSavings
                 ? '<span class="gallery-compress-saving ' + (savings > 0 ? 'text-success' : 'text-secondary') + '">' + savings.toFixed(2) + '%</span>'
                 : '';
             var compressBtn = '';
             if (!isComplete) {
                 compressBtn = '<button class="btn btn-sm btn-outline-secondary gallery-mini-btn" disabled title="下载完成后才能压缩"><i class="fas fa-compress"></i></button>';
-            } else if (['user_review_required', 'approved_pending_apply'].includes(compressStatus)) {
+            } else if (compressStatus === 'user_review_required') {
                 compressBtn = '<button class="btn btn-sm btn-outline-warning gallery-mini-btn" data-compare-gallery="' + escapeAttr(String(g.id ?? '')) + '" data-source="' + escapeAttr(g.source) + '" data-source-id="' + escapeAttr(g.source_id || '') + '" title="审核压缩候选"><i class="fas fa-code-compare"></i></button>';
             } else if (compressStatus === 'queued' || compressStatus === 'compressing') {
                 compressBtn = '<button class="btn btn-sm btn-outline-info gallery-mini-btn" disabled title="压缩任务进行中"><i class="fas fa-spinner fa-spin"></i></button>';

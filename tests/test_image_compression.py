@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 import sqlite3
@@ -199,6 +200,97 @@ class ImageCompressionTests(unittest.TestCase):
                         force=True,
                         db_conn=FailingResultConnection(conn),
                     )
+            finally:
+                conn.close()
+
+
+    def test_skipped_result_removes_workdir_but_keeps_database_summary(self):
+        try:
+            from PIL import Image, features
+        except ImportError:
+            self.skipTest("Pillow is not installed in this development environment")
+        if not features.check("webp"):
+            self.skipTest("Pillow WebP encoder is unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            gallery_dir = root / "gallery"
+            gallery_dir.mkdir()
+            Image.new("RGB", (80, 120), "navy").save(
+                gallery_dir / "001.webp", format="WEBP", quality=88
+            )
+            conn = sqlite3.connect(root / "test.db")
+            try:
+                conn.execute(
+                    "CREATE TABLE galleries (id INTEGER PRIMARY KEY, compression_status TEXT NOT NULL DEFAULT '', compression_info TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT '')"
+                )
+                conn.execute(
+                    "INSERT INTO galleries(id,compression_status) VALUES (24,'queued')"
+                )
+                conn.commit()
+                status, info = ImageCompressor(
+                    quality=88, method=4, min_savings_percent=100
+                ).compress_gallery_to_workdir(
+                    24,
+                    gallery_dir,
+                    root / "compress_work",
+                    force=True,
+                    db_conn=conn,
+                )
+                self.assertEqual(status, "skipped")
+                self.assertEqual(info["work_dir"], "")
+                self.assertTrue(info["work_dir_cleaned"])
+                self.assertFalse((root / "compress_work" / "24").exists())
+                row = conn.execute(
+                    "SELECT compression_status,compression_info FROM galleries WHERE id=24"
+                ).fetchone()
+                saved_info = json.loads(row[1])
+                self.assertEqual(row[0], "skipped")
+                self.assertEqual(saved_info["total_pages"], 1)
+                self.assertEqual(saved_info["work_dir"], "")
+                self.assertTrue(saved_info["work_dir_cleaned"])
+            finally:
+                conn.close()
+
+    def test_missing_webp_encoder_fails_before_clearing_existing_candidates(self):
+        class MissingEncoderCompressor(ImageCompressor):
+            def _ensure_pillow_webp(self):
+                return False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            gallery_dir = root / "gallery"
+            gallery_dir.mkdir()
+            (gallery_dir / "001.jpg").write_bytes(b"original")
+            work_dir = root / "compress_work" / "54"
+            work_dir.mkdir(parents=True)
+            old_candidate = work_dir / "001.webp"
+            old_summary = work_dir / "summary.json"
+            old_candidate.write_bytes(b"old-candidate")
+            old_summary.write_text('{"old": true}', encoding="utf-8")
+            conn = sqlite3.connect(root / "test.db")
+            try:
+                conn.execute(
+                    "CREATE TABLE galleries (id INTEGER PRIMARY KEY, compression_status TEXT NOT NULL DEFAULT '', compression_info TEXT NOT NULL DEFAULT '', updated_at TEXT DEFAULT '')"
+                )
+                conn.execute(
+                    "INSERT INTO galleries(id,compression_status,compression_info) VALUES (54,'queued','old-info')"
+                )
+                conn.commit()
+                with self.assertRaisesRegex(RuntimeError, "Pillow/WebP"):
+                    MissingEncoderCompressor().compress_gallery_to_workdir(
+                        54,
+                        gallery_dir,
+                        root / "compress_work",
+                        force=True,
+                        db_conn=conn,
+                    )
+                self.assertEqual(old_candidate.read_bytes(), b"old-candidate")
+                self.assertEqual(old_summary.read_text(encoding="utf-8"), '{"old": true}')
+                row = conn.execute(
+                    "SELECT compression_status,compression_info FROM galleries WHERE id=54"
+                ).fetchone()
+                self.assertEqual(row, ("queued", "old-info"))
             finally:
                 conn.close()
 

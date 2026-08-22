@@ -378,6 +378,14 @@ class ImageCompressor:
         )
         override_used = not (quality_override is None and method_override is None and min_savings_override is None)
 
+        # 必须在检查/清空 work_dir 之前验证编码器。NAS 的 Python venv 若漏装
+        # Pillow，不能把旧候选清空后伪装成“所有页面均跳过”。
+        if not self._ensure_pillow_webp():
+            raise RuntimeError(
+                "Pillow/WebP 编码器不可用；请先检查 NAS venv 的 Pillow 安装和 "
+                "venv/lib/python3.12/site-packages/PIL 权限"
+            )
+
         summary_path = work_dir / "summary.json"
         if summary_path.exists() and not force:
             return "skipped", {"reason": "workdir_exists", "summary_path": str(summary_path)}
@@ -550,6 +558,15 @@ class ImageCompressor:
             final_status = "user_review_required"
         else:
             final_status = "skipped"
+
+        if final_status == "skipped":
+            try:
+                if work_dir.exists():
+                    shutil.rmtree(work_dir)
+            except Exception as exc:
+                raise RuntimeError(f"无法清理无候选压缩工作目录 {work_dir}: {exc}") from exc
+            info_dict["work_dir"] = ""
+            info_dict["work_dir_cleaned"] = True
 
         info_bytes_for_db = json.dumps(info_dict, ensure_ascii=False, indent=2).encode("utf-8").decode("utf-8")
         finish_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")

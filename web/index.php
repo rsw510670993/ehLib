@@ -135,8 +135,8 @@ $projectPath = realpath(__DIR__ . '/..');
                             </div>
                         </div>
                         <div class="d-flex flex-wrap gap-1 align-items-start">
-                            <button type="button" class="btn btn-sm btn-success me-1" id="cc_btn_approve" title="批准整本：compression_status -> approved_pending_apply（不立即替换磁盘，等 Phase 2）">
-                                <i class="fas fa-check me-1"></i>整本批准
+                            <button type="button" class="btn btn-sm btn-success me-1" id="cc_btn_approve" title="审核通过后立即应用所有变小的候选并删除原图">
+                                <i class="fas fa-check me-1"></i>通过并应用
                             </button>
                             <button type="button" class="btn btn-sm btn-outline-warning me-1" id="cc_btn_rerun" title="用默认参数 88/4/5% 重跑一次整本压缩">
                                 <i class="fas fa-arrows-rotate me-1"></i>整本重做（默认参数）
@@ -221,9 +221,9 @@ $projectPath = realpath(__DIR__ . '/..');
 <script src="assets/js/config.js?v=2"></script>
 <script src="assets/js/download.js?v=3"></script>
 <script src="assets/js/cache.js?v=29"></script>
-<script src="assets/js/gallery.js?v=16"></script>
-<script src="assets/js/compress_compare.js?v=3"></script>
-<script src="assets/js/compression.js?v=2"></script>
+<script src="assets/js/gallery.js?v=17"></script>
+<script src="assets/js/compress_compare.js?v=5"></script>
+<script src="assets/js/compression.js?v=3"></script>
 <script src="assets/js/reader.js?v=2"></script>
 <script src="assets/js/export.js"></script>
 <script src="assets/js/refresh_targets.js?v=4"></script>
