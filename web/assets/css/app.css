@@ -21,6 +21,8 @@ body { background: #f5f7fa; }
 .output-box .error { color: #ef4444; }
 .output-box .warn { color: #eab308; }
 .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 9999; }
+#confirm_modal { z-index: 1085; }
+body > .modal-backdrop.confirm-modal-backdrop { z-index: 1080; }
 
 /* ─── Downloads Progress Tray ─── */
 .downloads-tray { flex-shrink: 0; background: #1e293b; color: #e2e8f0; font-size: .82rem; display: flex; flex-direction: column; }
@@ -66,22 +68,26 @@ body { background: #f5f7fa; }
          有副：主标题 2 行 + 副标题 1 行 = 精确 3 行总高；长标题在自己的盒子里截断
          无副：:only-child 主标题单独吞 3 行 + clamp:3
    绕开 Chromium -webkit-line-clamp 跨子元素合并为一行的老坑 */
-.gallery-card .card-body.card-info-body { row-gap: 3px; }
+.gallery-card .card-body.card-info-body {
+    justify-content: flex-start;
+    row-gap: 3px;
+}
 .gallery-card .card-info-body .card-info-row.card-row-top {
-    display: grid !important;
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
+    display: flex !important;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
+    overflow: hidden;
 }
 .gallery-card .card-info-body .card-info-row.card-row-top > * {
-    display: flex;
+    display: inline-flex;
     justify-content: center;
     align-items: center;
+    flex: 0 0 auto;
     min-width: 0;
     max-width: 100%;
 }
-.gallery-card .card-info-body .card-info-row.card-row-bottom { justify-content: flex-end; }
+.gallery-card .card-info-body .card-info-row.card-row-bottom { justify-content: flex-start; }
 .gallery-card .card-info-body .title-double-clamp {
     --title-lh: 1.25rem;
     display: flex; flex-direction: column; gap: 0;
@@ -115,6 +121,14 @@ body { background: #f5f7fa; }
 }
 .gallery-card .card-info-body .card-info-row { min-height: calc(1.4em + 2px); }
 .lang-badge { display: inline-block; padding: .35em .65em; font-size: .65rem; font-weight: 600; line-height: 1; border-radius: .375rem; box-shadow: inset 0 0 0 1px; white-space: nowrap; }
+.gallery-card .gallery-meta-chip { padding: .24em .42em; font-size: .62rem; line-height: 1; white-space: nowrap; }
+.gallery-card .gallery-page-count { font-size: .68rem; line-height: 1; white-space: nowrap; }
+.gallery-card .gallery-row-actions { display: inline-flex !important; align-items: center; gap: 2px; overflow: visible !important; }
+.gallery-card .gallery-row-actions .btn,
+.gallery-card .gallery-mini-btn { width: 22px; height: 20px; padding: 0 !important; font-size: .66rem; line-height: 18px; }
+.gallery-card .gallery-compression-row { min-width: 0; }
+.gallery-card .gallery-compress-state { font-size: .68rem; font-weight: 700; white-space: nowrap; }
+.gallery-card .gallery-compress-saving { font-size: .66rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gallery-flex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: .75rem; }
 .gallery-flex-grid > div, #cache_grid > div { min-width: 0; }
 /* 缓存页：卡片固定最小宽 → 在 max-width:1200px 容器内正好一排放 5 本（5×210 + 4×12 = 1098 < 1200，刚好）；再更大屏也不会 >5 列（通过限制 cache_grid 容器 max-width 实现，而图库是自然铺满） */
@@ -254,6 +268,138 @@ body { background: #f5f7fa; }
     .reader-main { min-height: 0; padding: .4rem; align-items: flex-start; }
     .reader-main img { width: 100%; height: auto; max-height: none; }
 }
+
+/* ═══ Gallery Compress Badge (corner) ═══ */
+.gallery-compress-badge {
+    position: absolute; top: 4px; right: 4px; z-index: 2; font-size: .65rem;
+    padding: 2px 6px; font-weight: 600; border-radius: 3px;
+    letter-spacing: .02em;
+    box-shadow: 0 1px 2px rgba(0,0,0,.18);
+}
+
+/* ═══ Compress Compare Modal ═══ */
+.compress-compare-modal .modal-content { background:#0b0f17; color:#e2e8f0; border:1px solid #1e293b; }
+.compress-compare-modal .modal-header {
+    background:#0f172a; border-bottom:1px solid #1e293b; color:#e2e8f0;
+}
+.compress-compare-modal .modal-header .modal-title { color:#f1f5f9; }
+.compress-compare-modal .modal-header .btn-close { filter:invert(1) grayscale(100%) brightness(200%); }
+
+/* Left thumbnail strip */
+.cc-thumbs {
+    width: 132px; flex-shrink: 0; background:#0f172a; border-right:1px solid #1e293b;
+    overflow-y: auto; padding: .35rem .3rem;
+}
+.cc-thumb {
+    position: relative; display: block; width: 100%;
+    aspect-ratio: 3 / 4;
+    border: 2px solid transparent;
+    border-radius: 3px;
+    margin-bottom: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    opacity: .68;
+    background:#020617;
+}
+.cc-thumb:hover { opacity: .92; }
+.cc-thumb.active { border-color:#0d6efd; opacity:1; }
+.cc-thumb img {
+    width: 100%; height: 100%; display: block;
+    object-fit: contain; background:#020617;
+}
+.cc-thumb-label {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    font-size: .58rem; line-height: 1.2;
+    background: rgba(0,0,0,.55); color:#e2e8f0;
+    text-align: center;
+    padding: 1px 0;
+}
+.cc-thumb-dot {
+    position: absolute; top: 2px; right: 2px; z-index: 2;
+    min-width: 14px; height: 16px; border-radius: 8px; padding: 0 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .5rem; font-weight: 700; color:#0b0f17;
+    box-shadow: 0 1px 1px rgba(0,0,0,.4);
+}
+.cc-thumb-dot.dot-used    { background:#22c55e; }
+.cc-thumb-dot.dot-skipped { background:#94a3b8; color:#0b0f17; }
+.cc-thumb-dot.dot-failed  { background:#ef4444; color:#fff; }
+.cc-thumb-dot.dot-approved{ background:#4ade80; color:#0b0f17; }
+
+/* Right main column */
+.cc-main { min-height: 0; }
+.cc-toolbar {
+    flex-shrink: 0; padding: .3rem .6rem;
+    background:#0f172a; color:#e2e8f0;
+    display: flex; align-items: center; gap: .5rem;
+    border-bottom: 1px solid #1e293b;
+    min-height: 42px;
+}
+.cc-page-nav { display: flex; align-items: center; flex-shrink: 0; }
+.cc-page-nav .btn { min-height: 26px; padding: 2px 8px; }
+
+/* Pane (orig/cmp) */
+.cc-pane {
+    flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+    min-height: 0;
+}
+.cc-pane-head { min-height: 34px; gap: 4px; }
+.cc-pane-divider { flex: 0 0 2px; background:#1e293b; }
+.cc-scroll {
+    flex: 1 1 auto;
+    overflow: auto;
+    position: relative;
+    min-height: 0;
+    scrollbar-width: thin;
+    display: flex; align-items: center; justify-content: center;
+    background:#020617;
+}
+.cc-scroll img {
+    display: block;
+    background:#020617;
+    transition: max-width .15s, max-height .15s;
+}
+.cc-scroll.zoom-fit img   { max-width: 100%; max-height: 100%; width: auto; height: auto; }
+.cc-scroll.zoom-100,
+.cc-scroll.zoom-200 { align-items: flex-start; justify-content: flex-start; }
+.cc-scroll.zoom-100 img   { width: auto; height: auto; max-width: none; max-height: none; image-rendering: -webkit-optimize-contrast; }
+.cc-scroll.zoom-200 img   { width: 200%; height: auto; max-width: none; max-height: none; }
+.cc-meta {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: "SFMono-Regular", Consolas, monospace;
+}
+.cc-meta .savings-ok    { color:#22c55e; font-weight: 600; }
+.cc-meta .savings-mid   { color:#eab308; font-weight: 600; }
+.cc-meta .savings-bad   { color:#ef4444; font-weight: 600; }
+
+.cc-zoom.active { background: #0d6efd !important; border-color: #0d6efd !important; color:#fff !important; }
+
+/* ═══ Compression maintenance page ═══ */
+.compression-table th { white-space: nowrap; font-size: .78rem; color: #64748b; }
+.compression-table td { vertical-align: middle; }
+#tab_tools_compression table.compression-table > :not(caption) > * > *:first-child {
+    padding-left: 1rem;
+    padding-right: .75rem;
+}
+#tab_tools_compression table.compression-table > :not(caption) > * > *:last-child {
+    padding-left: .75rem;
+    padding-right: 1rem;
+}
+.compression-task { padding: .65rem .75rem; border: 1px solid #dbe4ee; border-radius: .5rem; background: #f8fafc; }
+.compression-task:last-child { margin-bottom: 0 !important; }
+#tab_tools_compression .stat-card { min-height: 86px; }
+#tab_tools_compression .stat-value { font-size: 1.5rem; }
+
+@media (prefers-color-scheme: dark) {
+    .compression-task { background: #111827; border-color: #334155; }
+}
+
+@media (max-width: 768px) {
+    .cc-thumbs { width: 70px; }
+    .compress-compare-modal .modal-dialog { max-width: 100vw; margin: 0; }
+    .cc-toolbar { flex-wrap: wrap; gap: 3px; }
+}
+
 
 @media (max-width: 420px) {
     .main-content { padding: .65rem; }

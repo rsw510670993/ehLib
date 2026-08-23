@@ -37,10 +37,10 @@ class ExhentaiSite(SiteBase):
         self.total_results: int = 0
         self.total_pages: int = 0
         self._image_compressor = ImageCompressor(
-            enabled=bool(config.download.get("convert_to_webp", True)),
-            quality=config.download.get("webp_quality", 88),
-            method=config.download.get("webp_method", 4),
-            min_savings_percent=config.download.get("webp_min_savings_percent", 5),
+            enabled=bool(config.download.get("convert_to_avif", True)),
+            quality=config.download.get("avif_quality", 65),
+            speed=config.download.get("avif_speed", 5),
+            min_savings_percent=config.download.get("avif_min_savings_percent", 5),
         )
 
     def parse_gallery_id_from_url(self, url: str) -> str:

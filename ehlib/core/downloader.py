@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -37,10 +38,10 @@ class Downloader:
         self._retry_times = config.download.get("retry_times", 3)
         self._retry_delay = config.download.get("retry_delay", 5)
         self._image_compressor = ImageCompressor(
-            enabled=bool(config.download.get("convert_to_webp", True)),
-            quality=config.download.get("webp_quality", 88),
-            method=config.download.get("webp_method", 4),
-            min_savings_percent=config.download.get("webp_min_savings_percent", 5),
+            enabled=bool(config.download.get("convert_to_avif", True)),
+            quality=config.download.get("avif_quality", 65),
+            speed=config.download.get("avif_speed", 5),
+            min_savings_percent=config.download.get("avif_min_savings_percent", 5),
         )
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
 
@@ -84,7 +85,7 @@ class Downloader:
         gallery.local_path = str(gallery_dir)
         gallery.is_complete = False
         gallery.updated_at = datetime.now().isoformat()
-        await self._db.save_gallery(gallery)
+        gallery.id = await self._db.save_gallery(gallery)
 
         logger.info("Downloading [%s] %s (%d pages)", source, gallery.source_id, gallery.total_pages)
         write_progress(source, gallery.source_id, gallery.title, gallery.total_pages, 0, "downloading")
@@ -122,7 +123,8 @@ class Downloader:
         gallery.downloaded_at = datetime.now().isoformat()
         gallery.updated_at = datetime.now().isoformat()
 
-        await self._db.save_gallery(gallery)
+        gallery.id = await self._db.save_gallery(gallery)
+        await self._persist_download_compression(gallery, gallery_dir)
         await self._db.register_completed_refresh_target(source, gallery.source_id)
         self._save_metadata_file(gallery, gallery_dir)
         remove_progress(source, gallery.source_id)
@@ -472,7 +474,10 @@ class Downloader:
                 page_num, page_url = page_items[idx]
                 ext = self._extract_ext(page_url)
                 page_path = self._file_manager.page_path(gallery_dir, page_num, ext)
-                await asyncio.to_thread(self._image_compressor.save_page_bytes, data, page_path)
+                _, page_stats = await asyncio.to_thread(
+                    self._image_compressor.save_page_bytes_with_stats, data, page_path
+                )
+                self._record_compression_stats(stats, page_stats)
 
             logger.info("Browser downloaded %d/%d pages", len(results), len(urls))
             if len(results) != len(urls):
@@ -516,7 +521,7 @@ class Downloader:
         path: Path,
         label: str,
         *,
-        stats: dict[str, int] | None = None,
+        stats: dict | None = None,
         stats_key: str | None = None,
     ) -> None:
         async with self._semaphore:
@@ -536,7 +541,7 @@ class Downloader:
         path: Path,
         label: str,
         *,
-        stats: dict[str, int] | None = None,
+        stats: dict | None = None,
         stats_key: str | None = None,
     ) -> None:
         for attempt in range(self._retry_times):
@@ -547,7 +552,13 @@ class Downloader:
                     stats[stats_key] = stats.get(stats_key, 0) + 1
                 response = await self._session.fetch(source, url)
                 response.raise_for_status()
-                await asyncio.to_thread(self._image_compressor.save_page_bytes, response.content, path)
+                _, page_stats = await asyncio.to_thread(
+                    self._image_compressor.save_page_bytes_with_stats,
+                    response.content,
+                    path,
+                )
+                if stats is not None:
+                    self._record_compression_stats(stats, page_stats)
                 return
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 403:
@@ -565,7 +576,72 @@ class Downloader:
                     raise
 
     @staticmethod
-    def _ensure_request_stats(gallery: Gallery) -> dict[str, int]:
+    def _record_compression_stats(request_stats: dict, page_stats: dict) -> None:
+        bucket = request_stats.setdefault("compression", {
+            "processed_pages": 0,
+            "used_candidate_count": 0,
+            "orig_bytes_total": 0,
+            "result_bytes_total": 0,
+            "failed_pages_count": 0,
+        })
+        orig_bytes = max(0, int(page_stats.get("orig_bytes", 0) or 0))
+        used_candidate = bool(page_stats.get("used_candidate", False))
+        candidate_bytes = max(0, int(page_stats.get("candidate_bytes", 0) or 0))
+        result_bytes = candidate_bytes if used_candidate and candidate_bytes > 0 else orig_bytes
+        bucket["processed_pages"] += 1
+        bucket["used_candidate_count"] += int(used_candidate)
+        bucket["orig_bytes_total"] += orig_bytes
+        bucket["result_bytes_total"] += result_bytes
+        bucket["failed_pages_count"] += int(bool(page_stats.get("exception")))
+
+    async def _persist_download_compression(self, gallery: Gallery, gallery_dir: Path) -> None:
+        avif_page_count = sum(
+            1
+            for path in gallery_dir.glob("*.avif")
+            if path.is_file() and path.stem.isdigit()
+        )
+        if avif_page_count <= 0:
+            return
+
+        request_stats = self._ensure_request_stats(gallery)
+        stats = request_stats.get("compression", {})
+        processed_pages = int(stats.get("processed_pages", 0) or 0)
+        orig_total = int(stats.get("orig_bytes_total", 0) or 0)
+        result_total = int(stats.get("result_bytes_total", 0) or 0)
+        savings_pct = None
+        if processed_pages == int(gallery.total_pages) and orig_total > 0:
+            savings_pct = round((1.0 - result_total / orig_total) * 100.0, 2)
+
+        info = {
+            "schema_version": 2,
+            "gallery_id": int(gallery.id or 0),
+            "tool": "pillow-avif-download",
+            "target_format": "AVIF",
+            "target_extension": ".avif",
+            "quality": int(self._image_compressor.quality),
+            "speed": int(self._image_compressor.speed),
+            "min_savings_percent": float(self._image_compressor.min_savings_percent),
+            "total_pages": int(gallery.total_pages),
+            "processed_pages": processed_pages,
+            "used_candidate_count": avif_page_count,
+            "used_avif_count": avif_page_count,
+            "skipped_pages_count": max(0, int(gallery.total_pages) - avif_page_count),
+            "failed_pages_count": int(stats.get("failed_pages_count", 0) or 0),
+            "orig_bytes_total": orig_total,
+            "candidate_bytes_total": result_total,
+            "avif_bytes_total": result_total,
+            "savings_pct_overall": savings_pct,
+            "applied_during_download": True,
+        }
+        await self._db.update_gallery_compression(
+            gallery.source,
+            gallery.source_id,
+            "applied",
+            json.dumps(info, ensure_ascii=False),
+        )
+
+    @staticmethod
+    def _ensure_request_stats(gallery: Gallery) -> dict:
         stats = getattr(gallery, "request_stats", None)
         if not isinstance(stats, dict):
             stats = {
@@ -600,7 +676,7 @@ class Downloader:
         stats = getattr(gallery, "request_stats", None)
         if not isinstance(stats, dict):
             return
-        total = sum(int(v) for v in stats.values())
+        total = sum(int(v) for v in stats.values() if isinstance(v, (int, float)))
         if gallery.source == "exhentai":
             logger.info(
                 "Exhentai request summary for %s: gallery pages=%d, cover=%d, image pages=%d, image files=%d, total=%d",
@@ -647,7 +723,7 @@ class Downloader:
     @staticmethod
     def _extract_ext(url: str) -> str:
         ext = Path(url.split("?")[0]).suffix
-        if ext.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        if ext.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"):
             return ext.lower()
         return ".jpg"
 

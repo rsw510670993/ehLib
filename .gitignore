@@ -13,3 +13,6 @@ build/
 .trae/documents/
 docs/
 web/ehlib_images/
+data/downloads/compress_work/
+data/downloads/*/.deleted.*/
+data/downloads/*/.wipe_*/

@@ -204,6 +204,25 @@ function resolve_download_path() {
     return normalize_path($root . DIRECTORY_SEPARATOR . $download_path);
 }
 
+function resolve_compress_work_path() {
+    global $root;
+    // Keep this in sync with ehlib.cmd_compress's default work root.
+    return normalize_path($root . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'downloads' . DIRECTORY_SEPARATOR . 'compress_work');
+}
+
+function resolve_compress_info_work_dir($work_dir) {
+    global $root;
+    $work_dir = trim((string)$work_dir);
+    if ($work_dir === '') return '';
+    $is_absolute = preg_match('/^[A-Za-z]:[\\\\\/]/', $work_dir)
+        || substr($work_dir, 0, 1) === '/'
+        || substr($work_dir, 0, 2) === '\\\\';
+    if (!$is_absolute) {
+        $work_dir = $root . DIRECTORY_SEPARATOR . $work_dir;
+    }
+    return normalize_path($work_dir);
+}
+
 function is_path_within($child, $parent) {
     $child = rtrim(strtolower(normalize_path($child)), DIRECTORY_SEPARATOR);
     $parent = rtrim(strtolower(normalize_path($parent)), DIRECTORY_SEPARATOR);
@@ -225,7 +244,7 @@ function count_downloaded_pages($local_path) {
         $path = $dir . DIRECTORY_SEPARATOR . $item;
         if (!is_file($path)) continue;
         $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
-        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) continue;
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'], true)) continue;
         $name = pathinfo($item, PATHINFO_FILENAME);
         if (ctype_digit($name)) $count++;
     }
@@ -248,8 +267,15 @@ function public_image_url_from_path($path) {
     return 'ehlib_images/' . implode('/', $encoded);
 }
 
+function gallery_image_api_url($source, $source_id, $page) {
+    return 'api.php?action=serve_image'
+        . '&source=' . rawurlencode((string)$source)
+        . '&source_id=' . rawurlencode((string)$source_id)
+        . '&page=' . rawurlencode((string)$page);
+}
+
 function find_gallery_image_path($local_path, $page) {
-    $exts = ['webp', 'jpg', 'jpeg', 'png', 'gif'];
+    $exts = ['avif', 'webp', 'jpg', 'jpeg', 'png', 'gif'];
     if ($page === 'cover') {
         foreach (['001', '1'] as $name) {
             foreach ($exts as $ext) {
@@ -274,11 +300,19 @@ function find_gallery_image_path($local_path, $page) {
     return '';
 }
 
-function public_cover_url($local_path) {
+function public_cover_url($local_path, $source = '', $source_id = '') {
     $dir = normalize_path((string)$local_path);
     $download_base = resolve_download_path();
     if (!is_path_within($dir, $download_base) || !is_dir($dir)) return '';
     $img_path = find_gallery_image_path($dir, 'cover');
+    if (
+        $img_path
+        && strtolower(pathinfo($img_path, PATHINFO_EXTENSION)) === 'avif'
+        && $source !== ''
+        && $source_id !== ''
+    ) {
+        return gallery_image_api_url($source, $source_id, 'cover');
+    }
     return $img_path ? public_image_url_from_path($img_path) : '';
 }
 
@@ -415,7 +449,100 @@ function run_python($args, $timeout = 120) {
 }
 
 function run_python_background($args, $pid_file = null) {
+    return run_python_module_background('ehlib', $args, $pid_file);
+}
+
+function check_compression_python_runtime() {
     global $root, $python;
+    $probe = <<<'PY'
+import glob
+import json
+import os
+import sys
+
+matches = glob.glob(os.path.join(sys.prefix, "lib", "python*", "site-packages", "PIL", "_imaging*.so"))
+target = matches[0] if matches else ""
+bundled_matches = glob.glob(os.path.join(sys.prefix, "lib", "python*", "site-packages", "pillow.libs", "*"))
+def inspect_path(path):
+    try:
+        st = os.stat(path)
+        return {
+            "path": path,
+            "mode": oct(st.st_mode & 0o777),
+            "uid": st.st_uid,
+            "gid": st.st_gid,
+            "readable": os.access(path, os.R_OK),
+            "executable": os.access(path, os.X_OK),
+        }
+    except Exception as exc:
+        return {"path": path, "stat_error": repr(exc)}
+
+parents = []
+cursor = os.path.dirname(target) if target else ""
+while cursor and cursor.startswith(sys.prefix):
+    parents.append(inspect_path(cursor))
+    if cursor == sys.prefix:
+        break
+    cursor = os.path.dirname(cursor)
+
+print("EH_RUNTIME=" + json.dumps({
+    "executable": sys.executable,
+    "prefix": sys.prefix,
+    "cwd": os.getcwd(),
+    "euid": os.geteuid(),
+    "egid": os.getegid(),
+    "groups": os.getgroups(),
+    "ld_library_path": os.environ.get("LD_LIBRARY_PATH", ""),
+    "imaging": inspect_path(target) if target else {"path": "", "stat_error": "not found"},
+    "bundled_unreadable": [inspect_path(path) for path in bundled_matches if not os.access(path, os.R_OK)],
+    "bundled_sample": [inspect_path(path) for path in bundled_matches[:3]],
+    "parents": parents,
+}, ensure_ascii=False))
+from PIL import features
+assert features.check("avif"), "Pillow AVIF encoder unavailable"
+PY;
+    $cmd = escapeshellarg($python) . ' -c ' . escapeshellarg($probe) . ' 2>&1';
+    $output = [];
+    $exit_code = -1;
+    @exec($cmd, $output, $exit_code);
+    if ($exit_code === 0) {
+        return ['ok' => true, 'python' => $python];
+    }
+    $detail = trim(implode("\n", $output));
+    $bundled_lib_missing = '';
+    if (preg_match('/ImportError:\\s+([^:\\r\\n]+): cannot open shared object file: No such file or directory/i', $detail, $match)) {
+        $bundled_lib_missing = basename(trim((string)$match[1]));
+    }
+    $bundled_lib_matches = $bundled_lib_missing === ''
+        ? []
+        : (glob($root . '/venv/lib/python*/site-packages/pillow.libs/' . $bundled_lib_missing) ?: []);
+    if (!empty($bundled_lib_matches)) {
+        $repair = 'cd ' . escapeshellarg($root)
+            . ' && chmod a+r ./venv/lib/python3.12/site-packages/pillow.libs/*.so*';
+        $reason = 'Pillow 随附动态库对网页后台不可读：' . $bundled_lib_missing;
+    } elseif (stripos($detail, 'Permission denied') !== false && stripos($detail, '/PIL/') !== false) {
+        $repair = '';
+        $reason = '网页后台进程无法加载 Pillow 动态库（viz 用户可用，需核对服务账户或运行隔离）';
+    } else {
+        $repair = 'cd ' . escapeshellarg($root)
+            . ' && ./venv/bin/python -m pip install --upgrade --force-reinstall '
+            . escapeshellarg('Pillow>=10.0.0');
+        $reason = 'Pillow 未安装或 AVIF 编码器不可用';
+    }
+    return [
+        'ok' => false,
+        'python' => $python,
+        'detail' => $detail,
+        'reason' => $reason,
+        'repair_command' => $repair,
+    ];
+}
+
+function run_python_module_background($module, $args, $pid_file = null) {
+    global $root, $python;
+    if (!preg_match('/^[A-Za-z0-9_.]+$/', (string)$module)) {
+        throw new InvalidArgumentException('Invalid Python module');
+    }
     $data_dir = $root . '/data';
     if (!is_dir($data_dir)) mkdir($data_dir, 0755, true);
     if ($pid_file === null) $pid_file = $data_dir . '/retry.pid';
@@ -423,7 +550,7 @@ function run_python_background($args, $pid_file = null) {
 
     $cmd_parts = [$python];
     $cmd_parts[] = '-m';
-    $cmd_parts[] = 'ehlib';
+    $cmd_parts[] = $module;
     foreach ($args as $a) {
         $cmd_parts[] = $a;
     }
@@ -450,6 +577,91 @@ function run_python_background($args, $pid_file = null) {
     return $pid;
 }
 
+function is_process_running($pid) {
+    $pid = (int)$pid;
+    if ($pid <= 0) return false;
+    if (DIRECTORY_SEPARATOR === '\\') {
+        $out = [];
+        exec('tasklist /FI "PID eq ' . $pid . '" /NH 2>nul', $out);
+        foreach ($out as $line) {
+            if (preg_match('/\\b' . preg_quote((string)$pid, '/') . '\\b/', (string)$line)) return true;
+        }
+        return false;
+    }
+    return is_dir('/proc/' . $pid);
+}
+
+function read_json_file_safe($path) {
+    if (!is_file($path)) return null;
+    $raw = @file_get_contents($path);
+    if ($raw === false || $raw === '') return null;
+    $data = @json_decode($raw, true);
+    return is_array($data) ? $data : null;
+}
+
+function get_compression_batch_state() {
+    global $root;
+    $progressFile = $root . '/data/progress/compress_batch.json';
+    $pidFile = $root . '/data/run_compress_batch.pid';
+    $state = read_json_file_safe($progressFile);
+    $pid = is_file($pidFile) ? trim((string)@file_get_contents($pidFile)) : '';
+    $running = $pid !== '' && is_process_running($pid);
+    if (!is_array($state)) {
+        return $running ? ['status' => 'running', 'message' => '批量进程正在启动', 'running' => true] : null;
+    }
+    $state['running'] = $running;
+    $state['pid'] = $pid;
+    $currentId = (int)($state['current_gallery_id'] ?? 0);
+    if ($currentId > 0) {
+        $state['gallery_progress'] = read_json_file_safe(
+            $root . '/data/progress/compress_' . $currentId . '.json'
+        );
+    }
+    return $state;
+}
+
+function ensure_compression_columns_pdo($pdo) {
+    $cols = [];
+    foreach ($pdo->query('PRAGMA table_info(galleries)')->fetchAll() as $row) {
+        $cols[(string)($row['name'] ?? '')] = true;
+    }
+    if (!isset($cols['compression_status'])) {
+        $pdo->exec("ALTER TABLE galleries ADD COLUMN compression_status TEXT NOT NULL DEFAULT ''");
+    }
+    if (!isset($cols['compression_info'])) {
+        $pdo->exec("ALTER TABLE galleries ADD COLUMN compression_info TEXT NOT NULL DEFAULT ''");
+    }
+    if (!isset($cols['compression_savings_pct'])) {
+        $pdo->exec("ALTER TABLE galleries ADD COLUMN compression_savings_pct REAL DEFAULT NULL");
+    }
+
+    // 已结束记录不再保留编码参数和逐页详情；旧 JSON 只迁移整本压缩率。
+    $legacyRows = $pdo->query(
+        "SELECT id,compression_info FROM galleries
+          WHERE compression_status IN ('applied','compressed','skipped')
+            AND COALESCE(compression_info,'')<>''"
+    )->fetchAll();
+    if (!empty($legacyRows)) {
+        $migrate = $pdo->prepare(
+            "UPDATE galleries
+                SET compression_savings_pct=COALESCE(compression_savings_pct,?), compression_info=''
+              WHERE id=?"
+        );
+        foreach ($legacyRows as $legacyRow) {
+            $legacyInfo = @json_decode((string)($legacyRow['compression_info'] ?? ''), true);
+            $legacyPct = is_array($legacyInfo) && isset($legacyInfo['savings_pct_overall'])
+                ? (float)$legacyInfo['savings_pct_overall'] : null;
+            $migrate->execute([$legacyPct, (int)$legacyRow['id']]);
+        }
+    }
+    $legacyStatus = $pdo->query(
+        "SELECT 1 FROM galleries WHERE compression_status='compressed' LIMIT 1"
+    )->fetchColumn();
+    if ($legacyStatus !== false) {
+        $pdo->exec("UPDATE galleries SET compression_status='applied' WHERE compression_status='compressed'");
+    }
+}
+
 function is_crawl_worker_process($pid) {
     $pid = (int)$pid;
     if ($pid <= 0) return false;
@@ -465,6 +677,35 @@ function is_crawl_worker_process($pid) {
     $cmdline = str_replace("\0", ' ', $cmdline);
     return strpos($cmdline, 'bg_crawl_worker_pid.sh') !== false
         || (strpos($cmdline, 'ehlib') !== false && strpos($cmdline, 'crawl-worker') !== false);
+}
+
+function crawl_worker_python_pids() {
+    if (DIRECTORY_SEPARATOR === '\\') return [];
+    $workers = [];
+    foreach (glob('/proc/[0-9]*/cmdline') ?: [] as $cmdline_path) {
+        $cmdline = @file_get_contents($cmdline_path);
+        if ($cmdline === false || $cmdline === '') continue;
+        $cmdline = str_replace("\0", ' ', $cmdline);
+        if (strpos($cmdline, 'ehlib') === false || strpos($cmdline, 'crawl-worker') === false) {
+            continue;
+        }
+        $pid = (int)basename(dirname($cmdline_path));
+        if ($pid > 0) $workers[] = $pid;
+    }
+    return array_values(array_unique($workers));
+}
+
+function signal_process_safe($pid, $signal) {
+    $pid = (int)$pid;
+    $signal = (int)$signal;
+    if ($pid <= 0 || $signal <= 0) return false;
+    if (function_exists('posix_kill')) return @posix_kill($pid, $signal);
+    if (DIRECTORY_SEPARATOR === '\\') {
+        @exec('taskkill /F /PID ' . $pid . ' 2>nul', $out, $code);
+    } else {
+        @exec('kill -' . $signal . ' ' . $pid . ' 2>/dev/null', $out, $code);
+    }
+    return $code === 0;
 }
 
 function run_python_locked($args, $timeout = 120, $chunk_callback = null) {
@@ -877,6 +1118,8 @@ function _open_sqlite($db_path) {
 }
 
 // --- Route actions ---
+require_once __DIR__ . '/compression_apply_lib.php';
+
 try {
     // 全局 PDO：所有 sqlite 连接统一走 _open_sqlite（PRAGMA + 索引初始化）
     function _pdo($path = null) {
@@ -957,6 +1200,7 @@ try {
             if (!is_file($db_path)) error_exit('Database not found');
             try {
                 $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
                 $pdo->sqliteCreateFunction('regexp', function ($pattern, $subject) {
                     if ($pattern === null || $pattern === '') return 0;
                     $p = @preg_match('/' . str_replace('/', '\\/', (string)$pattern) . '/ui' , (string)$subject);
@@ -1040,19 +1284,35 @@ try {
                     $total_pages = (int)($row['total_pages'] ?? 0);
                     $downloaded_pages = count_downloaded_pages($row['local_path'] ?? '');
                     $is_complete = (int)($row['is_complete'] ?? 0) === 1;
+                    $compression_info = @json_decode((string)($row['compression_info'] ?? ''), true);
+                    if (!is_array($compression_info)) $compression_info = [];
                     $galleries[] = [
+                        'id' => (int)($row['id'] ?? 0),
                         'source' => $row['source'] ?? '',
                         'source_id' => $row['source_id'] ?? '',
                         'title' => $row['title'] ?? '',
                         'title_jp' => $row['title_jp'] ?? '',
                         'language' => $row['language'] ?? '',
+                        'category' => $row['category'] ?? '',
+                        'file_size' => (int)($row['file_size'] ?? 0),
+                        'compression_status' => $row['compression_status'] ?? '',
+                        'compression_savings_pct' => isset($row['compression_savings_pct'])
+                            ? (float)$row['compression_savings_pct']
+                            : (isset($compression_info['savings_pct_overall'])
+                                ? (float)$compression_info['savings_pct_overall'] : null),
+                        'compression_used_count' => (int)($compression_info['used_candidate_count']
+                            ?? ($compression_info['used_avif_count'] ?? ($compression_info['used_webp_count'] ?? 0))),
                         'pages' => $total_pages,
                         'total_pages' => $total_pages,
                         'downloaded_pages' => $downloaded_pages,
                         'is_complete' => $is_complete,
                         'downloaded_at' => $row['downloaded_at'] ?? '',
                         'uploaded_at' => $row['uploaded_at'] ?? '',
-                        'cover_url' => public_cover_url($row['local_path'] ?? ''),
+                        'cover_url' => public_cover_url(
+                            $row['local_path'] ?? '',
+                            $row['source'] ?? '',
+                            $row['source_id'] ?? ''
+                        ),
                     ];
                 }
                 json_exit(['galleries' => $galleries, 'total' => $total, 'page' => $page, 'per_page' => $per_page]);
@@ -1282,24 +1542,42 @@ try {
                 if (!$row || empty($row['local_path'])) error_exit('Gallery not found');
                 $local_path = normalize_path($row['local_path']);
                 $download_base = resolve_download_path();
+                if (!is_dir($local_path) || !is_path_within($local_path, $download_base)) {
+                    $sourceDir = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$source);
+                    $sourceIdDir = str_replace('/', '_', (string)$source_id);
+                    $candidate = normalize_path($download_base . DIRECTORY_SEPARATOR . $sourceDir . DIRECTORY_SEPARATOR . $sourceIdDir);
+                    if (is_dir($candidate) && is_path_within($candidate, $download_base)) $local_path = $candidate;
+                }
                 if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
                 $total_pages = (int)$row['total_pages'];
                 $images = [];
                 for ($i = 1; $i <= $total_pages; $i++) {
                     $found = false;
-                    foreach (['webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
+                    foreach (['avif', 'webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
                         $candidate = $local_path . DIRECTORY_SEPARATOR . sprintf('%03d', $i) . '.' . $ext;
                         if (is_file($candidate)) {
-                            $images[] = ['page' => $i, 'file' => sprintf('%03d', $i) . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
+                            $images[] = [
+                                'page' => $i,
+                                'file' => sprintf('%03d', $i) . '.' . $ext,
+                                'url' => $ext === 'avif'
+                                    ? gallery_image_api_url($source, $source_id, $i)
+                                    : public_image_url_from_path($candidate),
+                            ];
                             $found = true;
                             break;
                         }
                     }
                     if (!$found) {
-                        foreach (['webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
+                        foreach (['avif', 'webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
                             $candidate = $local_path . DIRECTORY_SEPARATOR . $i . '.' . $ext;
                             if (is_file($candidate)) {
-                                $images[] = ['page' => $i, 'file' => $i . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
+                                $images[] = [
+                                    'page' => $i,
+                                    'file' => $i . '.' . $ext,
+                                    'url' => $ext === 'avif'
+                                        ? gallery_image_api_url($source, $source_id, $i)
+                                        : public_image_url_from_path($candidate),
+                                ];
                                 $found = true;
                                 break;
                             }
@@ -1335,7 +1613,7 @@ try {
                 $thumb_path = (string)$row['thumb_path'];
                 // ——— 安全：防止 DB 里被注入 .. / \ / Windows 绝对路径穿越
                 //     1. realpath 解析后必须以真实的 data_dir 根开头
-                //     2. 扩展名白名单 jpg/jpeg/png/gif/webp 只允许图片
+                //     2. 扩展名白名单 jpg/jpeg/png/gif/webp/avif 只允许图片
                 $data_dir = realpath($root . '/data') ?: $root . '/data';
                 $rp = @realpath($thumb_path);
                 if ($rp === false) error_exit('Thumb file not found');
@@ -1346,7 +1624,7 @@ try {
                 }
                 if (!is_file($rp)) error_exit('Thumb file not found');
                 $ext = strtolower(pathinfo($rp, PATHINFO_EXTENSION));
-                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
+                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp','avif'=>'image/avif'];
                 if (!isset($mime[$ext])) error_exit('Invalid thumb extension');
                 header('Content-Type: ' . $mime[$ext]);
                 header('Cache-Control: max-age=86400');
@@ -1372,6 +1650,12 @@ try {
                 if (!$row || empty($row['local_path'])) error_exit('Gallery not found');
                 $local_path = normalize_path($row['local_path']);
                 $download_base = resolve_download_path();
+                if (!is_dir($local_path) || !is_path_within($local_path, $download_base)) {
+                    $sourceDir = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$source);
+                    $sourceIdDir = str_replace('/', '_', (string)$source_id);
+                    $candidate = normalize_path($download_base . DIRECTORY_SEPARATOR . $sourceDir . DIRECTORY_SEPARATOR . $sourceIdDir);
+                    if (is_dir($candidate) && is_path_within($candidate, $download_base)) $local_path = $candidate;
+                }
                 if (!is_path_within($local_path, $download_base)) error_exit('Path outside download directory');
                 $img_path = find_gallery_image_path($local_path, $page);
                 if (!$img_path || !is_file($img_path)) error_exit('Image file not found');
@@ -1383,7 +1667,7 @@ try {
                     error_exit('Invalid image path (outside download dir)');
                 }
                 $ext = strtolower(pathinfo($rp, PATHINFO_EXTENSION));
-                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
+                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp','avif'=>'image/avif'];
                 if (!isset($mime[$ext])) error_exit('Invalid image extension');
                 header('Content-Type: ' . $mime[$ext]);
                 header('Cache-Control: max-age=86400');
@@ -2153,6 +2437,54 @@ try {
             } catch (Exception $e) { error_exit($e->getMessage()); }
             break;
 
+        case 'crawl_worker_runtime_status':
+            json_exit([
+                'python_workers' => crawl_worker_python_pids(),
+                'pid_file' => is_file($root . '/data/crawl_worker_pid.txt')
+                    ? trim((string)@file_get_contents($root . '/data/crawl_worker_pid.txt'))
+                    : '',
+            ]);
+            break;
+
+        case 'stop_crawl_worker':
+            $python_workers = crawl_worker_python_pids();
+            $target_python_pid = (int)($_POST['python_pid'] ?? $_GET['python_pid'] ?? 0);
+            if ($target_python_pid <= 0) {
+                if (count($python_workers) > 1) {
+                    error_exit('检测到多个 crawl-worker，必须指定明确 PID');
+                }
+                $target_python_pid = $python_workers[0] ?? 0;
+            }
+            if ($target_python_pid <= 0) {
+                @unlink($root . '/data/crawl_worker_pid.txt');
+                json_exit(['message' => 'Crawl worker 已退出', 'stopped' => false]);
+            }
+            if (!in_array($target_python_pid, $python_workers, true)) {
+                error_exit('指定 PID 不是正在运行的 crawl-worker');
+            }
+            signal_process_safe($target_python_pid, 15);
+            for ($i = 0; $i < 30 && is_process_running($target_python_pid); $i++) {
+                usleep(100000);
+            }
+            if (is_process_running($target_python_pid)
+                && in_array($target_python_pid, crawl_worker_python_pids(), true)) {
+                signal_process_safe($target_python_pid, 9);
+                usleep(200000);
+            }
+            $still_running = is_process_running($target_python_pid)
+                && in_array($target_python_pid, crawl_worker_python_pids(), true);
+            if (!$still_running) {
+                @unlink($root . '/data/crawl_worker_pid.txt');
+                @unlink($root . '/data/bg_crawl_worker_pid.sh');
+                compression_cleanup_idle_lock_file($root . '/data/crawl-worker.lock');
+            }
+            json_exit([
+                'message' => $still_running ? 'Crawl worker 终止失败' : 'Crawl worker 已退出',
+                'stopped' => !$still_running,
+                'python_pid' => $target_python_pid,
+            ], !$still_running);
+            break;
+
         case 'crawl_history':
             try {
                 $page = max(1, (int)($_GET['page'] ?? $_POST['page'] ?? 1));
@@ -2756,15 +3088,48 @@ try {
                 json_exit(['error' => '有任务正在运行，无法清理: ' . implode(', ', $running_tasks)], false);
                 break;
             }
-            // clean working files (keep ehlib.db and thumbs/)
+            // 清理普通工作文件（保留 ehlib.db、thumbs/ 与漫画数据）。
             $cleared = 0;
-            $patterns = ['bg_*.log', 'bg_*.sh', '*.pid', '*_pid_*.txt', '*.flag', '*.lock', '*_progress_*.json', 'progress/*.json', 'verify_*.json', 'crawl_*.json', 'retry_*.json', 'download.lock'];
+            $warnings = [];
+            $patterns = ['bg_*.log', 'bg_*.sh', '*.pid', '*_pid_*.txt', '*.flag', '*_progress_*.json', 'progress/*.json', 'verify_*.json', 'crawl_*.json', 'retry_*.json'];
             foreach ($patterns as $pattern) {
                 foreach (glob($data_dir . '/' . $pattern) as $f) {
                     if (is_file($f) && @unlink($f)) $cleared++;
                 }
             }
-            json_exit(['message' => "已清理 $cleared 个工作文件"]);
+
+            // 旧数据库备份已不再参与恢复流程，清理入口负责一并回收。
+            $db_backup_dir = $data_dir . '/_db_backup';
+            if (is_dir($db_backup_dir)) {
+                if (compression_remove_dir_recursive($db_backup_dir)) {
+                    $cleared++;
+                } else {
+                    $warnings[] = '_db_backup 删除失败';
+                }
+            }
+
+            // crawl/download 锁是常驻占位文件；只有确认锁空闲后才能删除。
+            $busy_locks = [];
+            foreach (['crawl.lock', 'crawl-worker.lock', 'download.lock'] as $lock_name) {
+                $lock_result = compression_cleanup_idle_lock_file($data_dir . '/' . $lock_name);
+                if ($lock_result === 'removed') {
+                    $cleared++;
+                } elseif ($lock_result === 'busy') {
+                    $busy_locks[] = $lock_name;
+                } elseif ($lock_result === 'error') {
+                    $warnings[] = $lock_name . ' 删除失败';
+                }
+            }
+
+            $message = "已清理 $cleared 个工作文件";
+            if ($busy_locks) $message .= '；已跳过正在使用的锁：' . implode(', ', $busy_locks);
+            if ($warnings) $message .= '；' . implode('，', $warnings);
+            json_exit([
+                'message' => $message,
+                'cleared' => $cleared,
+                'busy_locks' => $busy_locks,
+                'warnings' => $warnings,
+            ]);
             break;
 
         case 'list_cached':
@@ -2802,6 +3167,672 @@ try {
                     'error' => ($result['stderr'] ?: $result['stdout'] ?: 'unknown error'),
                     'exit_code' => $result['exit_code'] ?? -1,
                 ], false);
+            }
+            break;
+
+        // ─── Compression maintenance page ───
+        case 'list_compression_galleries':
+            $q = trim((string)($_GET['q'] ?? $_POST['q'] ?? ''));
+            if (strlen($q) > 120) $q = substr($q, 0, 120);
+            $statusFilter = (string)($_GET['status'] ?? $_POST['status'] ?? 'all');
+            $allowedStatuses = ['all', 'queued', 'compressing', 'user_review_required', 'failed'];
+            if (!in_array($statusFilter, $allowedStatuses, true)) $statusFilter = 'all';
+            $page = max(1, (int)($_GET['page'] ?? $_POST['page'] ?? 1));
+            $perPage = max(10, min(100, (int)($_GET['per_page'] ?? $_POST['per_page'] ?? 30)));
+            $offset = ($page - 1) * $perPage;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
+                $where = " WHERE is_complete=1 AND COALESCE(local_path,'')<>''";
+                $params = [];
+                if ($q !== '') {
+                    if (ctype_digit($q)) {
+                        $where .= ' AND id=?';
+                        $params = [(int)$q];
+                    } else {
+                        $where .= " AND (title LIKE ? OR title_jp LIKE ? OR artist LIKE ? OR source_id LIKE ?)";
+                        $like = '%' . $q . '%';
+                        $params = [$like, $like, $like, $like];
+                    }
+                }
+                if ($statusFilter === 'all') {
+                    $where .= " AND compression_status IN ('queued','compressing','user_review_required','failed')";
+                } else {
+                    $where .= ' AND compression_status=?';
+                    $params[] = $statusFilter;
+                }
+
+                $countStmt = $pdo->prepare('SELECT COUNT(*) FROM galleries' . $where);
+                $countStmt->execute($params);
+                $total = (int)$countStmt->fetchColumn();
+                $stmt = $pdo->prepare(
+                    "SELECT id,source,source_id,title,title_jp,artist,total_pages,file_size,compression_status,compression_info,updated_at
+                       FROM galleries" . $where . "
+                      ORDER BY CASE WHEN compression_status IN ('queued','compressing') THEN 0 ELSE 1 END,
+                               updated_at DESC,id DESC
+                      LIMIT " . $perPage . ' OFFSET ' . $offset
+                );
+                $stmt->execute($params);
+                $items = [];
+                foreach ($stmt->fetchAll() as $row) {
+                    $info = @json_decode((string)($row['compression_info'] ?? ''), true);
+                    if (!is_array($info)) $info = [];
+                    $gid = (int)$row['id'];
+                    $progressFile = $root . '/data/progress/compress_' . $gid . '.json';
+                    $progress = read_json_file_safe($progressFile);
+                    $pidFile = $root . '/data/run_compress_' . $gid . '.pid';
+                    $pid = is_file($pidFile) ? trim((string)@file_get_contents($pidFile)) : '';
+                    $pidRunning = ($pid !== '' && is_process_running($pid));
+                    $progressStatus = (string)($progress['status'] ?? '');
+                    $progressUpdated = strtotime((string)($progress['updated_at'] ?? ''));
+                    $progressFresh = $progressUpdated !== false && (time() - $progressUpdated) < 120;
+                    $items[] = [
+                        'id' => $gid,
+                        'source' => (string)($row['source'] ?? ''),
+                        'source_id' => (string)($row['source_id'] ?? ''),
+                        'title' => (string)($row['title'] ?? ''),
+                        'title_jp' => (string)($row['title_jp'] ?? ''),
+                        'artist' => (string)($row['artist'] ?? ''),
+                        'total_pages' => (int)($row['total_pages'] ?? 0),
+                        'file_size' => (int)($row['file_size'] ?? 0),
+                        'compression_status' => (string)($row['compression_status'] ?? ''),
+                        'updated_at' => (string)($row['updated_at'] ?? ''),
+                        'used_candidate_count' => (int)($info['used_candidate_count']
+                            ?? ($info['used_avif_count'] ?? ($info['used_webp_count'] ?? 0))),
+                        'failed_pages_count' => (int)($info['failed_pages_count'] ?? 0),
+                        'orig_bytes_total' => (int)($info['orig_bytes_total'] ?? 0),
+                        'candidate_bytes_total' => (int)($info['candidate_bytes_total']
+                            ?? ($info['avif_bytes_total'] ?? ($info['webp_bytes_total'] ?? 0))),
+                        'savings_pct_overall' => isset($info['savings_pct_overall'])
+                            ? (float)$info['savings_pct_overall'] : null,
+                        'quality' => isset($info['quality']) ? (int)$info['quality'] : null,
+                        'speed' => isset($info['speed']) ? (int)$info['speed']
+                            : (isset($info['method']) ? (int)$info['method'] : null),
+                        'target_format' => (string)($info['target_format']
+                            ?? (isset($info['used_webp_count']) ? 'WEBP' : '')),
+                        'min_savings_percent' => isset($info['min_savings_percent']) ? (float)$info['min_savings_percent'] : null,
+                        'force_candidates' => !empty($info['force_candidates']),
+                        'progress' => $progress,
+                        'running' => $pidRunning || ($progressFresh && in_array($progressStatus, ['queued', 'running'], true)),
+                    ];
+                }
+
+                $activeTasks = [];
+                $activeRows = $pdo->query("SELECT id,title,title_jp,total_pages,compression_status FROM galleries WHERE compression_status IN ('queued','compressing') ORDER BY updated_at DESC,id DESC")->fetchAll();
+                foreach ($activeRows as $activeRow) {
+                    $gid = (int)$activeRow['id'];
+                    $progress = read_json_file_safe($root . '/data/progress/compress_' . $gid . '.json');
+                    $pidFile = $root . '/data/run_compress_' . $gid . '.pid';
+                    $pid = is_file($pidFile) ? trim((string)@file_get_contents($pidFile)) : '';
+                    $progressStatus = (string)($progress['status'] ?? '');
+                    $progressUpdated = strtotime((string)($progress['updated_at'] ?? ''));
+                    $running = ($pid !== '' && is_process_running($pid)) || (
+                        $progressUpdated !== false
+                        && (time() - $progressUpdated) < 120
+                        && in_array($progressStatus, ['queued', 'running'], true)
+                    );
+                    if (!$running) continue;
+                    $activeTasks[] = [
+                        'id' => $gid,
+                        'title' => (string)($activeRow['title'] ?? ''),
+                        'title_jp' => (string)($activeRow['title_jp'] ?? ''),
+                        'total_pages' => (int)($activeRow['total_pages'] ?? 0),
+                        'compression_status' => (string)($activeRow['compression_status'] ?? ''),
+                        'progress' => $progress,
+                        'running' => true,
+                    ];
+                }
+
+                $counts = ['total' => 0, 'not_started' => 0, 'queued' => 0, 'compressing' => 0, 'user_review_required' => 0, 'failed' => 0, 'applied' => 0, 'skipped' => 0];
+                foreach ($pdo->query("SELECT COALESCE(NULLIF(compression_status,''),'not_started') AS status_key,COUNT(*) AS n FROM galleries WHERE is_complete=1 AND COALESCE(local_path,'')<>'' GROUP BY status_key")->fetchAll() as $countRow) {
+                    $key = (string)$countRow['status_key'];
+                    if (array_key_exists($key, $counts)) $counts[$key] = (int)$countRow['n'];
+                    $counts['total'] += (int)$countRow['n'];
+                }
+                json_exit([
+                    'items' => $items,
+                    'active_tasks' => $activeTasks,
+                    'batch_task' => get_compression_batch_state(),
+                    'counts' => $counts,
+                    'total' => $total,
+                    'page' => $page,
+                    'per_page' => $perPage,
+                ]);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '加载压缩维护列表异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'start_compression_batch':
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            $claimedIds = [];
+            try {
+                $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
+                $batchState = get_compression_batch_state();
+                if (is_array($batchState) && !empty($batchState['running'])) {
+                    json_exit(['ok' => false, 'error' => '批量压缩任务已在运行'], false);
+                }
+
+                // 上一个批量进程若异常退出，只释放它尚未开始的 queued 项。
+                if (is_array($batchState) && in_array((string)($batchState['status'] ?? ''), ['queued', 'running'], true)) {
+                    $resetStmt = $pdo->prepare("UPDATE galleries SET compression_status='',updated_at=? WHERE id=? AND compression_status='queued'");
+                    foreach (($batchState['gallery_ids'] ?? []) as $staleId) {
+                        $staleId = (int)$staleId;
+                        if ($staleId <= 0) continue;
+                        $singlePidFile = $root . '/data/run_compress_' . $staleId . '.pid';
+                        $singlePid = is_file($singlePidFile) ? trim((string)@file_get_contents($singlePidFile)) : '';
+                        if ($singlePid !== '' && is_process_running($singlePid)) continue;
+                        $singleProgress = read_json_file_safe($root . '/data/progress/compress_' . $staleId . '.json');
+                        $singleStatus = (string)($singleProgress['status'] ?? '');
+                        $singleUpdated = strtotime((string)($singleProgress['updated_at'] ?? '')) ?: 0;
+                        if (in_array($singleStatus, ['queued', 'running'], true)
+                            && $singleUpdated > 0 && (time() - $singleUpdated) <= 120) continue;
+                        $resetStmt->execute([gmdate('c'), $staleId]);
+                    }
+                }
+                @unlink($root . '/data/run_compress_batch.pid');
+
+                $busyCount = (int)$pdo->query("SELECT COUNT(*) FROM galleries WHERE compression_status IN ('queued','compressing')")->fetchColumn();
+                if ($busyCount > 0) {
+                    json_exit(['ok' => false, 'error' => '仍有单本压缩任务排队或运行，请等待完成后再启动批量任务'], false);
+                }
+
+                $rows = $pdo->query(
+                    "SELECT id,title,title_jp,total_pages FROM galleries
+                      WHERE is_complete=1 AND COALESCE(local_path,'')<>''
+                        AND COALESCE(compression_status,'')=''
+                      ORDER BY id"
+                )->fetchAll();
+                if (!$rows) {
+                    json_exit(['message' => '当前没有未压缩漫画', 'count' => 0], true);
+                }
+
+                $runtime = check_compression_python_runtime();
+                if (empty($runtime['ok'])) {
+                    json_exit([
+                        'ok' => false,
+                        'error' => 'NAS 压缩环境不可用：' . $runtime['reason']
+                            . (empty($runtime['repair_command']) ? '' : '。请执行：' . $runtime['repair_command']),
+                    ], false);
+                }
+
+                $pdo->beginTransaction();
+                $claimStmt = $pdo->prepare(
+                    "UPDATE galleries SET compression_status='queued',updated_at=?
+                      WHERE id=? AND COALESCE(compression_status,'')=''"
+                );
+                foreach ($rows as $row) {
+                    $galleryId = (int)$row['id'];
+                    $claimStmt->execute([gmdate('c'), $galleryId]);
+                    if ($claimStmt->rowCount() === 1) $claimedIds[] = $galleryId;
+                }
+                $pdo->commit();
+                if (!$claimedIds) {
+                    json_exit(['ok' => false, 'error' => '未能锁定任何未压缩漫画，请刷新后重试'], false);
+                }
+
+                $progressDir = $root . '/data/progress';
+                if (!is_dir($progressDir)) @mkdir($progressDir, 0755, true);
+                foreach ($claimedIds as $galleryId) {
+                    @unlink($progressDir . '/compress_' . $galleryId . '.json');
+                }
+                $progressFile = $progressDir . '/compress_batch.json';
+                $queued = [
+                    'status' => 'queued',
+                    'message' => '批量任务已排队，等待 Python 进程启动',
+                    'gallery_ids' => $claimedIds,
+                    'total_galleries' => count($claimedIds),
+                    'current_gallery_index' => 0,
+                    'current_gallery_id' => null,
+                    'finished_count' => 0,
+                    'review_count' => 0,
+                    'skipped_count' => 0,
+                    'failed_count' => 0,
+                    'updated_at' => gmdate('c'),
+                ];
+                if (file_put_contents($progressFile, json_encode($queued, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX) === false) {
+                    throw new RuntimeException('无法写入批量进度文件');
+                }
+
+                $args = [
+                    '--gallery-ids', implode(',', $claimedIds),
+                    '--work-root', resolve_compress_work_path(),
+                    '--progress-file', $progressFile,
+                    '--db-path', $db_path,
+                    '--quality', '65',
+                    '--speed', '5',
+                    '--min-savings', '5',
+                ];
+                $pid = run_python_module_background(
+                    'ehlib.cmd_compress_batch',
+                    $args,
+                    $root . '/data/run_compress_batch.pid'
+                );
+                json_exit([
+                    'pid' => $pid,
+                    'count' => count($claimedIds),
+                    'message' => '已启动 ' . count($claimedIds) . ' 本未压缩漫画的批量任务',
+                    'batch_task' => $queued,
+                ], true);
+            } catch (Throwable $e) {
+                if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
+                if (isset($pdo) && $claimedIds) {
+                    $resetStmt = $pdo->prepare("UPDATE galleries SET compression_status='',updated_at=? WHERE id=? AND compression_status='queued'");
+                    foreach ($claimedIds as $galleryId) $resetStmt->execute([gmdate('c'), $galleryId]);
+                }
+                @unlink($root . '/data/run_compress_batch.pid');
+                if (isset($progressFile)) {
+                    @file_put_contents($progressFile, json_encode([
+                        'status' => 'failed',
+                        'message' => '启动批量压缩异常: ' . $e->getMessage(),
+                        'gallery_ids' => $claimedIds,
+                        'total_galleries' => count($claimedIds),
+                        'finished_count' => 0,
+                        'review_count' => 0,
+                        'skipped_count' => 0,
+                        'failed_count' => 0,
+                        'updated_at' => gmdate('c'),
+                    ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+                }
+                json_exit(['ok' => false, 'error' => '启动批量压缩异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'start_compression_task':
+            $galleryIdRaw = $_POST['gallery_id'] ?? '';
+            if ($galleryIdRaw === '' || !ctype_digit((string)$galleryIdRaw) || (int)$galleryIdRaw <= 0) {
+                json_exit(['ok' => false, 'error' => 'gallery_id 必须是正整数'], false);
+            }
+            $galleryId = (int)$galleryIdRaw;
+            $quality = filter_var($_POST['quality'] ?? 65, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
+            $speed = filter_var($_POST['speed'] ?? ($_POST['method'] ?? 5), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 10]]);
+            $minSavingsRaw = $_POST['min_savings'] ?? 5;
+            $minSavings = is_numeric($minSavingsRaw) ? (float)$minSavingsRaw : -1;
+            if ($quality === false || $speed === false || $minSavings < 0 || $minSavings > 100) {
+                json_exit(['ok' => false, 'error' => '参数范围无效：quality 1..100，speed 0..10，min_savings 0..100'], false);
+            }
+            $forceCandidates = in_array(strtolower((string)($_POST['force_candidates'] ?? '0')), ['1', 'true', 'yes', 'on'], true);
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
+                $batchState = get_compression_batch_state();
+                if (is_array($batchState) && !empty($batchState['running'])) {
+                    json_exit(['ok' => false, 'error' => '批量压缩正在运行，不能同时启动单本压缩'], false);
+                }
+                $stmt = $pdo->prepare('SELECT id,title,total_pages,is_complete,local_path,compression_status FROM galleries WHERE id=?');
+                $stmt->execute([$galleryId]);
+                $gallery = $stmt->fetch();
+                if (!$gallery) json_exit(['ok' => false, 'error' => '找不到画廊 id=' . $galleryId], false);
+                if ((int)($gallery['is_complete'] ?? 0) !== 1 || trim((string)($gallery['local_path'] ?? '')) === '') {
+                    json_exit(['ok' => false, 'error' => '该画廊尚未完整下载，不能压缩'], false);
+                }
+                $runtime = check_compression_python_runtime();
+                if (empty($runtime['ok'])) {
+                    json_exit([
+                        'ok' => false,
+                        'error' => 'NAS 压缩环境不可用：' . $runtime['reason']
+                            . (empty($runtime['repair_command']) ? '' : '。请执行：' . $runtime['repair_command']),
+                        'python' => $runtime['python'],
+                        'runtime_detail' => $runtime['detail'],
+                    ], false);
+                }
+                $pidFile = $root . '/data/run_compress_' . $galleryId . '.pid';
+                if (is_file($pidFile)) {
+                    $oldPid = trim((string)@file_get_contents($pidFile));
+                    if ($oldPid !== '' && is_process_running($oldPid)) {
+                        json_exit(['ok' => false, 'error' => '该画廊压缩任务已在运行 (PID: ' . $oldPid . ')'], false);
+                    }
+                    @unlink($pidFile);
+                }
+                $progressDir = $root . '/data/progress';
+                if (!is_dir($progressDir)) @mkdir($progressDir, 0755, true);
+                $progressFile = $progressDir . '/compress_' . $galleryId . '.json';
+                $existingProgress = read_json_file_safe($progressFile);
+                $existingProgressStatus = (string)($existingProgress['status'] ?? '');
+                $existingProgressAt = strtotime((string)($existingProgress['updated_at'] ?? '')) ?: 0;
+                $hasFreshProgress = in_array($existingProgressStatus, ['queued', 'running'], true)
+                    && $existingProgressAt > 0
+                    && (time() - $existingProgressAt) <= 120;
+                if (in_array((string)($gallery['compression_status'] ?? ''), ['queued', 'compressing'], true) && $hasFreshProgress) {
+                    json_exit(['ok' => false, 'error' => '该画廊已有 queued/compressing 任务，请稍后刷新'], false);
+                }
+
+                $queued = [
+                    'gallery_id' => $galleryId,
+                    'status' => 'queued',
+                    'message' => '任务已排队，等待 Python 进程启动',
+                    'current' => 0,
+                    'total' => (int)($gallery['total_pages'] ?? 0),
+                    'updated_at' => gmdate('c'),
+                ];
+                if (file_put_contents($progressFile, json_encode($queued, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX) === false) {
+                    throw new RuntimeException('无法写入任务进度文件');
+                }
+                $pdo->prepare("UPDATE galleries SET compression_status='queued',updated_at=? WHERE id=?")
+                    ->execute([gmdate('c'), $galleryId]);
+
+                $args = [
+                    '--gallery-id', (string)$galleryId,
+                    '--work-root', resolve_compress_work_path(),
+                    '--progress-file', $progressFile,
+                    '--force',
+                ];
+                if ((int)$quality !== 65) { $args[] = '--quality'; $args[] = (string)$quality; }
+                if ((int)$speed !== 5) { $args[] = '--speed'; $args[] = (string)$speed; }
+                if ((float)$minSavings !== 5.0) { $args[] = '--min-savings'; $args[] = (string)$minSavings; }
+                if ($forceCandidates) $args[] = '--force-candidates';
+                $pid = run_python_module_background('ehlib.cmd_compress', $args, $pidFile);
+                json_exit([
+                    'gallery_id' => $galleryId,
+                    'pid' => $pid,
+                    'message' => '压缩任务已启动',
+                    'progress' => $queued,
+                ], true);
+            } catch (Throwable $e) {
+                if (isset($pdo) && isset($galleryId)) {
+                    try {
+                        $pdo->prepare("UPDATE galleries SET compression_status='failed',updated_at=? WHERE id=?")
+                            ->execute([gmdate('c'), $galleryId]);
+                    } catch (Throwable $_ignored) {}
+                }
+                json_exit(['ok' => false, 'error' => '启动压缩任务异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        // ─── Compress Compare Phase 2B actions ───
+        case 'get_compress_review_one':
+            $gallery_id = $_POST['gallery_id'] ?? ($_GET['gallery_id'] ?? '');
+            if ($gallery_id === '' || $gallery_id === null) error_exit('gallery_id required');
+            $gallery_id = (int)$gallery_id;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                // 1. 取 gallery 基本行（compression_status 在内）
+                $stmt = $pdo->prepare(
+                    "SELECT id, source, source_id, title, title_jp, artist, language, category, total_pages,
+                            uploaded_at, file_size, local_path, compression_status, compression_info
+                     FROM galleries WHERE id=?"
+                );
+                $stmt->execute([$gallery_id]);
+                $g = $stmt->fetch();
+                if (!$g) {
+                    json_exit(['ok' => false, 'error' => '找不到画廊 id=' . $gallery_id], false);
+                }
+                $infoTxt = (string)($g['compression_info'] ?? '');
+                $info = null;
+                if ($infoTxt !== '') {
+                    $info = @json_decode($infoTxt, true);
+                    if (!is_array($info)) $info = null;
+                }
+                if ($info === null) {
+                    json_exit(['ok' => false, 'error' => '这本漫画尚未生成压缩候选，请先跑 Phase 1 CLI。'], false);
+                }
+                $downloadBase = resolve_download_path();
+                $galleryLocalPath = normalize_path($g['local_path'] ?? '');
+                if ($galleryLocalPath === '' || !is_dir($galleryLocalPath) || !is_path_within($galleryLocalPath, $downloadBase)) {
+                    $sourceDir = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)($g['source'] ?? ''));
+                    $sourceIdDir = str_replace('/', '_', (string)($g['source_id'] ?? ''));
+                    $candidate = normalize_path($downloadBase . DIRECTORY_SEPARATOR . $sourceDir . DIRECTORY_SEPARATOR . $sourceIdDir);
+                    if (is_dir($candidate) && is_path_within($candidate, $downloadBase)) $galleryLocalPath = $candidate;
+                }
+                // 2. work_dir 存在性 + 读权限校验（serve 接口会再做）
+                $workDir = resolve_compress_info_work_dir($info['work_dir'] ?? '');
+                $compressRoot = resolve_compress_work_path();
+                $workDirServed = (
+                    $workDir !== ''
+                    && is_path_within($workDir, $compressRoot)
+                    && is_dir($workDir)
+                    && is_readable($workDir)
+                );
+                // 3. 取原图像素尺寸（让前端 meta 行能显示 w×h；读不到也不致命，返回 []）
+                $pageSizes = [];
+                $pages = $info['pages'] ?? [];
+                if (is_array($pages) && !empty($pages)) {
+                    // 优先用 compression_info.pages[].width/height（Phase 1 CLI 已填）
+                    $missing = false;
+                    foreach ($pages as $p) {
+                        $w = $p['width'] ?? null; $h = $p['height'] ?? null;
+                        if ($w === null || $h === null) { $missing = true; break; }
+                    }
+                    if (!$missing) {
+                        foreach ($pages as $idx => $p) {
+                            $pageIdx = isset($p['page_index']) ? (int)$p['page_index'] : $idx;
+                            $pageSizes[] = [
+                                'page_idx' => $pageIdx,
+                                'name' => (string)($p['name'] ?? ''),
+                                'w' => (int)$p['width'],
+                                'h' => (int)$p['height']
+                            ];
+                        }
+                    } else {
+                        // 兜底：逐个找原图本地文件读 getimagesize
+                        $localPath = $galleryLocalPath;
+                        if ($localPath !== '' && is_dir($localPath) && is_path_within($localPath, $downloadBase)) {
+                            foreach ($pages as $idx => $p) {
+                                $pageIdx = isset($p['page_index']) ? (int)$p['page_index'] : $idx;
+                                $pageNo = $pageIdx + 1;
+                                $imgPath = find_gallery_image_path($localPath, $pageNo);
+                                if ($imgPath && is_file($imgPath)) {
+                                    $rp = realpath($imgPath);
+                                    if ($rp !== false && is_path_within($rp, $downloadBase)) {
+                                        $wh = @getimagesize($rp);
+                                        if (is_array($wh) && count($wh) >= 2) {
+                                            $pageSizes[] = [
+                                                'page_idx' => $pageIdx,
+                                                'name' => (string)($p['name'] ?? basename($imgPath)),
+                                                'w' => (int)$wh[0],
+                                                'h' => (int)$wh[1]
+                                            ];
+                                            continue;
+                                        }
+                                    }
+                                }
+                                $pageSizes[] = [
+                                    'page_idx' => $pageIdx,
+                                    'name' => (string)($p['name'] ?? ''),
+                                    'w' => null,
+                                    'h' => null
+                                ];
+                            }
+                        }
+                    }
+                }
+                $galleries_out = [
+                    'id' => (int)$g['id'],
+                    'source' => (string)($g['source'] ?? ''),
+                    'source_id' => (string)($g['source_id'] ?? ''),
+                    'title' => (string)($g['title'] ?? ''),
+                    'title_jp' => (string)($g['title_jp'] ?? ''),
+                    'artist' => (string)($g['artist'] ?? ''),
+                    'language' => (string)($g['language'] ?? ''),
+                    'category' => (string)($g['category'] ?? ''),
+                    'total_pages' => (int)($g['total_pages'] ?? 0),
+                    'uploaded_at' => (string)($g['uploaded_at'] ?? ''),
+                    'file_size' => (int)($g['file_size'] ?? 0),
+                    'local_path' => (string)$galleryLocalPath,
+                    'compression_status' => (string)($g['compression_status'] ?? ''),
+                ];
+                json_exit([
+                    'ok' => true,
+                    'gallery' => $galleries_out,
+                    'info' => $info,
+                    'page_sizes' => $pageSizes,
+                    'work_dir_served' => $workDirServed,
+                ], true);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '加载压缩审核信息异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'serve_compress_work_image':
+            // 注意：安全模型与 serve_image 相同，但是沙箱根是 compress_work 目录，不再是 downloads
+            $gallery_id = $_GET['gallery_id'] ?? '';
+            $file_req = $_GET['file'] ?? '';
+            if ($gallery_id === '' || $file_req === '') error_exit('gallery_id and file required');
+            $gallery_id = (int)$gallery_id;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                $stmt = $pdo->prepare("SELECT compression_info FROM galleries WHERE id=?");
+                $stmt->execute([$gallery_id]);
+                $row = $stmt->fetchColumn();
+                if ($row === false || $row === null || $row === '') error_exit('未找到该 gallery 或尚未生成压缩候选');
+                $info = @json_decode((string)$row, true);
+                if (!is_array($info) || !isset($info['work_dir'])) error_exit('压缩信息不完整（缺 work_dir）');
+                $workDirRaw = (string)$info['work_dir'];
+                $workDir = resolve_compress_info_work_dir($workDirRaw);
+                if ($workDir === '' || !is_dir($workDir)) error_exit('work_dir 不存在: ' . basename($workDirRaw));
+                // 沙箱根与 Phase 1 CLI 的默认 work root 保持一致。
+                $compressRoot = resolve_compress_work_path();
+                if (!is_dir($compressRoot)) error_exit('compress_work 根目录不存在');
+                if (!is_path_within($workDir, $compressRoot)) error_exit('Path outside compress_work directory');
+                // 必须原样就是 basename；不能悄悄把 ../../001.avif 降级为 001.avif。
+                $fileName = basename($file_req);
+                if ($fileName === '' || $fileName !== $file_req) error_exit('Invalid file name');
+                // 新候选为 AVIF；保留 WebP 以便查看尚未处理的旧审核记录。
+                $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+                $allowedExts = ['avif', 'webp'];
+                if (!in_array($ext, $allowedExts, true)) error_exit('Invalid image extension');
+                $target = $workDir . DIRECTORY_SEPARATOR . $fileName;
+                $rp = realpath($target);
+                if ($rp === false || !is_file($rp)) error_exit('候选文件不存在');
+                if (!is_path_within($rp, $workDir)) error_exit('Path outside work directory');
+                // MIME + 输出
+                $mime = ['avif' => 'image/avif', 'webp' => 'image/webp'];
+                header('Content-Type: ' . $mime[$ext]);
+                header('Cache-Control: private, max-age=3600');
+                header('Content-Length: ' . (int)@filesize($rp));
+                readfile($rp);
+                exit;
+            } catch (Throwable $e) {
+                error_exit($e->getMessage());
+            }
+            break;
+
+        case 'approve_compress_whole':
+            $gallery_id = $_POST['gallery_id'] ?? '';
+            if ($gallery_id === '') json_exit(['ok' => false, 'error' => 'gallery_id required'], false);
+            $gallery_id = (int)$gallery_id;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
+                $result = apply_compression_candidates_pdo($pdo, $gallery_id);
+                if (empty($_POST['defer_cleanup'])) {
+                    $result['artifact_cleanup'] = compression_cleanup_artifacts_pdo($pdo);
+                }
+                json_exit(array_merge(['ok' => true], $result), true);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '批准并应用异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'cleanup_compression_artifacts':
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
+                $cleanup = compression_cleanup_artifacts_pdo($pdo);
+                json_exit(array_merge(['ok' => true], $cleanup), true);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '清理压缩工作文件异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'compress_thumbs_sample':
+            $limit = max(1, min(20, (int)($_POST['limit'] ?? $_GET['limit'] ?? 5)));
+            $timeout = max(120, $limit * 15);
+            $result = run_python_locked(
+                ['compress-thumbs', '--limit', (string)$limit],
+                $timeout
+            );
+            foreach (['crawl.lock', 'crawl-worker.lock', 'download.lock'] as $lock_name) {
+                compression_cleanup_idle_lock_file($root . '/data/' . $lock_name);
+            }
+            if (empty($result['ok'])) {
+                json_exit([
+                    'error' => '封面 AVIF 试跑失败',
+                    'stdout' => $result['stdout'] ?? '',
+                    'stderr' => $result['stderr'] ?? '',
+                    'exit_code' => $result['exit_code'] ?? -1,
+                ], false);
+            }
+            $summary = null;
+            $lines = preg_split('/\r?\n/', trim((string)($result['stdout'] ?? ''))) ?: [];
+            for ($i = count($lines) - 1; $i >= 0; $i--) {
+                $decoded = @json_decode($lines[$i], true);
+                if (is_array($decoded)) {
+                    $summary = $decoded;
+                    break;
+                }
+            }
+            if (!is_array($summary)) {
+                json_exit(['error' => '封面压缩结果格式错误', 'stdout' => $result['stdout'] ?? ''], false);
+            }
+            json_exit(['summary' => $summary]);
+            break;
+
+        case 'rerun_compress_default':
+            $gallery_id = $_POST['gallery_id'] ?? '';
+            if ($gallery_id === '') json_exit(['ok' => false, 'error' => 'gallery_id required'], false);
+            $gallery_id = (int)$gallery_id;
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                $batchState = get_compression_batch_state();
+                if (is_array($batchState) && !empty($batchState['running'])) {
+                    json_exit(['ok' => false, 'error' => '批量压缩正在运行，不能同时启动重做任务'], false);
+                }
+                $stmt = $pdo->prepare("SELECT compression_status FROM galleries WHERE id=?");
+                $stmt->execute([$gallery_id]);
+                $currentStatus = $stmt->fetchColumn();
+                if ($currentStatus === false) {
+                    json_exit(['ok' => false, 'error' => '找不到画廊 id=' . $gallery_id], false);
+                }
+                if (!in_array((string)$currentStatus, ['user_review_required', 'failed'], true)) {
+                    json_exit(['ok' => false, 'error' => '当前状态不允许重做: ' . (string)$currentStatus], false);
+                }
+                // 标记 queued（CLI force 可抢锁）；compression_info 保留到新结果覆盖。
+                $pdo->prepare("UPDATE galleries SET compression_status='queued', updated_at=? WHERE id=?")
+                    ->execute([gmdate('c'), $gallery_id]);
+                $progressDir = $root . '/data/progress';
+                if (!is_dir($progressDir)) @mkdir($progressDir, 0755, true);
+                $progressFile = $progressDir . '/compress_' . $gallery_id . '.json';
+                file_put_contents($progressFile, json_encode([
+                    'gallery_id' => $gallery_id,
+                    'status' => 'queued',
+                    'message' => '重做任务已排队',
+                    'current' => 0,
+                    'total' => 0,
+                    'updated_at' => gmdate('c'),
+                ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+                // 后台启动 CLI： python -m ehlib.cmd_compress --gallery-id <id> --force
+                // 和 verify/start_verify 一样走 run_python_background（避免 HTTP 同步等待）
+                $args = [
+                    '--gallery-id', (string)$gallery_id,
+                    '--work-root', resolve_compress_work_path(),
+                    '--progress-file', $progressFile,
+                    '--force'
+                ];
+                $pid_file = $root . '/data/run_compress_' . $gallery_id . '.pid';
+                $pid = run_python_module_background('ehlib.cmd_compress', $args, $pid_file);
+                json_exit([
+                    'pid' => $pid,
+                    'message' => '重做已启动，完成后自动刷新卡片',
+                ], true);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '启动重跑异常: ' . $e->getMessage()], false);
             }
             break;
 

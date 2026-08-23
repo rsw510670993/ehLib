@@ -6,7 +6,7 @@ import random
 import re as _re
 import sys
 import time
-from asyncio import sleep
+from asyncio import sleep, to_thread
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -393,14 +393,23 @@ async def cmd_crawl_worker(_args: argparse.Namespace, config: Config, db: Databa
     """Run queued crawl jobs sequentially in strict FIFO order."""
     print("Crawl queue worker started.")
     await db.recover_interrupted_crawl_jobs()
+    idle_since: float | None = None
+    idle_seconds = max(0.0, float(getattr(_args, "idle_seconds", 6.0)))
     while True:
         job = await db.claim_next_crawl_job()
         if job is None:
             if getattr(_args, "once", False):
                 return
-            await sleep(2)
+            now = time.monotonic()
+            if idle_since is None:
+                idle_since = now
+            elif now - idle_since >= idle_seconds:
+                print(f"Crawl queue remained empty for {idle_seconds:g}s; worker exiting.")
+                return
+            await sleep(min(2.0, max(0.1, idle_seconds - (now - idle_since))))
             continue
 
+        idle_since = None
         job_id = int(job["id"])
         try:
             categories = [int(value) for value in (job.get("categories") or "").split(",") if value]
@@ -437,6 +446,35 @@ async def cmd_crawl_worker(_args: argparse.Namespace, config: Config, db: Databa
         except Exception as exc:
             await db.finish_crawl_job(job_id, "failed", str(exc))
             print(f"Queue job #{job_id} failed: {exc}", file=sys.stderr)
+
+
+async def cmd_compress_thumbs(args: argparse.Namespace, _config: Config, _db: Database) -> None:
+    """批量把缓存封面从 WebP 迁移为体积更小的 AVIF。"""
+    from ehlib.cmd_compress_thumbs import compress_thumbnails
+
+    def report(progress: dict) -> None:
+        processed = int(progress["processed"])
+        total = int(progress["total"])
+        if processed == total or processed % 10 == 0:
+            print(
+                f"{processed}/{total} converted={progress['converted']} "
+                f"skipped={progress['skipped']} failed={progress['failed']}",
+                flush=True,
+            )
+
+    summary = await to_thread(
+        compress_thumbnails,
+        Path(args.thumbs_root),
+        Path(args.db_path),
+        quality=args.quality,
+        speed=args.speed,
+        min_savings_percent=args.min_savings_percent,
+        limit=max(0, args.limit),
+        dry_run=args.dry_run,
+        progress_callback=report,
+    )
+    print(json.dumps(summary, ensure_ascii=False))
+
 
 async def cmd_update_artists(_args: argparse.Namespace, config: Config, db: Database) -> None:
     """Enqueue enabled completed-task refresh targets and ensure the queue is drained."""
@@ -1597,7 +1635,7 @@ async def cmd_recover_orphans(args: argparse.Namespace, config: Config, db: Data
 def _find_oldest_file_time(directory: Path) -> str:
     oldest = None
     for f in directory.iterdir():
-        if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"):
             mtime = f.stat().st_mtime
             if oldest is None or mtime < oldest:
                 oldest = mtime
@@ -1644,7 +1682,25 @@ def main() -> None:
     crawl.add_argument("--languages", type=str, default="", help="Comma-separated languages to keep (e.g. chinese,japanese,speechless); filtered by gallery Language attribute after metadata fetch")
     crawl.add_argument("--update", action="store_true", help="Stop when encountering already-downloaded galleries (update mode)")
 
-    subparsers.add_parser("crawl-worker", help="Process queued crawl jobs sequentially")
+    crawl_worker = subparsers.add_parser("crawl-worker", help="Process queued crawl jobs sequentially")
+    crawl_worker.add_argument(
+        "--idle-seconds",
+        type=float,
+        default=6.0,
+        help="Exit after the queue remains empty for this many seconds",
+    )
+
+    compress_thumbs = subparsers.add_parser(
+        "compress-thumbs",
+        help="Convert cached WebP thumbnails to smaller AVIF files",
+    )
+    compress_thumbs.add_argument("--thumbs-root", default="data/thumbs")
+    compress_thumbs.add_argument("--db-path", default="data/ehlib.db")
+    compress_thumbs.add_argument("--quality", type=int, default=65)
+    compress_thumbs.add_argument("--speed", type=int, default=5)
+    compress_thumbs.add_argument("--min-savings-percent", type=float, default=5.0)
+    compress_thumbs.add_argument("--limit", type=int, default=0)
+    compress_thumbs.add_argument("--dry-run", action="store_true")
 
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")
@@ -1731,6 +1787,7 @@ def main() -> None:
             "batch": cmd_batch,
             "crawl": cmd_crawl,
             "crawl-worker": cmd_crawl_worker,
+            "compress-thumbs": cmd_compress_thumbs,
             "list": cmd_list,
             "config": cmd_config,
             "retry": cmd_retry,
@@ -1765,6 +1822,15 @@ def main() -> None:
                     print("Crawl queue worker is already running.")
                 except CrawlLockError as exc:
                     print(f"Error: {exc}", file=sys.stderr)
+            elif args.command == "compress-thumbs":
+                try:
+                    with (
+                        _exclusive_crawl_lock(lock_name="crawl-worker.lock"),
+                        _exclusive_crawl_lock(),
+                    ):
+                        await handler(args, config, db)
+                except (CrawlLockBusy, CrawlLockError) as exc:
+                    print(f"Error: cannot compress thumbs while crawl is active: {exc}", file=sys.stderr)
             else:
                 await handler(args, config, db)
             return

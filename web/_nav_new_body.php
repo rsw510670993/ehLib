@@ -76,33 +76,33 @@
                             <div class="border rounded p-3 mb-4 bg-light-subtle">
                                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                                     <div>
-                                        <div class="fw-semibold">WebP 图片压缩</div>
+                                        <div class="fw-semibold">AVIF 图片压缩</div>
                                         <div class="small text-muted">用于新下载的正文图片和缓存封面，不改变分辨率。</div>
                                     </div>
                                     <div class="form-check form-switch mb-0">
-                                        <input class="form-check-input" type="checkbox" role="switch" id="set_dl_webp_enabled" onchange="updateWebpSettingsState()">
-                                        <label class="form-check-label" for="set_dl_webp_enabled">启用</label>
+                                        <input class="form-check-input" type="checkbox" role="switch" id="set_dl_avif_enabled" onchange="updateAvifSettingsState()">
+                                        <label class="form-check-label" for="set_dl_avif_enabled">启用</label>
                                     </div>
                                 </div>
                                 <div class="row g-3">
                                     <div class="col-md-4">
-                                        <label class="form-label" for="set_dl_webp_quality">有损质量</label>
-                                        <input type="number" class="form-control" id="set_dl_webp_quality" min="1" max="100" step="1">
-                                        <div class="form-text">推荐 88；越高越接近原图，体积也越大。</div>
+                                        <label class="form-label" for="set_dl_avif_quality">有损质量</label>
+                                        <input type="number" class="form-control" id="set_dl_avif_quality" min="1" max="100" step="1">
+                                        <div class="form-text">默认 65；越高越接近原图，体积也越大。</div>
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label" for="set_dl_webp_method">编码强度</label>
-                                        <input type="number" class="form-control" id="set_dl_webp_method" min="0" max="6" step="1">
-                                        <div class="form-text">推荐 4；越高压缩稍好，但更占用 CPU。</div>
+                                        <label class="form-label" for="set_dl_avif_speed">编码速度</label>
+                                        <input type="number" class="form-control" id="set_dl_avif_speed" min="0" max="10" step="1">
+                                        <div class="form-text">默认 8；越低压缩更慢，可能得到更小体积。</div>
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label" for="set_dl_webp_min_savings">最低节省比例 (%)</label>
-                                        <input type="number" class="form-control" id="set_dl_webp_min_savings" min="0" max="100" step="0.5">
+                                        <label class="form-label" for="set_dl_avif_min_savings">最低节省比例 (%)</label>
+                                        <input type="number" class="form-control" id="set_dl_avif_min_savings" min="0" max="100" step="0.5">
                                         <div class="form-text">推荐 5；不足此比例时保留服务器返回格式。</div>
                                     </div>
                                 </div>
                                 <div class="alert alert-secondary py-2 px-3 mt-3 mb-0 small">
-                                    已是 WebP 或动态图时不会二次有损；现有本地图片不会自动转换或删除。
+                                    JPEG、PNG、WebP 会尝试转为 AVIF；已是 AVIF 或动态图时不会二次有损。现有本地图片不会自动转换或删除。
                                 </div>
                             </div>
 
@@ -562,6 +562,7 @@
             <ul class="nav nav-tabs mb-3" role="tablist">
                 <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab_tools_dash">仪表盘</button></li>
                 <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_tools_verify">校对</button></li>
+                <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_tools_compression"><i class="fas fa-compress me-1"></i>图片压缩</button></li>
                 <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_tools_export">数据导出</button></li>
             </ul>
             <div class="tab-content">
@@ -640,6 +641,84 @@
                             </div>
                             <div id="tv_result" class="output-box mt-3"></div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- 图片压缩 -->
+                <div class="tab-pane fade" id="tab_tools_compression">
+                    <div class="row g-2 mb-3" id="compression_stats">
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value" id="compress_stat_total">-</div><div class="stat-label">可压缩漫画</div></div></div>
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value text-secondary" id="compress_stat_not_started">-</div><div class="stat-label">尚未压缩</div></div></div>
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value text-info" id="compress_stat_running">-</div><div class="stat-label">排队 / 运行中</div></div></div>
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value text-warning" id="compress_stat_review">-</div><div class="stat-label">等待审核</div></div></div>
+                        <div class="col-6 col-lg"><div class="card stat-card"><div class="stat-value text-danger" id="compress_stat_failed">-</div><div class="stat-label">失败</div></div></div>
+                    </div>
+
+                    <div class="card mb-3">
+                        <div class="card-header d-flex justify-content-between align-items-center gap-2">
+                            <span><i class="fas fa-compress me-1"></i>发起压缩与任务进度</span>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadCompressionPage()" title="立即刷新"><i class="fas fa-sync"></i></button>
+                        </div>
+                        <div class="card-body">
+                            <div class="row g-2 align-items-end">
+                                <div class="col-12 col-lg-2">
+                                    <label class="form-label" for="compress_gallery_id">Gallery ID</label>
+                                    <input type="number" min="1" class="form-control" id="compress_gallery_id" placeholder="从下方列表选择，或直接输入 ID">
+                                </div>
+                                <div class="col-4 col-lg-2">
+                                    <label class="form-label" for="compress_quality">Quality</label>
+                                    <input type="number" min="1" max="100" value="65" class="form-control" id="compress_quality">
+                                </div>
+                                <div class="col-4 col-lg-2">
+                                    <label class="form-label" for="compress_speed">Speed</label>
+                                    <select class="form-select" id="compress_speed">
+                                        <option value="0">0（最慢）</option><option value="1">1</option><option value="2">2</option>
+                                        <option value="3">3</option><option value="4">4</option><option value="5" selected>5（默认）</option>
+                                        <option value="6">6</option><option value="7">7</option><option value="8">8</option>
+                                        <option value="9">9</option><option value="10">10（最快）</option>
+                                    </select>
+                                </div>
+                                <div class="col-4 col-lg-2">
+                                    <label class="form-label" for="compress_min_savings">最小节省率 %</label>
+                                    <input type="number" min="0" max="100" step="0.1" value="5" class="form-control" id="compress_min_savings">
+                                </div>
+                                <div class="col-6 col-lg-2 d-grid">
+                                    <button class="btn btn-primary" id="compress_start_btn" onclick="startCompressionTask()"><i class="fas fa-play me-1"></i>单本压缩</button>
+                                </div>
+                                <div class="col-6 col-lg-2 d-grid">
+                                    <button class="btn btn-warning" id="compress_batch_start_btn" onclick="startBatchCompression()"><i class="fas fa-layer-group me-1"></i>批量压缩</button>
+                                </div>
+                                <div class="col-12">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="compress_force_candidates">
+                                        <label class="form-check-label" for="compress_force_candidates">忽略最小节省率，保留所有变小候选（相等或增大的结果仍会丢弃；不修改原图）</label>
+                                    </div>
+                                    <div class="small text-muted mt-1" id="compress_selected_hint">尚未选择漫画。</div>
+                                </div>
+                            </div>
+                            <div class="border-top mt-3 pt-3" id="compression_batch_progress">
+                                <div class="text-muted small">尚未启动批量任务。</div>
+                            </div>
+                            <div class="border-top mt-3 pt-3 d-none" id="compression_active_tasks"></div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="row g-2 align-items-center">
+                                <div class="col-md-6"><div class="input-group input-group-sm"><span class="input-group-text"><i class="fas fa-search"></i></span><input class="form-control" id="compress_search" placeholder="搜索标题、作者、source_id 或 Gallery ID" onkeydown="if(event.key==='Enter'){compressionApplyFilter()}"><button class="btn btn-outline-primary" onclick="compressionApplyFilter()">搜索</button></div></div>
+                                <div class="col-md-2"><select class="form-select form-select-sm" id="compress_status_filter" onchange="compressionApplyFilter()"><option value="all">全部待处理</option><option value="queued">已排队</option><option value="compressing">压缩中</option><option value="user_review_required">等待审核</option><option value="failed">失败</option></select></div>
+                                <div class="col-md-2 d-grid"><button class="btn btn-sm btn-outline-success" id="compress_batch_approve_btn" onclick="approveFilteredCompressionReviews()" disabled><i class="fas fa-check-double me-1"></i>批量审核通过</button></div>
+                                <div class="col-md-2 text-md-end"><span class="small text-muted" id="compression_result_count"></span></div>
+                            </div>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover align-middle mb-0 compression-table">
+                                <thead><tr><th>ID / 来源</th><th>标题</th><th>页数</th><th>状态</th><th>候选 / 节省率</th><th>更新时间</th><th class="text-end">操作</th></tr></thead>
+                                <tbody id="compression_table_body"><tr><td colspan="7" class="text-center text-muted py-4">加载中…</td></tr></tbody>
+                            </table>
+                        </div>
+                        <div class="card-footer" id="compression_pagination"></div>
                     </div>
                 </div>
 

@@ -55,15 +55,15 @@ function readBoundedSetting(id, fallback, min, max, integer) {
     return value;
 }
 
-function updateWebpSettingsState() {
-    const enabledInput = document.getElementById('set_dl_webp_enabled');
+function updateAvifSettingsState() {
+    const enabledInput = document.getElementById('set_dl_avif_enabled');
     const disabled = !enabledInput || !enabledInput.checked;
-    ['set_dl_webp_quality', 'set_dl_webp_method', 'set_dl_webp_min_savings'].forEach((id) => {
+    ['set_dl_avif_quality', 'set_dl_avif_speed', 'set_dl_avif_min_savings'].forEach((id) => {
         const input = document.getElementById(id);
         if (input) input.disabled = disabled;
     });
 }
-window.updateWebpSettingsState = updateWebpSettingsState;
+window.updateAvifSettingsState = updateAvifSettingsState;
 
 async function loadSettings() {
     const data = await api('get_config');
@@ -75,11 +75,13 @@ async function loadSettings() {
     document.getElementById('set_dl_concurrent').value = dl.max_concurrent || 3;
     document.getElementById('set_dl_retry').value = dl.retry_times || 3;
     document.getElementById('set_dl_retry_delay').value = dl.retry_delay || 5;
-    document.getElementById('set_dl_webp_enabled').checked = dl.convert_to_webp !== false;
-    document.getElementById('set_dl_webp_quality').value = dl.webp_quality ?? 88;
-    document.getElementById('set_dl_webp_method').value = dl.webp_method ?? 4;
-    document.getElementById('set_dl_webp_min_savings').value = dl.webp_min_savings_percent ?? 5;
-    updateWebpSettingsState();
+    document.getElementById('set_dl_avif_enabled').checked =
+        dl.convert_to_avif ?? (dl.convert_to_webp !== false);
+    document.getElementById('set_dl_avif_quality').value = dl.avif_quality ?? 65;
+    document.getElementById('set_dl_avif_speed').value = dl.avif_speed ?? 5;
+    document.getElementById('set_dl_avif_min_savings').value =
+        dl.avif_min_savings_percent ?? dl.webp_min_savings_percent ?? 5;
+    updateAvifSettingsState();
     document.getElementById('set_req_ua').value = req.user_agent || '';
     document.getElementById('set_req_delay').value = req.delay_between_requests || 1.5;
     document.getElementById('set_browser_headless').value = br.headless ? 'true' : 'false';
@@ -94,11 +96,15 @@ async function saveSettings() {
         max_concurrent: parseInt(document.getElementById('set_dl_concurrent').value) || 3,
         retry_times: parseInt(document.getElementById('set_dl_retry').value) || 3,
         retry_delay: parseInt(document.getElementById('set_dl_retry_delay').value) || 5,
-        convert_to_webp: document.getElementById('set_dl_webp_enabled').checked,
-        webp_quality: readBoundedSetting('set_dl_webp_quality', 88, 1, 100, true),
-        webp_method: readBoundedSetting('set_dl_webp_method', 4, 0, 6, true),
-        webp_min_savings_percent: readBoundedSetting('set_dl_webp_min_savings', 5, 0, 100, false),
+        convert_to_avif: document.getElementById('set_dl_avif_enabled').checked,
+        avif_quality: readBoundedSetting('set_dl_avif_quality', 65, 1, 100, true),
+        avif_speed: readBoundedSetting('set_dl_avif_speed', 5, 0, 10, true),
+        avif_min_savings_percent: readBoundedSetting('set_dl_avif_min_savings', 5, 0, 100, false),
     });
+    delete cfg.download.convert_to_webp;
+    delete cfg.download.webp_quality;
+    delete cfg.download.webp_method;
+    delete cfg.download.webp_min_savings_percent;
     cfg.request = {
         user_agent: document.getElementById('set_req_ua').value,
         delay_between_requests: parseFloat(document.getElementById('set_req_delay').value) || 1.5,

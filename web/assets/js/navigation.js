@@ -30,7 +30,7 @@ function switchPage(name) {
         download: ['下载中心',    '单本 / 批量 / 重试未完成'],
         gallery:  ['图库',        '已下载的画廊列表'],
         cache:    ['缓存浏览',    '本地索引检索 + 批量下载'],
-        tools:    ['工具 & 维护', '仪表盘 / 校对 / 数据导出'],
+        tools:    ['工具 & 维护', '仪表盘 / 校对 / 图片压缩 / 数据导出'],
     };
     const t = titles[page] || ['页面', ''];
     const titleEl = document.getElementById('page_title');
@@ -48,6 +48,10 @@ function switchPage(name) {
     if (page === 'tools')    {
         loadDashboard();
         tvLoadList(); pollVerifyStatus();
+        var compressionPane = document.getElementById('tab_tools_compression');
+        if (compressionPane && compressionPane.classList.contains('active') && typeof loadCompressionPage === 'function') {
+            loadCompressionPage();
+        }
     }
 }
 
