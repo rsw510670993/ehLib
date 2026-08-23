@@ -24,6 +24,105 @@ function compression_remove_dir_recursive(string $dir): bool {
     return @rmdir($dir);
 }
 
+/**
+ * 仅回收当前未被进程占用的常驻锁文件。
+ *
+ * 不能仅凭文件存在或修改时间判断任务是否运行；Linux 上必须先取得同一 inode 的
+ * 排他锁，避免删除活动锁后让新任务绕过并发保护。
+ */
+function compression_cleanup_idle_lock_file(string $path): string {
+    if (!is_file($path)) return 'missing';
+    $handle = @fopen($path, 'c+');
+    if (!$handle) return 'error';
+    if (!@flock($handle, LOCK_EX | LOCK_NB)) {
+        @fclose($handle);
+        return 'busy';
+    }
+    $removed = @unlink($path);
+    @flock($handle, LOCK_UN);
+    @fclose($handle);
+    return $removed ? 'removed' : 'error';
+}
+
+/**
+ * 回收已结束压缩流程的临时文件。
+ * crawl/download 的常驻锁仅在确认空闲时一并回收，活动锁必须保留。
+ */
+function compression_cleanup_artifacts_pdo(PDO $pdo): array {
+    global $root;
+    $data_dir = $root . DIRECTORY_SEPARATOR . 'data';
+    $terminal_ids = [];
+    foreach ($pdo->query(
+        "SELECT id FROM galleries WHERE compression_status IN ('applied','compressed','skipped')"
+    )->fetchAll() as $row) {
+        $terminal_ids[(int)$row['id']] = true;
+    }
+
+    $removed_locks = 0;
+    foreach (glob($data_dir . DIRECTORY_SEPARATOR . 'apply_compress_*.lock') ?: [] as $path) {
+        if (!preg_match('/apply_compress_(\d+)\.lock$/', basename($path), $m)) continue;
+        $gallery_id = (int)$m[1];
+        $is_terminal = isset($terminal_ids[$gallery_id]);
+        $mtime = @filemtime($path) ?: 0;
+        // 待审/失败记录的近期锁可能仍被另一请求使用；旧占位文件才允许回收。
+        if (!$is_terminal && $mtime > 0 && (time() - $mtime) < 300) continue;
+        $handle = @fopen($path, 'c+');
+        if (!$handle) continue;
+        if (!@flock($handle, LOCK_EX | LOCK_NB)) {
+            @fclose($handle);
+            continue;
+        }
+        $removed = @unlink($path);
+        @flock($handle, LOCK_UN);
+        @fclose($handle);
+        if ($removed) $removed_locks++;
+    }
+
+    $removed_files = 0;
+    foreach (array_keys($terminal_ids) as $gallery_id) {
+        foreach ([
+            $data_dir . DIRECTORY_SEPARATOR . 'progress' . DIRECTORY_SEPARATOR . 'compress_' . $gallery_id . '.json',
+            $data_dir . DIRECTORY_SEPARATOR . 'bg_run_compress_' . $gallery_id . '.pid.log',
+        ] as $path) {
+            if (is_file($path) && @unlink($path)) $removed_files++;
+        }
+    }
+
+    // 批量进程已退出后，其汇总进度与日志也不再需要。
+    if (!is_file($data_dir . DIRECTORY_SEPARATOR . 'run_compress_batch.pid')) {
+        foreach ([
+            $data_dir . DIRECTORY_SEPARATOR . 'progress' . DIRECTORY_SEPARATOR . 'compress_batch.json',
+            $data_dir . DIRECTORY_SEPARATOR . 'bg_run_compress_batch.pid.log',
+        ] as $path) {
+            if (is_file($path) && @unlink($path)) $removed_files++;
+        }
+    }
+
+    $removed_runtime_locks = 0;
+    $busy_runtime_locks = [];
+    $runtime_lock_warnings = [];
+    foreach (['crawl.lock', 'crawl-worker.lock', 'download.lock'] as $lock_name) {
+        $lock_result = compression_cleanup_idle_lock_file(
+            $data_dir . DIRECTORY_SEPARATOR . $lock_name
+        );
+        if ($lock_result === 'removed') {
+            $removed_runtime_locks++;
+        } elseif ($lock_result === 'busy') {
+            $busy_runtime_locks[] = $lock_name;
+        } elseif ($lock_result === 'error') {
+            $runtime_lock_warnings[] = $lock_name;
+        }
+    }
+
+    return [
+        'removed_locks' => $removed_locks,
+        'removed_files' => $removed_files,
+        'removed_runtime_locks' => $removed_runtime_locks,
+        'busy_runtime_locks' => $busy_runtime_locks,
+        'runtime_lock_warnings' => $runtime_lock_warnings,
+    ];
+}
+
 function apply_compression_candidates_pdo(PDO $pdo, int $gallery_id): array {
     global $root;
     if ($gallery_id < 1) throw new RuntimeException('gallery_id 无效');
@@ -225,11 +324,6 @@ function apply_compression_candidates_pdo(PDO $pdo, int $gallery_id): array {
         $applied_at = gmdate('c');
         $saved_bytes = 0;
         foreach ($operations as $op) $saved_bytes += $op['original_size'] - $op['candidate_size'];
-        $info['applied_at'] = $applied_at;
-        $info['applied_pages_count'] = count($operations);
-        $info['applied_saved_bytes'] = $saved_bytes;
-        $info['work_dir'] = '';
-        unset($info['apply_backup_dir'], $info['candidate_archive_dir']);
 
         $new_size = 0;
         foreach (@scandir($gallery_path) ?: [] as $item) {
@@ -240,14 +334,18 @@ function apply_compression_candidates_pdo(PDO $pdo, int $gallery_id): array {
                 $new_size += (int)@filesize($path);
             }
         }
+        $original_total_size = $new_size + $saved_bytes;
+        $savings_pct = $original_total_size > 0
+            ? round($saved_bytes / $original_total_size * 100, 2)
+            : null;
 
         $update = $pdo->prepare(
             "UPDATE galleries
-                SET compression_status='applied', compression_info=?, file_size=?, updated_at=?
+                SET compression_status='applied', compression_info='', compression_savings_pct=?, file_size=?, updated_at=?
               WHERE id=? AND compression_status='user_review_required'"
         );
         $update->execute([
-            json_encode($info, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $savings_pct,
             $new_size,
             $applied_at,
             $gallery_id,
@@ -260,6 +358,7 @@ function apply_compression_candidates_pdo(PDO $pdo, int $gallery_id): array {
             'new_status' => 'applied',
             'applied_pages_count' => count($operations),
             'saved_bytes' => $saved_bytes,
+            'savings_pct' => $savings_pct,
             'file_size' => $new_size,
         ];
         if (!$cleanup_ok) $result['cleanup_warning'] = '替换已完成，但压缩临时目录未能完全删除';

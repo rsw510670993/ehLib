@@ -393,14 +393,23 @@ async def cmd_crawl_worker(_args: argparse.Namespace, config: Config, db: Databa
     """Run queued crawl jobs sequentially in strict FIFO order."""
     print("Crawl queue worker started.")
     await db.recover_interrupted_crawl_jobs()
+    idle_since: float | None = None
+    idle_seconds = max(0.0, float(getattr(_args, "idle_seconds", 6.0)))
     while True:
         job = await db.claim_next_crawl_job()
         if job is None:
             if getattr(_args, "once", False):
                 return
-            await sleep(2)
+            now = time.monotonic()
+            if idle_since is None:
+                idle_since = now
+            elif now - idle_since >= idle_seconds:
+                print(f"Crawl queue remained empty for {idle_seconds:g}s; worker exiting.")
+                return
+            await sleep(min(2.0, max(0.1, idle_seconds - (now - idle_since))))
             continue
 
+        idle_since = None
         job_id = int(job["id"])
         try:
             categories = [int(value) for value in (job.get("categories") or "").split(",") if value]
@@ -1644,7 +1653,13 @@ def main() -> None:
     crawl.add_argument("--languages", type=str, default="", help="Comma-separated languages to keep (e.g. chinese,japanese,speechless); filtered by gallery Language attribute after metadata fetch")
     crawl.add_argument("--update", action="store_true", help="Stop when encountering already-downloaded galleries (update mode)")
 
-    subparsers.add_parser("crawl-worker", help="Process queued crawl jobs sequentially")
+    crawl_worker = subparsers.add_parser("crawl-worker", help="Process queued crawl jobs sequentially")
+    crawl_worker.add_argument(
+        "--idle-seconds",
+        type=float,
+        default=6.0,
+        help="Exit after the queue remains empty for this many seconds",
+    )
 
     lst = subparsers.add_parser("list", help="List local galleries")
     lst.add_argument("--source", choices=["nhentai", "exhentai"], help="Filter by source")

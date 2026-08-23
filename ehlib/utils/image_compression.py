@@ -404,6 +404,13 @@ class ImageCompressor:
         if db_conn is None:
             raise ValueError("compress_gallery_to_workdir requires db_conn (sync sqlite3.Connection)")
 
+        columns = {row[1] for row in db_conn.execute("PRAGMA table_info(galleries)").fetchall()}
+        if "compression_savings_pct" not in columns:
+            db_conn.execute(
+                "ALTER TABLE galleries ADD COLUMN compression_savings_pct REAL DEFAULT NULL"
+            )
+            db_conn.commit()
+
         gallery_id = int(gallery_id)
         gallery_dir = Path(gallery_dir)
         work_root = Path(work_root)
@@ -623,6 +630,8 @@ class ImageCompressor:
             info_dict["work_dir_cleaned"] = True
 
         info_bytes_for_db = json.dumps(info_dict, ensure_ascii=False, indent=2).encode("utf-8").decode("utf-8")
+        stored_info = "" if final_status == "skipped" else info_bytes_for_db
+        final_savings_pct = info_dict.get("savings_pct_overall") if final_status == "skipped" else None
         finish_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
         try:
             db_conn.execute(
@@ -630,10 +639,14 @@ class ImageCompressor:
                 UPDATE galleries
                    SET compression_status = ?,
                        compression_info = ?,
+                       compression_savings_pct = CASE
+                           WHEN ? = 'skipped' THEN ?
+                           ELSE compression_savings_pct
+                       END,
                        updated_at = ?
                  WHERE id = ?
                 """,
-                (final_status, info_bytes_for_db, finish_iso, gallery_id),
+                (final_status, stored_info, final_status, final_savings_pct, finish_iso, gallery_id),
             )
             db_conn.commit()
         except Exception as exc:

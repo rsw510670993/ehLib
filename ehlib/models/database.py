@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS galleries (
     updated_at TEXT DEFAULT '',
     tags TEXT DEFAULT '',
     tags_cn TEXT DEFAULT '',
+    compression_status TEXT NOT NULL DEFAULT '',
+    compression_info TEXT NOT NULL DEFAULT '',
+    compression_savings_pct REAL DEFAULT NULL,
     UNIQUE(source, source_id)
 )
 """
@@ -261,7 +264,13 @@ class Database:
                     await db.execute(f"ALTER TABLE search_cache ADD COLUMN {col}")
                 except Exception:
                     pass
-            for col in ["tags TEXT DEFAULT ''", "tags_cn TEXT DEFAULT ''"]:
+            for col in [
+                "tags TEXT DEFAULT ''",
+                "tags_cn TEXT DEFAULT ''",
+                "compression_status TEXT NOT NULL DEFAULT ''",
+                "compression_info TEXT NOT NULL DEFAULT ''",
+                "compression_savings_pct REAL DEFAULT NULL",
+            ]:
                 try:
                     await db.execute(f"ALTER TABLE galleries ADD COLUMN {col}")
                 except Exception:
@@ -1320,12 +1329,23 @@ class Database:
         info_json: str,
     ) -> bool:
         """记录下载阶段已经直接应用的图片转码结果。"""
+        try:
+            info = json.loads(info_json)
+        except (TypeError, ValueError):
+            info = {}
+        savings_pct = info.get("savings_pct_overall") if isinstance(info, dict) else None
+        if savings_pct is not None:
+            try:
+                savings_pct = float(savings_pct)
+            except (TypeError, ValueError):
+                savings_pct = None
+        stored_info = "" if status in {"applied", "compressed", "skipped"} else info_json
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
                 """UPDATE galleries
-                      SET compression_status=?, compression_info=?, updated_at=?
+                      SET compression_status=?, compression_info=?, compression_savings_pct=?, updated_at=?
                     WHERE source=? AND source_id=?""",
-                (status, info_json, datetime.now().isoformat(), source, source_id),
+                (status, stored_info, savings_pct, datetime.now().isoformat(), source, source_id),
             )
             await db.commit()
             return cursor.rowcount > 0
@@ -1692,7 +1712,7 @@ class Database:
 
 
 def ensure_gallery_compression_columns_v1(conn) -> None:
-    """幂等新增 galleries 表两列：compression_status / compression_info。
+    """幂等新增压缩状态、临时审核详情与最终压缩率字段。
 
     Phase 1 起步仅 2 列；列若已存在（含 PR#10 残留）则跳过，不抛错。
     不走 user_version，避免与现有 downloads_dir / galleries 其他迁移冲突。
@@ -1710,5 +1730,30 @@ def ensure_gallery_compression_columns_v1(conn) -> None:
         conn.execute(
             "ALTER TABLE galleries ADD COLUMN compression_info TEXT NOT NULL DEFAULT ''"
         )
+    if "compression_savings_pct" not in existing:
+        conn.execute(
+            "ALTER TABLE galleries ADD COLUMN compression_savings_pct REAL DEFAULT NULL"
+        )
+
+    rows = conn.execute(
+        """SELECT id,compression_info FROM galleries
+             WHERE compression_status IN ('applied','compressed','skipped')
+               AND COALESCE(compression_info,'')<>''"""
+    ).fetchall()
+    for gallery_id, info_json in rows:
+        try:
+            info = json.loads(info_json)
+        except (TypeError, ValueError):
+            info = {}
+        savings_pct = info.get("savings_pct_overall") if isinstance(info, dict) else None
+        conn.execute(
+            """UPDATE galleries
+                  SET compression_savings_pct=COALESCE(compression_savings_pct,?), compression_info=''
+                WHERE id=?""",
+            (savings_pct, gallery_id),
+        )
+    conn.execute(
+        "UPDATE galleries SET compression_status='applied' WHERE compression_status='compressed'"
+    )
     conn.commit()
 

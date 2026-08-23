@@ -631,6 +631,35 @@ function ensure_compression_columns_pdo($pdo) {
     if (!isset($cols['compression_info'])) {
         $pdo->exec("ALTER TABLE galleries ADD COLUMN compression_info TEXT NOT NULL DEFAULT ''");
     }
+    if (!isset($cols['compression_savings_pct'])) {
+        $pdo->exec("ALTER TABLE galleries ADD COLUMN compression_savings_pct REAL DEFAULT NULL");
+    }
+
+    // 已结束记录不再保留编码参数和逐页详情；旧 JSON 只迁移整本压缩率。
+    $legacyRows = $pdo->query(
+        "SELECT id,compression_info FROM galleries
+          WHERE compression_status IN ('applied','compressed','skipped')
+            AND COALESCE(compression_info,'')<>''"
+    )->fetchAll();
+    if (!empty($legacyRows)) {
+        $migrate = $pdo->prepare(
+            "UPDATE galleries
+                SET compression_savings_pct=COALESCE(compression_savings_pct,?), compression_info=''
+              WHERE id=?"
+        );
+        foreach ($legacyRows as $legacyRow) {
+            $legacyInfo = @json_decode((string)($legacyRow['compression_info'] ?? ''), true);
+            $legacyPct = is_array($legacyInfo) && isset($legacyInfo['savings_pct_overall'])
+                ? (float)$legacyInfo['savings_pct_overall'] : null;
+            $migrate->execute([$legacyPct, (int)$legacyRow['id']]);
+        }
+    }
+    $legacyStatus = $pdo->query(
+        "SELECT 1 FROM galleries WHERE compression_status='compressed' LIMIT 1"
+    )->fetchColumn();
+    if ($legacyStatus !== false) {
+        $pdo->exec("UPDATE galleries SET compression_status='applied' WHERE compression_status='compressed'");
+    }
 }
 
 function is_crawl_worker_process($pid) {
@@ -648,6 +677,35 @@ function is_crawl_worker_process($pid) {
     $cmdline = str_replace("\0", ' ', $cmdline);
     return strpos($cmdline, 'bg_crawl_worker_pid.sh') !== false
         || (strpos($cmdline, 'ehlib') !== false && strpos($cmdline, 'crawl-worker') !== false);
+}
+
+function crawl_worker_python_pids() {
+    if (DIRECTORY_SEPARATOR === '\\') return [];
+    $workers = [];
+    foreach (glob('/proc/[0-9]*/cmdline') ?: [] as $cmdline_path) {
+        $cmdline = @file_get_contents($cmdline_path);
+        if ($cmdline === false || $cmdline === '') continue;
+        $cmdline = str_replace("\0", ' ', $cmdline);
+        if (strpos($cmdline, 'ehlib') === false || strpos($cmdline, 'crawl-worker') === false) {
+            continue;
+        }
+        $pid = (int)basename(dirname($cmdline_path));
+        if ($pid > 0) $workers[] = $pid;
+    }
+    return array_values(array_unique($workers));
+}
+
+function signal_process_safe($pid, $signal) {
+    $pid = (int)$pid;
+    $signal = (int)$signal;
+    if ($pid <= 0 || $signal <= 0) return false;
+    if (function_exists('posix_kill')) return @posix_kill($pid, $signal);
+    if (DIRECTORY_SEPARATOR === '\\') {
+        @exec('taskkill /F /PID ' . $pid . ' 2>nul', $out, $code);
+    } else {
+        @exec('kill -' . $signal . ' ' . $pid . ' 2>/dev/null', $out, $code);
+    }
+    return $code === 0;
 }
 
 function run_python_locked($args, $timeout = 120, $chunk_callback = null) {
@@ -1142,6 +1200,7 @@ try {
             if (!is_file($db_path)) error_exit('Database not found');
             try {
                 $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
                 $pdo->sqliteCreateFunction('regexp', function ($pattern, $subject) {
                     if ($pattern === null || $pattern === '') return 0;
                     $p = @preg_match('/' . str_replace('/', '\\/', (string)$pattern) . '/ui' , (string)$subject);
@@ -1237,8 +1296,10 @@ try {
                         'category' => $row['category'] ?? '',
                         'file_size' => (int)($row['file_size'] ?? 0),
                         'compression_status' => $row['compression_status'] ?? '',
-                        'compression_savings_pct' => isset($compression_info['savings_pct_overall'])
-                            ? (float)$compression_info['savings_pct_overall'] : null,
+                        'compression_savings_pct' => isset($row['compression_savings_pct'])
+                            ? (float)$row['compression_savings_pct']
+                            : (isset($compression_info['savings_pct_overall'])
+                                ? (float)$compression_info['savings_pct_overall'] : null),
                         'compression_used_count' => (int)($compression_info['used_candidate_count']
                             ?? ($compression_info['used_avif_count'] ?? ($compression_info['used_webp_count'] ?? 0))),
                         'pages' => $total_pages,
@@ -2376,6 +2437,54 @@ try {
             } catch (Exception $e) { error_exit($e->getMessage()); }
             break;
 
+        case 'crawl_worker_runtime_status':
+            json_exit([
+                'python_workers' => crawl_worker_python_pids(),
+                'pid_file' => is_file($root . '/data/crawl_worker_pid.txt')
+                    ? trim((string)@file_get_contents($root . '/data/crawl_worker_pid.txt'))
+                    : '',
+            ]);
+            break;
+
+        case 'stop_crawl_worker':
+            $python_workers = crawl_worker_python_pids();
+            $target_python_pid = (int)($_POST['python_pid'] ?? $_GET['python_pid'] ?? 0);
+            if ($target_python_pid <= 0) {
+                if (count($python_workers) > 1) {
+                    error_exit('检测到多个 crawl-worker，必须指定明确 PID');
+                }
+                $target_python_pid = $python_workers[0] ?? 0;
+            }
+            if ($target_python_pid <= 0) {
+                @unlink($root . '/data/crawl_worker_pid.txt');
+                json_exit(['message' => 'Crawl worker 已退出', 'stopped' => false]);
+            }
+            if (!in_array($target_python_pid, $python_workers, true)) {
+                error_exit('指定 PID 不是正在运行的 crawl-worker');
+            }
+            signal_process_safe($target_python_pid, 15);
+            for ($i = 0; $i < 30 && is_process_running($target_python_pid); $i++) {
+                usleep(100000);
+            }
+            if (is_process_running($target_python_pid)
+                && in_array($target_python_pid, crawl_worker_python_pids(), true)) {
+                signal_process_safe($target_python_pid, 9);
+                usleep(200000);
+            }
+            $still_running = is_process_running($target_python_pid)
+                && in_array($target_python_pid, crawl_worker_python_pids(), true);
+            if (!$still_running) {
+                @unlink($root . '/data/crawl_worker_pid.txt');
+                @unlink($root . '/data/bg_crawl_worker_pid.sh');
+                compression_cleanup_idle_lock_file($root . '/data/crawl-worker.lock');
+            }
+            json_exit([
+                'message' => $still_running ? 'Crawl worker 终止失败' : 'Crawl worker 已退出',
+                'stopped' => !$still_running,
+                'python_pid' => $target_python_pid,
+            ], !$still_running);
+            break;
+
         case 'crawl_history':
             try {
                 $page = max(1, (int)($_GET['page'] ?? $_POST['page'] ?? 1));
@@ -2979,15 +3088,48 @@ try {
                 json_exit(['error' => '有任务正在运行，无法清理: ' . implode(', ', $running_tasks)], false);
                 break;
             }
-            // clean working files (keep ehlib.db and thumbs/)
+            // 清理普通工作文件（保留 ehlib.db、thumbs/ 与漫画数据）。
             $cleared = 0;
-            $patterns = ['bg_*.log', 'bg_*.sh', '*.pid', '*_pid_*.txt', '*.flag', '*.lock', '*_progress_*.json', 'progress/*.json', 'verify_*.json', 'crawl_*.json', 'retry_*.json', 'download.lock'];
+            $warnings = [];
+            $patterns = ['bg_*.log', 'bg_*.sh', '*.pid', '*_pid_*.txt', '*.flag', '*_progress_*.json', 'progress/*.json', 'verify_*.json', 'crawl_*.json', 'retry_*.json'];
             foreach ($patterns as $pattern) {
                 foreach (glob($data_dir . '/' . $pattern) as $f) {
                     if (is_file($f) && @unlink($f)) $cleared++;
                 }
             }
-            json_exit(['message' => "已清理 $cleared 个工作文件"]);
+
+            // 旧数据库备份已不再参与恢复流程，清理入口负责一并回收。
+            $db_backup_dir = $data_dir . '/_db_backup';
+            if (is_dir($db_backup_dir)) {
+                if (compression_remove_dir_recursive($db_backup_dir)) {
+                    $cleared++;
+                } else {
+                    $warnings[] = '_db_backup 删除失败';
+                }
+            }
+
+            // crawl/download 锁是常驻占位文件；只有确认锁空闲后才能删除。
+            $busy_locks = [];
+            foreach (['crawl.lock', 'crawl-worker.lock', 'download.lock'] as $lock_name) {
+                $lock_result = compression_cleanup_idle_lock_file($data_dir . '/' . $lock_name);
+                if ($lock_result === 'removed') {
+                    $cleared++;
+                } elseif ($lock_result === 'busy') {
+                    $busy_locks[] = $lock_name;
+                } elseif ($lock_result === 'error') {
+                    $warnings[] = $lock_name . ' 删除失败';
+                }
+            }
+
+            $message = "已清理 $cleared 个工作文件";
+            if ($busy_locks) $message .= '；已跳过正在使用的锁：' . implode(', ', $busy_locks);
+            if ($warnings) $message .= '；' . implode('，', $warnings);
+            json_exit([
+                'message' => $message,
+                'cleared' => $cleared,
+                'busy_locks' => $busy_locks,
+                'warnings' => $warnings,
+            ]);
             break;
 
         case 'list_cached':
@@ -3033,7 +3175,7 @@ try {
             $q = trim((string)($_GET['q'] ?? $_POST['q'] ?? ''));
             if (strlen($q) > 120) $q = substr($q, 0, 120);
             $statusFilter = (string)($_GET['status'] ?? $_POST['status'] ?? 'all');
-            $allowedStatuses = ['all', 'not_started', 'queued', 'compressing', 'user_review_required', 'failed', 'applied', 'skipped'];
+            $allowedStatuses = ['all', 'queued', 'compressing', 'user_review_required', 'failed'];
             if (!in_array($statusFilter, $allowedStatuses, true)) $statusFilter = 'all';
             $page = max(1, (int)($_GET['page'] ?? $_POST['page'] ?? 1));
             $perPage = max(10, min(100, (int)($_GET['per_page'] ?? $_POST['per_page'] ?? 30)));
@@ -3055,9 +3197,9 @@ try {
                         $params = [$like, $like, $like, $like];
                     }
                 }
-                if ($statusFilter === 'not_started') {
-                    $where .= " AND COALESCE(compression_status,'')=''";
-                } elseif ($statusFilter !== 'all') {
+                if ($statusFilter === 'all') {
+                    $where .= " AND compression_status IN ('queued','compressing','user_review_required','failed')";
+                } else {
                     $where .= ' AND compression_status=?';
                     $params[] = $statusFilter;
                 }
@@ -3583,10 +3725,27 @@ try {
             if (!is_file($db_path)) error_exit('Database not found');
             try {
                 $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
                 $result = apply_compression_candidates_pdo($pdo, $gallery_id);
+                if (empty($_POST['defer_cleanup'])) {
+                    $result['artifact_cleanup'] = compression_cleanup_artifacts_pdo($pdo);
+                }
                 json_exit(array_merge(['ok' => true], $result), true);
             } catch (Throwable $e) {
                 json_exit(['ok' => false, 'error' => '批准并应用异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'cleanup_compression_artifacts':
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            try {
+                $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
+                $cleanup = compression_cleanup_artifacts_pdo($pdo);
+                json_exit(array_merge(['ok' => true], $cleanup), true);
+            } catch (Throwable $e) {
+                json_exit(['ok' => false, 'error' => '清理压缩工作文件异常: ' . $e->getMessage()], false);
             }
             break;
 

@@ -138,7 +138,7 @@ async function loadGalleries(filters) {
             var compressStateClass = 'text-secondary';
             var savings = Number(g.compression_savings_pct);
             var hasSavings = g.compression_savings_pct !== null && g.compression_savings_pct !== '' && isFinite(savings);
-            var hasCompressionResult = ['user_review_required', 'applied', 'compressed', 'skipped'].includes(compressStatus);
+            var hasCompressionResult = ['applied', 'compressed', 'skipped'].includes(compressStatus);
             if (compressStatus === 'user_review_required') {
                 compressStateLabel = '待审';
                 compressStateClass = 'text-warning';

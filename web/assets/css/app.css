@@ -377,12 +377,13 @@ body > .modal-backdrop.confirm-modal-backdrop { z-index: 1080; }
 /* ═══ Compression maintenance page ═══ */
 .compression-table th { white-space: nowrap; font-size: .78rem; color: #64748b; }
 .compression-table td { vertical-align: middle; }
-.compression-table th:first-child,
-.compression-table td:first-child,
-.compression-table th:last-child,
-.compression-table td:last-child {
-    padding-left: calc(.25rem + 2px);
-    padding-right: calc(.25rem + 2px);
+#tab_tools_compression table.compression-table > :not(caption) > * > *:first-child {
+    padding-left: 1rem;
+    padding-right: .75rem;
+}
+#tab_tools_compression table.compression-table > :not(caption) > * > *:last-child {
+    padding-left: .75rem;
+    padding-right: 1rem;
 }
 .compression-task { padding: .65rem .75rem; border: 1px solid #dbe4ee; border-radius: .5rem; background: #f8fafc; }
 .compression-task:last-child { margin-bottom: 0 !important; }

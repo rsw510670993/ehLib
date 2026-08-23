@@ -371,6 +371,11 @@ def main(argv: list[str] | None = None) -> int:
             return _EXIT_OK
     finally:
         try:
+            if locals().get("final_status") == "skipped" and args.progress_file:
+                Path(args.progress_file).unlink(missing_ok=True)
+        except Exception:
+            logger.debug("清理 skipped 压缩进度文件失败", exc_info=True)
+        try:
             db_conn.close()
         except Exception:
             pass

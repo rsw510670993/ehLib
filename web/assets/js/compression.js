@@ -6,16 +6,14 @@ let _compressionBatchTask = null;
 let _compressionCounts = {};
 let _compressionTotal = 0;
 let _compressionPollTimer = null;
+let _compressionBatchApproving = false;
+let _compressionCleanupAttempted = false;
 
 const COMPRESSION_STATUS_META = {
-    '': { label: '尚未压缩', cls: 'bg-secondary' },
     queued: { label: '已排队', cls: 'bg-info text-dark' },
     compressing: { label: '压缩中', cls: 'bg-info text-dark' },
     user_review_required: { label: '等待审核', cls: 'bg-warning text-dark' },
-    failed: { label: '失败', cls: 'bg-danger' },
-    applied: { label: '已应用', cls: 'bg-success' },
-    compressed: { label: '已压缩（旧记录）', cls: 'bg-success' },
-    skipped: { label: '已跳过', cls: 'bg-secondary' }
+    failed: { label: '失败', cls: 'bg-danger' }
 };
 
 function compressionStatusMeta(status) {
@@ -48,8 +46,10 @@ async function loadCompressionPage() {
         renderCompressionRows();
         renderCompressionActiveTasks();
         renderCompressionPagination(data.page || 1, data.per_page || 30, data.total || 0);
+        renderCompressionBatchApproveButton();
+        maybeCleanupCompressionArtifacts();
         var count = document.getElementById('compression_result_count');
-        if (count) count.textContent = '共 ' + formatInt(_compressionTotal) + ' 本';
+        if (count) count.textContent = '共 ' + formatInt(_compressionTotal) + ' 个待处理任务';
         scheduleCompressionPoll(
             _compressionActiveTasks.length > 0 || !!(_compressionBatchTask && _compressionBatchTask.running)
         );
@@ -87,18 +87,29 @@ function renderCompressionBatchTask() {
     var box = document.getElementById('compression_batch_progress');
     if (!box) return;
     var task = _compressionBatchTask;
-    if (!task) {
-        box.innerHTML = '<div class="text-muted small">尚未启动批量任务。当前有 ' +
-            formatInt(_compressionCounts.not_started || 0) + ' 本未压漫画。</div>';
+    if (_compressionActiveTasks.length > 0 && (!task || !task.running)) {
+        box.classList.add('d-none');
+        box.innerHTML = '';
         return;
     }
-    var total = parseInt(task.total_galleries || 0, 10) || 0;
+    box.classList.remove('d-none');
+    if (!task) {
+        box.innerHTML = '<div class="d-flex justify-content-between small text-muted"><span>暂无运行任务</span><span>未压 ' +
+            formatInt(_compressionCounts.not_started || 0) + ' 本</span></div>';
+        return;
+    }
+    var fallbackTask = _compressionActiveTasks.length > 0 ? _compressionActiveTasks[0] : null;
+    var total = parseInt(task.total_galleries || 0, 10) ||
+        (Array.isArray(task.gallery_ids) ? task.gallery_ids.length : 0);
     var finished = parseInt(task.finished_count || 0, 10) || 0;
     var index = parseInt(task.current_gallery_index || 0, 10) || 0;
-    var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(finished / total * 100))) : 0;
     var galleryProgress = task.gallery_progress || {};
+    if ((!galleryProgress.total && !galleryProgress.current) && fallbackTask) {
+        galleryProgress = fallbackTask.progress || {};
+    }
     var pageCurrent = parseInt(galleryProgress.current || 0, 10) || 0;
-    var pageTotal = parseInt(galleryProgress.total || task.current_gallery_total_pages || 0, 10) || 0;
+    var pageTotal = parseInt(galleryProgress.total || task.current_gallery_total_pages ||
+        (fallbackTask && fallbackTask.total_pages) || 0, 10) || 0;
     var pagePct = pageTotal > 0 ? Math.max(0, Math.min(100, Math.round(pageCurrent / pageTotal * 100))) : 0;
     var running = !!task.running;
     var statusText = running ? '运行中' : ({
@@ -108,19 +119,22 @@ function renderCompressionBatchTask() {
         queued: '等待启动'
     }[String(task.status || '')] || String(task.status || '已结束'));
     var statusClass = running ? 'text-info' : (String(task.status || '').includes('failed') || task.status === 'completed_with_errors' ? 'text-danger' : 'text-success');
-    var currentTitle = task.current_gallery_id
-        ? ('#' + Number(task.current_gallery_id) + ' ' + escapeHtml(task.current_gallery_title || ''))
-        : '—';
+    var currentId = Number(task.current_gallery_id || (fallbackTask && fallbackTask.id) || 0);
+    var currentRawTitle = task.current_gallery_title ||
+        (fallbackTask && (fallbackTask.title_jp || fallbackTask.title)) || '';
+    var currentTitle = currentId ? ('#' + currentId + ' ' + escapeHtml(currentRawTitle)) : '';
+    if (!index && currentId) index = Math.min(total || finished + 1, finished + 1);
+    var overallText = total > 0 ? ('整本 ' + finished + ' / ' + total) : '正在准备队列';
+    var message = escapeHtml((galleryProgress && galleryProgress.message) || task.message || '');
     box.innerHTML =
         '<div class="d-flex justify-content-between gap-2 mb-1"><span class="fw-semibold ' + statusClass + '">' + escapeHtml(statusText) +
-        '</span><span class="small text-muted">整本 ' + finished + ' / ' + total + '</span></div>' +
-        '<div class="progress mb-2" style="height:14px"><div class="progress-bar' + (running ? ' progress-bar-striped progress-bar-animated' : '') +
-        '" style="width:' + pct + '%">' + pct + '%</div></div>' +
-        '<div class="small mb-1">当前：' + currentTitle + (total ? '（第 ' + index + ' / ' + total + ' 本）' : '') + '</div>' +
-        (task.current_gallery_id ? '<div class="progress mb-1" style="height:10px"><div class="progress-bar bg-info' +
-            (running ? ' progress-bar-striped progress-bar-animated' : '') + '" style="width:' + pagePct + '%"></div></div>' : '') +
+        '</span><span class="small text-muted">' + overallText + '</span></div>' +
+        (currentId ? '<div class="d-flex justify-content-between gap-2 small mb-1"><span class="text-truncate">' + currentTitle +
+            (total ? '（' + index + ' / ' + total + '）' : '') + '</span><span class="text-muted text-nowrap">' + pageCurrent + ' / ' + pageTotal + '</span></div>' +
+            '<div class="progress mb-1" style="height:12px"><div class="progress-bar bg-info' +
+            (running ? ' progress-bar-striped progress-bar-animated' : '') + '" style="width:' + pagePct + '%">' + pagePct + '%</div></div>' : '') +
         '<div class="d-flex flex-wrap justify-content-between gap-2 small text-muted"><span>' +
-        escapeHtml((galleryProgress && galleryProgress.message) || task.message || '') + '</span><span>待审 ' +
+        message + '</span><span>待审 ' +
         (parseInt(task.review_count || 0, 10) || 0) + ' · 跳过 ' + (parseInt(task.skipped_count || 0, 10) || 0) +
         ' · 失败 ' + (parseInt(task.failed_count || 0, 10) || 0) + '</span></div>';
 }
@@ -161,7 +175,7 @@ function renderCompressionRows() {
     var body = document.getElementById('compression_table_body');
     if (!body) return;
     if (_compressionRows.length === 0) {
-        body.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">没有符合条件的已下载漫画。</td></tr>';
+        body.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">当前没有排队、压缩中、待审或失败任务。</td></tr>';
         return;
     }
     body.innerHTML = _compressionRows.map(function (row) {
@@ -201,10 +215,12 @@ function renderCompressionActiveTasks() {
     var box = document.getElementById('compression_active_tasks');
     if (!box) return;
     var active = _compressionActiveTasks;
-    if (active.length === 0) {
-        box.innerHTML = '<div class="text-muted small">当前没有运行中的压缩任务。</div>';
+    if ((_compressionBatchTask && _compressionBatchTask.running) || active.length === 0) {
+        box.classList.add('d-none');
+        box.innerHTML = '';
         return;
     }
+    box.classList.remove('d-none');
     box.innerHTML = active.map(function (row) {
         var p = row.progress || {};
         var current = parseInt(p.current || 0, 10) || 0;
@@ -231,6 +247,118 @@ function compressionGotoPage(page) {
     if (page < 1) return;
     _compressionPage = page;
     loadCompressionPage();
+}
+
+function renderCompressionBatchApproveButton() {
+    var btn = document.getElementById('compress_batch_approve_btn');
+    if (!btn || _compressionBatchApproving) return;
+    var status = document.getElementById('compress_status_filter')?.value || 'all';
+    var allowed = status === 'all' || status === 'user_review_required';
+    var reviewCount = parseInt(_compressionCounts.user_review_required || 0, 10) || 0;
+    btn.disabled = !allowed || reviewCount <= 0;
+    btn.title = !allowed
+        ? '请选择“全部待处理”或“等待审核”后再批量通过'
+        : (reviewCount > 0 ? '批准并立即应用当前搜索条件下的全部待审记录' : '当前没有待审记录');
+}
+
+async function maybeCleanupCompressionArtifacts() {
+    if (_compressionCleanupAttempted || _compressionBatchApproving) return;
+    var batchRunning = !!(_compressionBatchTask && _compressionBatchTask.running);
+    var pending = (parseInt(_compressionCounts.queued || 0, 10) || 0) +
+        (parseInt(_compressionCounts.compressing || 0, 10) || 0) +
+        (parseInt(_compressionCounts.user_review_required || 0, 10) || 0);
+    if (batchRunning || _compressionActiveTasks.length > 0 || pending > 0) return;
+    _compressionCleanupAttempted = true;
+    try {
+        await api('cleanup_compression_artifacts', { form: {} });
+    } catch (e) {
+        console.warn('压缩工作文件自动清理失败', e);
+    }
+}
+
+async function collectFilteredCompressionReviewIds() {
+    var q = (document.getElementById('compress_search')?.value || '').trim();
+    var ids = [];
+    var page = 1;
+    var total = 0;
+    do {
+        var url = API + '?action=list_compression_galleries&page=' + page + '&per_page=100' +
+            '&status=user_review_required&q=' + encodeURIComponent(q);
+        var resp = await fetch(url);
+        var data = await resp.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '读取待审列表失败');
+        total = parseInt(data.total || 0, 10) || 0;
+        (data.items || []).forEach(function (row) {
+            var id = parseInt(row.id || 0, 10);
+            if (id > 0) ids.push(id);
+        });
+        page += 1;
+    } while (ids.length < total && page <= 1000);
+    return Array.from(new Set(ids));
+}
+
+async function approveFilteredCompressionReviews() {
+    if (_compressionBatchApproving) return;
+    var btn = document.getElementById('compress_batch_approve_btn');
+    if (!btn) return;
+    var originalHtml = btn.innerHTML;
+    var shouldReload = false;
+    _compressionBatchApproving = true;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>统计中';
+    try {
+        var ids = await collectFilteredCompressionReviewIds();
+        if (ids.length === 0) {
+            showToast('当前搜索条件下没有待审记录', 'info');
+            return;
+        }
+        var confirmed = await confirmDialog({
+            title: '批量批准压缩候选？',
+            message: '将批准并立即应用当前搜索条件下的 ' + ids.length + ' 本待审漫画。',
+            detail: '候选图会逐本替换原图，不创建备份；失败项目不会影响其余项目继续处理。',
+            okText: '批量批准并应用',
+            okClass: 'btn-success'
+        });
+        if (!confirmed) return;
+
+        shouldReload = true;
+        var approved = 0;
+        var failed = [];
+        for (var i = 0; i < ids.length; i += 1) {
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>' + (i + 1) + ' / ' + ids.length;
+            try {
+                var result = await api('approve_compress_whole', { form: { gallery_id: ids[i], defer_cleanup: '1' } });
+                if (!result || !result.ok) throw new Error((result && result.error) || '批准失败');
+                approved += 1;
+            } catch (e) {
+                failed.push({ id: ids[i], error: e.message || String(e) });
+            }
+        }
+        if (failed.length === 0) {
+            showToast('已批准并应用 ' + approved + ' 本漫画', 'success');
+        } else {
+            var failedIds = failed.slice(0, 8).map(function (item) { return '#' + item.id; }).join('、');
+            showToast('批量审核完成：成功 ' + approved + '，失败 ' + failed.length + '（' + failedIds + (failed.length > 8 ? '…' : '') + '）', 'warning');
+        }
+        try {
+            await api('cleanup_compression_artifacts', { form: {} });
+            _compressionCleanupAttempted = true;
+        } catch (_cleanupError) {
+            console.warn('压缩工作文件自动清理失败', _cleanupError);
+        }
+    } catch (e) {
+        showToast('批量审核失败：' + (e.message || e), 'danger');
+    } finally {
+        _compressionBatchApproving = false;
+        btn.innerHTML = originalHtml;
+        if (shouldReload) {
+            _compressionPage = 1;
+            await loadCompressionPage();
+            if (typeof loadGalleries === 'function') loadGalleries();
+        } else {
+            renderCompressionBatchApproveButton();
+        }
+    }
 }
 
 function selectCompressionGallery(id) {

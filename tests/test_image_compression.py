@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ehlib.storage.file_manager import FileManager
 from ehlib.core.downloader import Downloader
+from ehlib.models.database import ensure_gallery_compression_columns_v1
 from ehlib.utils.image_compression import ImageCompressor
 
 
@@ -238,7 +239,7 @@ class ImageCompressionTests(unittest.TestCase):
                 conn.close()
 
 
-    def test_skipped_result_removes_workdir_but_keeps_database_summary(self):
+    def test_skipped_result_removes_workdir_and_keeps_only_savings(self):
         try:
             from PIL import Image, features
         except ImportError:
@@ -276,15 +277,46 @@ class ImageCompressionTests(unittest.TestCase):
                 self.assertTrue(info["work_dir_cleaned"])
                 self.assertFalse((root / "compress_work" / "24").exists())
                 row = conn.execute(
-                    "SELECT compression_status,compression_info FROM galleries WHERE id=24"
+                    "SELECT compression_status,compression_info,compression_savings_pct FROM galleries WHERE id=24"
                 ).fetchone()
-                saved_info = json.loads(row[1])
                 self.assertEqual(row[0], "skipped")
-                self.assertEqual(saved_info["total_pages"], 1)
-                self.assertEqual(saved_info["work_dir"], "")
-                self.assertTrue(saved_info["work_dir_cleaned"])
+                self.assertEqual(row[1], "")
+                self.assertAlmostEqual(row[2], 0.0, places=2)
             finally:
                 conn.close()
+
+    def test_terminal_compression_info_migrates_to_savings_only(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute(
+                "CREATE TABLE galleries (id INTEGER PRIMARY KEY, compression_status TEXT, compression_info TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO galleries VALUES (1,'applied',?)",
+                (json.dumps({"savings_pct_overall": 37.25, "quality": 65, "pages": [{"name": "001.jpg"}]}),),
+            )
+            conn.execute(
+                "INSERT INTO galleries VALUES (2,'user_review_required',?)",
+                (json.dumps({"savings_pct_overall": 28.5, "pages": [{"name": "002.jpg"}]}),),
+            )
+            conn.execute("INSERT INTO galleries VALUES (3,'compressed','')")
+            ensure_gallery_compression_columns_v1(conn)
+
+            applied = conn.execute(
+                "SELECT compression_info,compression_savings_pct FROM galleries WHERE id=1"
+            ).fetchone()
+            pending = conn.execute(
+                "SELECT compression_info,compression_savings_pct FROM galleries WHERE id=2"
+            ).fetchone()
+            legacy_status = conn.execute(
+                "SELECT compression_status FROM galleries WHERE id=3"
+            ).fetchone()[0]
+            self.assertEqual(applied, ("", 37.25))
+            self.assertIn('"pages"', pending[0])
+            self.assertIsNone(pending[1])
+            self.assertEqual(legacy_status, "applied")
+        finally:
+            conn.close()
 
     def test_missing_avif_encoder_fails_before_clearing_existing_candidates(self):
         class MissingEncoderCompressor(ImageCompressor):
