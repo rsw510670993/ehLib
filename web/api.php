@@ -3749,6 +3749,39 @@ try {
             }
             break;
 
+        case 'compress_thumbs_sample':
+            $limit = max(1, min(20, (int)($_POST['limit'] ?? $_GET['limit'] ?? 5)));
+            $timeout = max(120, $limit * 15);
+            $result = run_python_locked(
+                ['compress-thumbs', '--limit', (string)$limit],
+                $timeout
+            );
+            foreach (['crawl.lock', 'crawl-worker.lock', 'download.lock'] as $lock_name) {
+                compression_cleanup_idle_lock_file($root . '/data/' . $lock_name);
+            }
+            if (empty($result['ok'])) {
+                json_exit([
+                    'error' => '封面 AVIF 试跑失败',
+                    'stdout' => $result['stdout'] ?? '',
+                    'stderr' => $result['stderr'] ?? '',
+                    'exit_code' => $result['exit_code'] ?? -1,
+                ], false);
+            }
+            $summary = null;
+            $lines = preg_split('/\r?\n/', trim((string)($result['stdout'] ?? ''))) ?: [];
+            for ($i = count($lines) - 1; $i >= 0; $i--) {
+                $decoded = @json_decode($lines[$i], true);
+                if (is_array($decoded)) {
+                    $summary = $decoded;
+                    break;
+                }
+            }
+            if (!is_array($summary)) {
+                json_exit(['error' => '封面压缩结果格式错误', 'stdout' => $result['stdout'] ?? ''], false);
+            }
+            json_exit(['summary' => $summary]);
+            break;
+
         case 'rerun_compress_default':
             $gallery_id = $_POST['gallery_id'] ?? '';
             if ($gallery_id === '') json_exit(['ok' => false, 'error' => 'gallery_id required'], false);

@@ -235,6 +235,22 @@ class ImageCompressor:
             stats["exception"] = f"{type(exc).__name__}: {exc!s}"
             return False, None, stats
 
+    def encode_avif_candidate(
+        self,
+        data: bytes,
+        *,
+        quality: int | None = None,
+        speed: int | None = None,
+        min_savings_percent: float | None = None,
+    ) -> tuple[bool, bytes | None, dict]:
+        """公开的内存转码入口，供封面等非漫画页图片复用同一套 AVIF 策略。"""
+        return self._encode_one_page(
+            data,
+            quality=quality,
+            speed=speed,
+            min_savings_percent=min_savings_percent,
+        )
+
     def save_page_bytes_with_stats(self, data: bytes, path: Path) -> tuple[Path, dict]:
         """保存单页并返回转码统计，供下载流程汇总整本节省率。"""
         try:
