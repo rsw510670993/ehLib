@@ -599,6 +599,27 @@ function read_json_file_safe($path) {
     return is_array($data) ? $data : null;
 }
 
+function get_compression_batch_state() {
+    global $root;
+    $progressFile = $root . '/data/progress/compress_batch.json';
+    $pidFile = $root . '/data/run_compress_batch.pid';
+    $state = read_json_file_safe($progressFile);
+    $pid = is_file($pidFile) ? trim((string)@file_get_contents($pidFile)) : '';
+    $running = $pid !== '' && is_process_running($pid);
+    if (!is_array($state)) {
+        return $running ? ['status' => 'running', 'message' => '批量进程正在启动', 'running' => true] : null;
+    }
+    $state['running'] = $running;
+    $state['pid'] = $pid;
+    $currentId = (int)($state['current_gallery_id'] ?? 0);
+    if ($currentId > 0) {
+        $state['gallery_progress'] = read_json_file_safe(
+            $root . '/data/progress/compress_' . $currentId . '.json'
+        );
+    }
+    return $state;
+}
+
 function ensure_compression_columns_pdo($pdo) {
     $cols = [];
     foreach ($pdo->query('PRAGMA table_info(galleries)')->fetchAll() as $row) {
@@ -3128,9 +3149,154 @@ try {
                     if (array_key_exists($key, $counts)) $counts[$key] = (int)$countRow['n'];
                     $counts['total'] += (int)$countRow['n'];
                 }
-                json_exit(['items' => $items, 'active_tasks' => $activeTasks, 'counts' => $counts, 'total' => $total, 'page' => $page, 'per_page' => $perPage]);
+                json_exit([
+                    'items' => $items,
+                    'active_tasks' => $activeTasks,
+                    'batch_task' => get_compression_batch_state(),
+                    'counts' => $counts,
+                    'total' => $total,
+                    'page' => $page,
+                    'per_page' => $perPage,
+                ]);
             } catch (Throwable $e) {
                 json_exit(['ok' => false, 'error' => '加载压缩维护列表异常: ' . $e->getMessage()], false);
+            }
+            break;
+
+        case 'start_compression_batch':
+            $db_path = $root . '/data/ehlib.db';
+            if (!is_file($db_path)) error_exit('Database not found');
+            $claimedIds = [];
+            try {
+                $pdo = _pdo($db_path);
+                ensure_compression_columns_pdo($pdo);
+                $batchState = get_compression_batch_state();
+                if (is_array($batchState) && !empty($batchState['running'])) {
+                    json_exit(['ok' => false, 'error' => '批量压缩任务已在运行'], false);
+                }
+
+                // 上一个批量进程若异常退出，只释放它尚未开始的 queued 项。
+                if (is_array($batchState) && in_array((string)($batchState['status'] ?? ''), ['queued', 'running'], true)) {
+                    $resetStmt = $pdo->prepare("UPDATE galleries SET compression_status='',updated_at=? WHERE id=? AND compression_status='queued'");
+                    foreach (($batchState['gallery_ids'] ?? []) as $staleId) {
+                        $staleId = (int)$staleId;
+                        if ($staleId <= 0) continue;
+                        $singlePidFile = $root . '/data/run_compress_' . $staleId . '.pid';
+                        $singlePid = is_file($singlePidFile) ? trim((string)@file_get_contents($singlePidFile)) : '';
+                        if ($singlePid !== '' && is_process_running($singlePid)) continue;
+                        $singleProgress = read_json_file_safe($root . '/data/progress/compress_' . $staleId . '.json');
+                        $singleStatus = (string)($singleProgress['status'] ?? '');
+                        $singleUpdated = strtotime((string)($singleProgress['updated_at'] ?? '')) ?: 0;
+                        if (in_array($singleStatus, ['queued', 'running'], true)
+                            && $singleUpdated > 0 && (time() - $singleUpdated) <= 120) continue;
+                        $resetStmt->execute([gmdate('c'), $staleId]);
+                    }
+                }
+                @unlink($root . '/data/run_compress_batch.pid');
+
+                $busyCount = (int)$pdo->query("SELECT COUNT(*) FROM galleries WHERE compression_status IN ('queued','compressing')")->fetchColumn();
+                if ($busyCount > 0) {
+                    json_exit(['ok' => false, 'error' => '仍有单本压缩任务排队或运行，请等待完成后再启动批量任务'], false);
+                }
+
+                $rows = $pdo->query(
+                    "SELECT id,title,title_jp,total_pages FROM galleries
+                      WHERE is_complete=1 AND COALESCE(local_path,'')<>''
+                        AND COALESCE(compression_status,'')=''
+                      ORDER BY id"
+                )->fetchAll();
+                if (!$rows) {
+                    json_exit(['message' => '当前没有未压缩漫画', 'count' => 0], true);
+                }
+
+                $runtime = check_compression_python_runtime();
+                if (empty($runtime['ok'])) {
+                    json_exit([
+                        'ok' => false,
+                        'error' => 'NAS 压缩环境不可用：' . $runtime['reason']
+                            . (empty($runtime['repair_command']) ? '' : '。请执行：' . $runtime['repair_command']),
+                    ], false);
+                }
+
+                $pdo->beginTransaction();
+                $claimStmt = $pdo->prepare(
+                    "UPDATE galleries SET compression_status='queued',updated_at=?
+                      WHERE id=? AND COALESCE(compression_status,'')=''"
+                );
+                foreach ($rows as $row) {
+                    $galleryId = (int)$row['id'];
+                    $claimStmt->execute([gmdate('c'), $galleryId]);
+                    if ($claimStmt->rowCount() === 1) $claimedIds[] = $galleryId;
+                }
+                $pdo->commit();
+                if (!$claimedIds) {
+                    json_exit(['ok' => false, 'error' => '未能锁定任何未压缩漫画，请刷新后重试'], false);
+                }
+
+                $progressDir = $root . '/data/progress';
+                if (!is_dir($progressDir)) @mkdir($progressDir, 0755, true);
+                foreach ($claimedIds as $galleryId) {
+                    @unlink($progressDir . '/compress_' . $galleryId . '.json');
+                }
+                $progressFile = $progressDir . '/compress_batch.json';
+                $queued = [
+                    'status' => 'queued',
+                    'message' => '批量任务已排队，等待 Python 进程启动',
+                    'gallery_ids' => $claimedIds,
+                    'total_galleries' => count($claimedIds),
+                    'current_gallery_index' => 0,
+                    'current_gallery_id' => null,
+                    'finished_count' => 0,
+                    'review_count' => 0,
+                    'skipped_count' => 0,
+                    'failed_count' => 0,
+                    'updated_at' => gmdate('c'),
+                ];
+                if (file_put_contents($progressFile, json_encode($queued, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX) === false) {
+                    throw new RuntimeException('无法写入批量进度文件');
+                }
+
+                $args = [
+                    '--gallery-ids', implode(',', $claimedIds),
+                    '--work-root', resolve_compress_work_path(),
+                    '--progress-file', $progressFile,
+                    '--db-path', $db_path,
+                    '--quality', '65',
+                    '--speed', '5',
+                    '--min-savings', '5',
+                ];
+                $pid = run_python_module_background(
+                    'ehlib.cmd_compress_batch',
+                    $args,
+                    $root . '/data/run_compress_batch.pid'
+                );
+                json_exit([
+                    'pid' => $pid,
+                    'count' => count($claimedIds),
+                    'message' => '已启动 ' . count($claimedIds) . ' 本未压缩漫画的批量任务',
+                    'batch_task' => $queued,
+                ], true);
+            } catch (Throwable $e) {
+                if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
+                if (isset($pdo) && $claimedIds) {
+                    $resetStmt = $pdo->prepare("UPDATE galleries SET compression_status='',updated_at=? WHERE id=? AND compression_status='queued'");
+                    foreach ($claimedIds as $galleryId) $resetStmt->execute([gmdate('c'), $galleryId]);
+                }
+                @unlink($root . '/data/run_compress_batch.pid');
+                if (isset($progressFile)) {
+                    @file_put_contents($progressFile, json_encode([
+                        'status' => 'failed',
+                        'message' => '启动批量压缩异常: ' . $e->getMessage(),
+                        'gallery_ids' => $claimedIds,
+                        'total_galleries' => count($claimedIds),
+                        'finished_count' => 0,
+                        'review_count' => 0,
+                        'skipped_count' => 0,
+                        'failed_count' => 0,
+                        'updated_at' => gmdate('c'),
+                    ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+                }
+                json_exit(['ok' => false, 'error' => '启动批量压缩异常: ' . $e->getMessage()], false);
             }
             break;
 
@@ -3153,6 +3319,10 @@ try {
             try {
                 $pdo = _pdo($db_path);
                 ensure_compression_columns_pdo($pdo);
+                $batchState = get_compression_batch_state();
+                if (is_array($batchState) && !empty($batchState['running'])) {
+                    json_exit(['ok' => false, 'error' => '批量压缩正在运行，不能同时启动单本压缩'], false);
+                }
                 $stmt = $pdo->prepare('SELECT id,title,total_pages,is_complete,local_path,compression_status FROM galleries WHERE id=?');
                 $stmt->execute([$galleryId]);
                 $gallery = $stmt->fetch();
@@ -3428,6 +3598,10 @@ try {
             if (!is_file($db_path)) error_exit('Database not found');
             try {
                 $pdo = _pdo($db_path);
+                $batchState = get_compression_batch_state();
+                if (is_array($batchState) && !empty($batchState['running'])) {
+                    json_exit(['ok' => false, 'error' => '批量压缩正在运行，不能同时启动重做任务'], false);
+                }
                 $stmt = $pdo->prepare("SELECT compression_status FROM galleries WHERE id=?");
                 $stmt->execute([$gallery_id]);
                 $currentStatus = $stmt->fetchColumn();

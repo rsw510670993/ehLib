@@ -2,6 +2,8 @@
 let _compressionPage = 1;
 let _compressionRows = [];
 let _compressionActiveTasks = [];
+let _compressionBatchTask = null;
+let _compressionCounts = {};
 let _compressionTotal = 0;
 let _compressionPollTimer = null;
 
@@ -38,14 +40,19 @@ async function loadCompressionPage() {
         if (!data || !data.ok) throw new Error((data && data.error) || '加载失败');
         _compressionRows = data.items || [];
         _compressionActiveTasks = data.active_tasks || [];
+        _compressionBatchTask = data.batch_task || null;
+        _compressionCounts = data.counts || {};
         _compressionTotal = parseInt(data.total || 0, 10) || 0;
-        renderCompressionStats(data.counts || {});
+        renderCompressionStats(_compressionCounts);
+        renderCompressionBatchTask();
         renderCompressionRows();
         renderCompressionActiveTasks();
         renderCompressionPagination(data.page || 1, data.per_page || 30, data.total || 0);
         var count = document.getElementById('compression_result_count');
         if (count) count.textContent = '共 ' + formatInt(_compressionTotal) + ' 本';
-        scheduleCompressionPoll(_compressionActiveTasks.length > 0);
+        scheduleCompressionPoll(
+            _compressionActiveTasks.length > 0 || !!(_compressionBatchTask && _compressionBatchTask.running)
+        );
     } catch (e) {
         body.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-4">' + escapeHtml(e.message || String(e)) + '</td></tr>';
         scheduleCompressionPoll(false);
@@ -59,6 +66,95 @@ function renderCompressionStats(counts) {
     set('compress_stat_running', (counts.queued || 0) + (counts.compressing || 0));
     set('compress_stat_review', counts.user_review_required);
     set('compress_stat_failed', counts.failed);
+    var batchBtn = document.getElementById('compress_batch_start_btn');
+    var singleBtn = document.getElementById('compress_start_btn');
+    var running = !!(_compressionBatchTask && _compressionBatchTask.running);
+    var recoverable = !!(_compressionBatchTask && !running && ['queued', 'running'].includes(String(_compressionBatchTask.status || '')));
+    if (batchBtn) {
+        batchBtn.disabled = running || (!recoverable && Number(counts.not_started || 0) <= 0);
+        batchBtn.title = running ? '批量任务正在运行' : (recoverable ? '恢复上次异常退出的批量队列' : ('当前未压漫画：' + Number(counts.not_started || 0) + ' 本'));
+    }
+    if (singleBtn && running) {
+        singleBtn.disabled = true;
+        singleBtn.title = '批量压缩运行期间不能启动单本压缩';
+    } else if (singleBtn) {
+        singleBtn.disabled = false;
+        singleBtn.title = '';
+    }
+}
+
+function renderCompressionBatchTask() {
+    var box = document.getElementById('compression_batch_progress');
+    if (!box) return;
+    var task = _compressionBatchTask;
+    if (!task) {
+        box.innerHTML = '<div class="text-muted small">尚未启动批量任务。当前有 ' +
+            formatInt(_compressionCounts.not_started || 0) + ' 本未压漫画。</div>';
+        return;
+    }
+    var total = parseInt(task.total_galleries || 0, 10) || 0;
+    var finished = parseInt(task.finished_count || 0, 10) || 0;
+    var index = parseInt(task.current_gallery_index || 0, 10) || 0;
+    var pct = total > 0 ? Math.max(0, Math.min(100, Math.round(finished / total * 100))) : 0;
+    var galleryProgress = task.gallery_progress || {};
+    var pageCurrent = parseInt(galleryProgress.current || 0, 10) || 0;
+    var pageTotal = parseInt(galleryProgress.total || task.current_gallery_total_pages || 0, 10) || 0;
+    var pagePct = pageTotal > 0 ? Math.max(0, Math.min(100, Math.round(pageCurrent / pageTotal * 100))) : 0;
+    var running = !!task.running;
+    var statusText = running ? '运行中' : ({
+        completed: '已完成',
+        completed_with_errors: '完成但有失败',
+        failed: '失败',
+        queued: '等待启动'
+    }[String(task.status || '')] || String(task.status || '已结束'));
+    var statusClass = running ? 'text-info' : (String(task.status || '').includes('failed') || task.status === 'completed_with_errors' ? 'text-danger' : 'text-success');
+    var currentTitle = task.current_gallery_id
+        ? ('#' + Number(task.current_gallery_id) + ' ' + escapeHtml(task.current_gallery_title || ''))
+        : '—';
+    box.innerHTML =
+        '<div class="d-flex justify-content-between gap-2 mb-1"><span class="fw-semibold ' + statusClass + '">' + escapeHtml(statusText) +
+        '</span><span class="small text-muted">整本 ' + finished + ' / ' + total + '</span></div>' +
+        '<div class="progress mb-2" style="height:14px"><div class="progress-bar' + (running ? ' progress-bar-striped progress-bar-animated' : '') +
+        '" style="width:' + pct + '%">' + pct + '%</div></div>' +
+        '<div class="small mb-1">当前：' + currentTitle + (total ? '（第 ' + index + ' / ' + total + ' 本）' : '') + '</div>' +
+        (task.current_gallery_id ? '<div class="progress mb-1" style="height:10px"><div class="progress-bar bg-info' +
+            (running ? ' progress-bar-striped progress-bar-animated' : '') + '" style="width:' + pagePct + '%"></div></div>' : '') +
+        '<div class="d-flex flex-wrap justify-content-between gap-2 small text-muted"><span>' +
+        escapeHtml((galleryProgress && galleryProgress.message) || task.message || '') + '</span><span>待审 ' +
+        (parseInt(task.review_count || 0, 10) || 0) + ' · 跳过 ' + (parseInt(task.skipped_count || 0, 10) || 0) +
+        ' · 失败 ' + (parseInt(task.failed_count || 0, 10) || 0) + '</span></div>';
+}
+
+async function startBatchCompression() {
+    var count = parseInt(_compressionCounts.not_started || 0, 10) || 0;
+    var recoverable = !!(_compressionBatchTask && !_compressionBatchTask.running && ['queued', 'running'].includes(String(_compressionBatchTask.status || '')));
+    if (recoverable && count <= 0) count = Array.isArray(_compressionBatchTask.gallery_ids) ? _compressionBatchTask.gallery_ids.length : 0;
+    if (count <= 0 && !recoverable) {
+        showToast('当前没有未压缩漫画', 'info');
+        return;
+    }
+    var confirmed = await confirmDialog({
+        title: '批量压缩所有未压漫画？',
+        message: (recoverable ? '将先释放上次异常中断的排队状态，再重新锁定并处理 ' : '将锁定并依次处理当前 ') + count + ' 本未压缩漫画。',
+        detail: '固定参数：AVIF quality=65 / speed=5 / 最低节省率=5%。只保留体积变小的候选；每本完成后进入待审，不自动替换原图，也不创建备份。任务可能运行较长时间。',
+        okText: '开始批量压缩',
+        okClass: 'btn-warning'
+    });
+    if (!confirmed) return;
+    setButtonBusy('compress_batch_start_btn', true, '<i class="fas fa-spinner fa-spin me-1"></i>启动中');
+    try {
+        var res = await api('start_compression_batch', { form: {} });
+        if (!res || !res.ok) throw new Error((res && res.error) || '启动失败');
+        showToast(res.message || '批量压缩已启动', 'success');
+        _compressionBatchTask = res.batch_task || _compressionBatchTask;
+        await loadCompressionPage();
+        scheduleCompressionPoll(true);
+    } catch (e) {
+        showToast('启动批量压缩失败：' + (e.message || e), 'danger');
+    } finally {
+        setButtonBusy('compress_batch_start_btn', false);
+        renderCompressionStats(_compressionCounts);
+    }
 }
 
 function renderCompressionRows() {
