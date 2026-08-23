@@ -10,11 +10,11 @@ download:
   max_concurrent: 3
   retry_times: 3
   retry_delay: 5
-  # 正文图片和缓存封面保持原分辨率；仅当 WebP 至少节省 5% 时采用转换结果
-  convert_to_webp: true
-  webp_quality: 88
-  webp_method: 4
-  webp_min_savings_percent: 5
+  # 正文图片和缓存封面保持原分辨率；仅当 AVIF 至少节省 5% 时采用转换结果
+  convert_to_avif: true
+  avif_quality: 65
+  avif_speed: 5
+  avif_min_savings_percent: 5
 
 request:
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"

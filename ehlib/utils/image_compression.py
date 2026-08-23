@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sqlite3
 import time
 import shutil
@@ -10,9 +11,17 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-_IMAGE_EXTENSIONS = (".webp", ".jpg", ".jpeg", ".png", ".gif")
-_FORMAT_EXTENSIONS = {"WEBP": ".webp", "JPEG": ".jpg", "PNG": ".png", "GIF": ".gif"}
-_COMPRESSIBLE_PAGE_EXTS = (".jpg", ".jpeg", ".png")
+_IMAGE_EXTENSIONS = (".avif", ".webp", ".jpg", ".jpeg", ".png", ".gif")
+_FORMAT_EXTENSIONS = {
+    "AVIF": ".avif",
+    "WEBP": ".webp",
+    "JPEG": ".jpg",
+    "PNG": ".png",
+    "GIF": ".gif",
+}
+_COMPRESSIBLE_PAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+_TARGET_FORMAT = "AVIF"
+_TARGET_EXTENSION = ".avif"
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -61,21 +70,25 @@ def cli_crash_recovery_cleanup(db_conn) -> int:
 
 
 class ImageCompressor:
-    """Save downloaded pages atomically, using WebP only when it is worthwhile."""
+    """Save downloaded pages atomically, using AVIF only when it is worthwhile."""
 
     def __init__(
         self,
         *,
         enabled: bool = True,
-        quality: int = 88,
-        method: int = 4,
+        quality: int = 65,
+        speed: int = 5,
         min_savings_percent: float = 5,
+        method: int | None = None,
     ) -> None:
         self.enabled = bool(enabled)
-        self.quality = _bounded_int(quality, 88, 1, 100)
-        self.method = _bounded_int(method, 4, 0, 6)
+        self.quality = _bounded_int(quality, 65, 1, 100)
+        # method 是旧 WebP 调用方的兼容别名；新代码统一使用 AVIF speed 0..10。
+        effective_speed = speed if method is None else method
+        self.speed = _bounded_int(effective_speed, 5, 0, 10)
+        self.method = self.speed
         self.min_savings_percent = _bounded_float(min_savings_percent, 5.0, 0.0, 100.0)
-        self._webp_available: bool | None = None
+        self._avif_available: bool | None = None
         self._warning_logged = False
 
     @staticmethod
@@ -103,35 +116,37 @@ class ImageCompressor:
         logger.warning(message, *args)
         self._warning_logged = True
 
-    def _ensure_pillow_webp(self) -> bool:
-        if self._webp_available is not None:
-            return self._webp_available
+    def _ensure_pillow_avif(self) -> bool:
+        if self._avif_available is not None:
+            return self._avif_available
         try:
             from PIL import Image, ImageOps, features  # noqa: F401
         except ImportError:
-            self._webp_available = False
+            self._avif_available = False
             self._warn_once("Pillow is unavailable; downloaded pages will keep their original format")
             return False
-        self._webp_available = bool(features.check("webp"))
-        if not self._webp_available:
-            self._warn_once("Pillow has no WebP encoder; downloaded pages will keep their original format")
-        return self._webp_available
+        self._avif_available = bool(features.check("avif"))
+        if not self._avif_available:
+            self._warn_once("Pillow has no AVIF encoder; downloaded pages will keep their original format")
+        return self._avif_available
 
     def _encode_one_page(
         self,
         data: bytes,
         *,
         quality: int | None = None,
+        speed: int | None = None,
         method: int | None = None,
         min_savings_percent: float | None = None,
         force_candidate: bool = False,
     ) -> tuple[bool, bytes | None, dict]:
-        """只做转码判断，不写磁盘。返回 (used_webp, webp_bytes_or_None, stats_dict)。
+        """只做转码判断，不写磁盘。返回 (used_candidate, avif_bytes_or_None, stats_dict)。
 
         stats_dict keys 详见 PRD §4.1。
         """
         q = self.quality if quality is None else _bounded_int(quality, self.quality, 1, 100)
-        m = self.method if method is None else _bounded_int(method, self.method, 0, 6)
+        speed_value = speed if speed is not None else method
+        s = self.speed if speed_value is None else _bounded_int(speed_value, self.speed, 0, 10)
         ms = (
             self.min_savings_percent
             if min_savings_percent is None
@@ -139,13 +154,16 @@ class ImageCompressor:
         )
 
         stats: dict = {
-            "used_webp": False,
+            "used_candidate": False,
+            "used_avif": False,
             "no_savings": False,
             "poor_ratio": False,
             "orig_bytes": len(data),
-            "webp_bytes": 0,
+            "candidate_bytes": 0,
+            "avif_bytes": 0,
             "savings_pct": 0.0,
             "src_format": "UNKNOWN",
+            "candidate_format": _TARGET_FORMAT,
             "has_alpha": False,
             "is_animated": False,
             "forced_candidate": False,
@@ -156,7 +174,7 @@ class ImageCompressor:
         if not self.enabled:
             return False, None, stats
 
-        if not self._ensure_pillow_webp():
+        if not self._ensure_pillow_avif():
             return False, None, stats
 
         try:
@@ -172,7 +190,7 @@ class ImageCompressor:
                 is_animated = bool(getattr(source_image, "is_animated", False))
                 stats["is_animated"] = is_animated
 
-                if is_animated:
+                if is_animated or source_format == _TARGET_FORMAT:
                     return False, None, stats
 
                 source_image.load()
@@ -182,23 +200,23 @@ class ImageCompressor:
                 image = image.convert("RGBA" if has_alpha else "RGB")
 
                 encoded = BytesIO()
-                save_options = {
-                    "format": "WEBP",
-                    "quality": q,
-                    "method": m,
-                }
-                if has_alpha:
-                    save_options["exact"] = True
-                image.save(encoded, **save_options)
-                webp_data = encoded.getvalue()
+                image.save(
+                    encoded,
+                    format=_TARGET_FORMAT,
+                    quality=q,
+                    speed=s,
+                    max_threads=max(1, min(8, os.cpu_count() or 1)),
+                )
+                candidate_data = encoded.getvalue()
 
-            stats["webp_bytes"] = len(webp_data)
+            stats["candidate_bytes"] = len(candidate_data)
+            stats["avif_bytes"] = len(candidate_data)
             orig_len = len(data)
             if orig_len > 0:
-                stats["savings_pct"] = round((1.0 - len(webp_data) / orig_len) * 100.0, 2)
+                stats["savings_pct"] = round((1.0 - len(candidate_data) / orig_len) * 100.0, 2)
             stats["poor_ratio"] = 0.0 < stats["savings_pct"] < 50.0
 
-            saved_bytes = orig_len - len(webp_data)
+            saved_bytes = orig_len - len(candidate_data)
             stats["forced_candidate"] = bool(force_candidate)
             if saved_bytes <= 0:
                 stats["no_savings"] = True
@@ -210,45 +228,56 @@ class ImageCompressor:
                 if not force_candidate:
                     return False, None, stats
 
-            stats["used_webp"] = True
-            return True, webp_data, stats
+            stats["used_candidate"] = True
+            stats["used_avif"] = True
+            return True, candidate_data, stats
         except Exception as exc:
             stats["exception"] = f"{type(exc).__name__}: {exc!s}"
             return False, None, stats
 
-    def save_page_bytes(self, data: bytes, path: Path) -> Path:
-        if not self.enabled:
-            return self._write_bytes_atomic(path, data)
-
-        if not self._ensure_pillow_webp():
-            return self._write_bytes_atomic(path, data)
-
+    def save_page_bytes_with_stats(self, data: bytes, path: Path) -> tuple[Path, dict]:
+        """保存单页并返回转码统计，供下载流程汇总整本节省率。"""
         try:
-            used, webp_bytes, stats = self._encode_one_page(
+            used, candidate_bytes, stats = self._encode_one_page(
                 data,
                 quality=None,
                 method=None,
                 min_savings_percent=None,
             )
         except Exception as exc:
-            self._warn_once("WebP conversion failed; keeping original page format: %s", exc)
-            return self._write_bytes_atomic(path, data)
+            self._warn_once("AVIF conversion failed; keeping original page format: %s", exc)
+            stats = {
+                "used_candidate": False,
+                "used_avif": False,
+                "orig_bytes": len(data),
+                "candidate_bytes": 0,
+                "avif_bytes": 0,
+                "savings_pct": 0.0,
+                "src_format": "UNKNOWN",
+                "exception": f"{type(exc).__name__}: {exc}",
+            }
+            return self._write_bytes_atomic(path, data), stats
 
-        if not used or webp_bytes is None:
+        if not used or candidate_bytes is None:
             src_format = stats.get("src_format", "") or ""
             target = path.with_suffix(_FORMAT_EXTENSIONS.get(src_format, path.suffix.lower()))
-            return self._write_bytes_atomic(target, data)
+            return self._write_bytes_atomic(target, data), stats
 
-        webp_path = path.with_suffix(".webp")
-        self._write_bytes_atomic(webp_path, webp_bytes)
+        avif_path = path.with_suffix(_TARGET_EXTENSION)
+        self._write_bytes_atomic(avif_path, candidate_bytes)
         logger.debug(
-            "Compressed %s to WebP: %d -> %d bytes (quality=%d)",
+            "Compressed %s to AVIF: %d -> %d bytes (quality=%d, speed=%d)",
             path.name,
             len(data),
-            len(webp_bytes),
+            len(candidate_bytes),
             self.quality,
+            self.speed,
         )
-        return webp_path
+        return avif_path, stats
+
+    def save_page_bytes(self, data: bytes, path: Path) -> Path:
+        saved_path, _ = self.save_page_bytes_with_stats(data, path)
+        return saved_path
 
     @staticmethod
     def _build_compression_info_json(
@@ -260,7 +289,7 @@ class ImageCompressor:
         finished_at: datetime,
         *,
         quality: int,
-        method: int,
+        speed: int,
         min_savings_percent: float,
         override_used: bool,
         force_candidates: bool,
@@ -271,19 +300,19 @@ class ImageCompressor:
         只走这一个构造函数，保证两处 JSON 字段不漂移。
         """
         total_pages = len(pages_stats)
-        used_webp_count = sum(1 for p in pages_stats if p.get("used_webp"))
+        used_candidate_count = sum(1 for p in pages_stats if p.get("used_candidate"))
         failed_pages_count = len(failed_pages_list)
         skipped_pages_count = sum(
-            1 for p in pages_stats if not p.get("used_webp") and not p.get("exception")
+            1 for p in pages_stats if not p.get("used_candidate") and not p.get("exception")
         )
         orig_total = sum(int(p.get("orig_bytes", 0)) for p in pages_stats)
-        encoded_webp_total = sum(int(p.get("webp_bytes", 0)) for p in pages_stats)
-        webp_total = sum(
-            int(p.get("webp_bytes", 0)) if p.get("used_webp") else int(p.get("orig_bytes", 0))
+        encoded_candidate_total = sum(int(p.get("candidate_bytes", 0)) for p in pages_stats)
+        candidate_total = sum(
+            int(p.get("candidate_bytes", 0)) if p.get("used_candidate") else int(p.get("orig_bytes", 0))
             for p in pages_stats
         )
         if orig_total > 0:
-            savings_pct_overall = round((1.0 - webp_total / orig_total) * 100.0, 2)
+            savings_pct_overall = round((1.0 - candidate_total / orig_total) * 100.0, 2)
         else:
             savings_pct_overall = 0.0
 
@@ -302,9 +331,15 @@ class ImageCompressor:
                 "name": page_name,
                 "page_index": page_index,
                 "orig_bytes": int(p.get("orig_bytes", 0)),
-                "webp_bytes": int(p.get("webp_bytes", 0)),
+                "candidate_bytes": int(p.get("candidate_bytes", 0)),
+                "avif_bytes": int(p.get("avif_bytes", p.get("candidate_bytes", 0))),
                 "savings_pct": float(p.get("savings_pct", 0.0)),
-                "used_webp": bool(p.get("used_webp", False)),
+                "used_candidate": bool(p.get("used_candidate", False)),
+                "used_avif": bool(p.get("used_avif", False)),
+                "candidate_format": _TARGET_FORMAT,
+                "candidate_file_name": (
+                    page_stem + _TARGET_EXTENSION if p.get("used_candidate") else ""
+                ),
                 "src_format": str(p.get("src_format", "UNKNOWN")),
                 "has_alpha": bool(p.get("has_alpha", False)),
                 "is_animated": bool(p.get("is_animated", False)),
@@ -316,24 +351,28 @@ class ImageCompressor:
             })
 
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "gallery_id": int(gallery_id),
             "gallery_dir": str(gallery_dir),
             "work_dir": str(work_dir),
-            "tool": "pillow-webp-phase1",
+            "tool": "pillow-avif-phase1",
+            "target_format": _TARGET_FORMAT,
+            "target_extension": _TARGET_EXTENSION,
             "quality": int(quality),
-            "method": int(method),
+            "speed": int(speed),
             "min_savings_percent": float(min_savings_percent),
             "override_used": bool(override_used),
             "force_candidates": bool(force_candidates),
             "total_pages": int(total_pages),
-            "used_webp_count": int(used_webp_count),
+            "used_candidate_count": int(used_candidate_count),
+            "used_avif_count": int(used_candidate_count),
             "failed_pages_count": int(failed_pages_count),
             "skipped_pages_count": int(skipped_pages_count),
             "discarded_pages_count": int(skipped_pages_count),
             "orig_bytes_total": int(orig_total),
-            "webp_bytes_total": int(webp_total),
-            "encoded_webp_bytes_total": int(encoded_webp_total),
+            "candidate_bytes_total": int(candidate_total),
+            "avif_bytes_total": int(candidate_total),
+            "encoded_candidate_bytes_total": int(encoded_candidate_total),
             "savings_pct_overall": float(savings_pct_overall),
             "failed_pages": list(failed_pages_list),
             "work_dir_ok": bool(work_dir_ok),
@@ -349,6 +388,7 @@ class ImageCompressor:
         work_root: Path,
         *,
         quality_override: int | None = None,
+        speed_override: int | None = None,
         method_override: int | None = None,
         min_savings_override: float | None = None,
         force: bool = False,
@@ -356,7 +396,7 @@ class ImageCompressor:
         progress_callback: Callable[[dict], None] | None = None,
         db_conn=None,
     ) -> tuple[str, dict]:
-        """Phase 1 两阶段核心：第一阶段 → 只写候选 webp 到 compress_work，不碰原图。
+        """Phase 1 两阶段核心：第一阶段 → 只写候选 AVIF 到 compress_work，不碰原图。
 
         Returns (final_status, info_dict)，其中 info_dict 为字节级一致的公共 JSON。
         final_status ∈ { 'user_review_required', 'failed', 'skipped' }
@@ -370,19 +410,29 @@ class ImageCompressor:
         work_dir = work_root / str(gallery_id)
 
         effective_q = self.quality if quality_override is None else _bounded_int(quality_override, self.quality, 1, 100)
-        effective_m = self.method if method_override is None else _bounded_int(method_override, self.method, 0, 6)
+        legacy_speed_override = speed_override if speed_override is not None else method_override
+        effective_s = (
+            self.speed
+            if legacy_speed_override is None
+            else _bounded_int(legacy_speed_override, self.speed, 0, 10)
+        )
         effective_ms = (
             self.min_savings_percent
             if min_savings_override is None
             else _bounded_float(min_savings_override, self.min_savings_percent, 0.0, 100.0)
         )
-        override_used = not (quality_override is None and method_override is None and min_savings_override is None)
+        override_used = not (
+            quality_override is None
+            and speed_override is None
+            and method_override is None
+            and min_savings_override is None
+        )
 
         # 必须在检查/清空 work_dir 之前验证编码器。NAS 的 Python venv 若漏装
         # Pillow，不能把旧候选清空后伪装成“所有页面均跳过”。
-        if not self._ensure_pillow_webp():
+        if not self._ensure_pillow_avif():
             raise RuntimeError(
-                "Pillow/WebP 编码器不可用；请先检查 NAS venv 的 Pillow 安装和 "
+                "Pillow/AVIF 编码器不可用；请先检查 NAS venv 的 Pillow 安装和 "
                 "venv/lib/python3.12/site-packages/PIL 权限"
             )
 
@@ -437,7 +487,7 @@ class ImageCompressor:
             return "skipped", {"reason": "lock_not_acquired", "gallery_id": gallery_id}
 
         page_files: list[Path] = []
-        page_exts = _COMPRESSIBLE_PAGE_EXTS + (".webp",)
+        page_exts = _COMPRESSIBLE_PAGE_EXTS
         if gallery_dir.exists() and gallery_dir.is_dir():
             for entry in sorted(gallery_dir.glob("*")):
                 if not entry.is_file():
@@ -462,7 +512,8 @@ class ImageCompressor:
                     "current": 0,
                     "total": len(page_files),
                     "page_name": "",
-                    "used_webp_count": 0,
+                    "used_candidate_count": 0,
+                    "used_avif_count": 0,
                     "failed_pages_count": 0,
                 })
             except Exception:
@@ -475,23 +526,23 @@ class ImageCompressor:
         for page_path in page_files:
             page_stat = {"name": page_path.name}
             exc: Exception | None = None
-            webp_bytes_actual: bytes | None = None
+            candidate_bytes_actual: bytes | None = None
             for attempt in range(2):
                 try:
                     data = page_path.read_bytes()
-                    used, webp_bytes, stats = self._encode_one_page(
+                    used, candidate_bytes, stats = self._encode_one_page(
                         data,
                         quality=effective_q,
-                        method=effective_m,
+                        speed=effective_s,
                         min_savings_percent=effective_ms,
                         force_candidate=force_candidates,
                     )
                     page_stat.update(stats)
                     page_stat["name"] = page_path.name
-                    if used and webp_bytes is not None:
-                        target = work_dir / f"{page_path.stem}.webp"
-                        self._write_bytes_atomic(target, webp_bytes)
-                        webp_bytes_actual = webp_bytes
+                    if used and candidate_bytes is not None:
+                        target = work_dir / f"{page_path.stem}{_TARGET_EXTENSION}"
+                        self._write_bytes_atomic(target, candidate_bytes)
+                        candidate_bytes_actual = candidate_bytes
                     exc = None
                     break
                 except Exception as e:
@@ -502,9 +553,11 @@ class ImageCompressor:
             if exc is not None:
                 page_stat["exception"] = f"{type(exc).__name__}: {exc!s}"
                 page_stat.setdefault("orig_bytes", 0)
-                page_stat.setdefault("webp_bytes", 0)
+                page_stat.setdefault("candidate_bytes", 0)
+                page_stat.setdefault("avif_bytes", 0)
                 page_stat.setdefault("savings_pct", 0.0)
-                page_stat.setdefault("used_webp", False)
+                page_stat.setdefault("used_candidate", False)
+                page_stat.setdefault("used_avif", False)
                 page_stat.setdefault("no_savings", False)
                 page_stat.setdefault("poor_ratio", False)
                 page_stat.setdefault("src_format", "UNKNOWN")
@@ -519,7 +572,8 @@ class ImageCompressor:
                         "current": len(pages_stats),
                         "total": len(page_files),
                         "page_name": page_path.name,
-                        "used_webp_count": sum(1 for item in pages_stats if item.get("used_webp")),
+                        "used_candidate_count": sum(1 for item in pages_stats if item.get("used_candidate")),
+                        "used_avif_count": sum(1 for item in pages_stats if item.get("used_candidate")),
                         "failed_pages_count": len(failed_pages_list),
                     })
                 except Exception:
@@ -534,7 +588,7 @@ class ImageCompressor:
             started_at,
             finished_at,
             quality=effective_q,
-            method=effective_m,
+            speed=effective_s,
             min_savings_percent=effective_ms,
             override_used=override_used,
             force_candidates=force_candidates,
@@ -554,7 +608,7 @@ class ImageCompressor:
         fail_ratio = (len(failed_pages_list) / total_matched) if total_matched > 0 else 0.0
         if fail_ratio >= 0.10:
             final_status = "failed"
-        elif int(info_dict.get("used_webp_count", 0)) > 0:
+        elif int(info_dict.get("used_candidate_count", 0)) > 0:
             final_status = "user_review_required"
         else:
             final_status = "skipped"

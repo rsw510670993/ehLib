@@ -100,7 +100,7 @@ class AntiBotBrowser:
                             try {{
                                 const resp = await fetch('{img_url}', {{
                                     credentials: 'include',
-                                    headers: {{ 'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8' }}
+                                    headers: {{ 'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' }}
                                 }});
                                 if (!resp.ok) return 'ERROR:' + resp.status;
                                 const blob = await resp.blob();

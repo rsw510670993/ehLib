@@ -3,7 +3,8 @@
 /**
  * 审核通过后立即应用整本压缩候选。
  *
- * 只应用 compression_info.pages 中 used_webp=true 且体积严格变小的页面。
+ * 只应用 compression_info.pages 中已标记采用且体积严格变小的候选页面。
+ * 新记录使用通用 candidate 字段；旧 used_webp/webp_bytes 记录继续兼容。
  * 原图只在事务期间暂存于候选工作目录；数据库提交成功后连同候选一起删除。
  * 文件操作或数据库提交任一步失败时，按相反顺序恢复原图，不保留永久备份。
  */
@@ -107,12 +108,15 @@ function apply_compression_candidates_pdo(PDO $pdo, int $gallery_id): array {
         $operations = [];
         $seen_stems = [];
         foreach ($pages as $page) {
-            if (empty($page['used_webp'])) continue;
+            $used_candidate = !empty($page['used_candidate'])
+                || !empty($page['used_avif'])
+                || !empty($page['used_webp']);
+            if (!$used_candidate) continue;
             $name = (string)($page['name'] ?? '');
             if ($name === '' || basename($name) !== $name) throw new RuntimeException('原图文件名无效');
             $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
             $stem = pathinfo($name, PATHINFO_FILENAME);
-            if (!ctype_digit($stem) || !in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) {
+            if (!ctype_digit($stem) || !in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'], true)) {
                 throw new RuntimeException('不允许应用非数字页文件: ' . $name);
             }
             if (isset($seen_stems[$stem])) throw new RuntimeException('压缩页清单存在重复页: ' . $stem);
@@ -129,7 +133,21 @@ function apply_compression_candidates_pdo(PDO $pdo, int $gallery_id): array {
             }
             $original = normalize_path($original_real);
 
-            $candidate_name = $stem . '.webp';
+            $candidate_format = strtoupper((string)($page['candidate_format'] ?? ($info['target_format'] ?? '')));
+            if ($candidate_format === '') {
+                $candidate_format = !empty($page['used_avif']) ? 'AVIF' : 'WEBP';
+            }
+            $candidate_ext = ['AVIF' => 'avif', 'WEBP' => 'webp'][$candidate_format] ?? '';
+            if ($candidate_ext === '') throw new RuntimeException('不支持的候选格式: ' . $candidate_format);
+            $candidate_name = (string)($page['candidate_file_name'] ?? '');
+            if ($candidate_name === '') $candidate_name = $stem . '.' . $candidate_ext;
+            if (
+                basename($candidate_name) !== $candidate_name
+                || pathinfo($candidate_name, PATHINFO_FILENAME) !== $stem
+                || strtolower(pathinfo($candidate_name, PATHINFO_EXTENSION)) !== $candidate_ext
+            ) {
+                throw new RuntimeException('候选图文件名无效: ' . $candidate_name);
+            }
             $candidate = $work_dir . DIRECTORY_SEPARATOR . $candidate_name;
             $candidate_real = realpath($candidate);
             if (
@@ -147,7 +165,9 @@ function apply_compression_candidates_pdo(PDO $pdo, int $gallery_id): array {
             if (isset($page['orig_bytes']) && (int)$page['orig_bytes'] !== $original_size) {
                 throw new RuntimeException('原图已在压缩后发生变化，请重新压缩: ' . $name);
             }
-            if (isset($page['webp_bytes']) && (int)$page['webp_bytes'] !== $candidate_size) {
+            $expected_candidate_size = $page['candidate_bytes']
+                ?? ($page['avif_bytes'] ?? ($page['webp_bytes'] ?? null));
+            if ($expected_candidate_size !== null && (int)$expected_candidate_size !== $candidate_size) {
                 throw new RuntimeException('候选图体积与审核记录不一致: ' . $candidate_name);
             }
             if ($candidate_size >= $original_size) throw new RuntimeException('候选图未变小，拒绝替换: ' . $name);
@@ -216,7 +236,7 @@ function apply_compression_candidates_pdo(PDO $pdo, int $gallery_id): array {
             $path = $gallery_path . DIRECTORY_SEPARATOR . $item;
             if (!is_file($path)) continue;
             $image_ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
-            if (in_array($image_ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) {
+            if (in_array($image_ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'], true)) {
                 $new_size += (int)@filesize($path);
             }
         }

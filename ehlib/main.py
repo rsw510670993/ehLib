@@ -1597,7 +1597,7 @@ async def cmd_recover_orphans(args: argparse.Namespace, config: Config, db: Data
 def _find_oldest_file_time(directory: Path) -> str:
     oldest = None
     for f in directory.iterdir():
-        if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"):
             mtime = f.stat().st_mtime
             if oldest is None or mtime < oldest:
                 oldest = mtime

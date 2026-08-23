@@ -138,7 +138,7 @@ $projectPath = realpath(__DIR__ . '/..');
                             <button type="button" class="btn btn-sm btn-success me-1" id="cc_btn_approve" title="审核通过后立即应用所有变小的候选并删除原图">
                                 <i class="fas fa-check me-1"></i>通过并应用
                             </button>
-                            <button type="button" class="btn btn-sm btn-outline-warning me-1" id="cc_btn_rerun" title="用默认参数 88/4/5% 重跑一次整本压缩">
+                            <button type="button" class="btn btn-sm btn-outline-warning me-1" id="cc_btn_rerun" title="用AVIF默认参数 65/5/5% 重跑一次整本压缩">
                                 <i class="fas fa-arrows-rotate me-1"></i>整本重做（默认参数）
                             </button>
                             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>

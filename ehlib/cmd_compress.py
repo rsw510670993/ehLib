@@ -21,7 +21,7 @@ _EXIT_NOT_FOUND = 2
 _EXIT_FAILED = 3
 _EXIT_SKIP_WORKDIR_EXISTS = 4
 
-_PAGE_EXTS_FOR_SCAN = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+_PAGE_EXTS_FOR_SCAN = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif")
 
 
 class _ArgParser(argparse.ArgumentParser):
@@ -34,7 +34,7 @@ class _ArgParser(argparse.ArgumentParser):
 def _build_parser() -> argparse.ArgumentParser:
     parser = _ArgParser(
         prog="cmd_compress",
-        description="Phase 1: 单本两阶段压缩候选 → compress_work/<id>/",
+        description="Phase 1: 单本 AVIF 两阶段压缩候选 → compress_work/<id>/",
     )
     grp = parser.add_mutually_exclusive_group(required=True)
     grp.add_argument("--gallery-id", type=int, help="直接按 galleries.id 主键定位")
@@ -50,7 +50,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="只读 DB + 扫描目录，打印摘要；不读图片字节 / 不写 webp / 不改 DB",
+        help="只读 DB + 扫描目录，打印摘要；不读图片字节 / 不写 AVIF / 不改 DB",
     )
     parser.add_argument(
         "--force",
@@ -63,7 +63,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="忽略最小节省率保留所有变小候选；相等或增大的结果仍会丢弃",
     )
     parser.add_argument("--quality", type=int, default=None, help="覆盖 ImageCompressor.quality (1..100)")
-    parser.add_argument("--method", type=int, default=None, help="覆盖 ImageCompressor.method (0..6)")
+    parser.add_argument(
+        "--speed",
+        "--method",
+        dest="speed",
+        type=int,
+        default=None,
+        help="覆盖 AVIF 编码 speed (0..10；--method 为旧参数兼容别名)",
+    )
     parser.add_argument(
         "--min-savings",
         type=float,
@@ -110,8 +117,8 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     if args.quality is not None and not (1 <= int(args.quality) <= 100):
         parser.error("--quality 越界，要求 1..100")
         return _EXIT_ARGS
-    if args.method is not None and not (0 <= int(args.method) <= 6):
-        parser.error("--method 越界，要求 0..6")
+    if args.speed is not None and not (0 <= int(args.speed) <= 10):
+        parser.error("--speed 越界，要求 0..10")
         return _EXIT_ARGS
     if args.min_savings is not None and not (0.0 <= float(args.min_savings) <= 100.0):
         parser.error("--min-savings 越界，要求 0..100")
@@ -263,14 +270,14 @@ def main(argv: list[str] | None = None) -> int:
 
         compressor = ImageCompressor(
             enabled=True,
-            quality=88,
-            method=4,
+            quality=65,
+            speed=5,
             min_savings_percent=5.0,
         )
         if args.quality is not None:
             compressor.quality = int(args.quality)
-        if args.method is not None:
-            compressor.method = int(args.method)
+        if args.speed is not None:
+            compressor.speed = int(args.speed)
         if args.min_savings is not None:
             compressor.min_savings_percent = float(args.min_savings)
 
@@ -288,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
                 gallery_dir,
                 Path(args.work_root),
                 quality_override=args.quality,
-                method_override=args.method,
+                speed_override=args.speed,
                 min_savings_override=args.min_savings,
                 force=bool(args.force),
                 force_candidates=bool(args.force_candidates),
@@ -314,7 +321,8 @@ def main(argv: list[str] | None = None) -> int:
             "压缩完成，等待人工审核" if final_status == "user_review_required" else f"压缩结束: {final_status}",
             current=int(info.get("total_pages", 0) or 0),
             total=int(info.get("total_pages", 0) or 0),
-            used_webp_count=int(info.get("used_webp_count", 0) or 0),
+            used_candidate_count=int(info.get("used_candidate_count", 0) or 0),
+            used_avif_count=int(info.get("used_avif_count", 0) or 0),
             failed_pages_count=int(info.get("failed_pages_count", 0) or 0),
             savings_pct_overall=float(info.get("savings_pct_overall", 0.0) or 0.0),
             compression_status=final_status,
@@ -322,9 +330,9 @@ def main(argv: list[str] | None = None) -> int:
 
         if final_status == "user_review_required":
             logger.info(
-                "压缩完成 → user_review_required  |  pages=%s  used_webp=%s  savings=%.2f%%  work_dir=%s",
+                "压缩完成 → user_review_required  |  pages=%s  used_avif=%s  savings=%.2f%%  work_dir=%s",
                 info.get("total_pages"),
-                info.get("used_webp_count"),
+                info.get("used_candidate_count"),
                 float(info.get("savings_pct_overall", 0.0)),
                 info.get("work_dir"),
             )

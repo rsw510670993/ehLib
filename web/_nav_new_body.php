@@ -76,33 +76,33 @@
                             <div class="border rounded p-3 mb-4 bg-light-subtle">
                                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                                     <div>
-                                        <div class="fw-semibold">WebP 图片压缩</div>
+                                        <div class="fw-semibold">AVIF 图片压缩</div>
                                         <div class="small text-muted">用于新下载的正文图片和缓存封面，不改变分辨率。</div>
                                     </div>
                                     <div class="form-check form-switch mb-0">
-                                        <input class="form-check-input" type="checkbox" role="switch" id="set_dl_webp_enabled" onchange="updateWebpSettingsState()">
-                                        <label class="form-check-label" for="set_dl_webp_enabled">启用</label>
+                                        <input class="form-check-input" type="checkbox" role="switch" id="set_dl_avif_enabled" onchange="updateAvifSettingsState()">
+                                        <label class="form-check-label" for="set_dl_avif_enabled">启用</label>
                                     </div>
                                 </div>
                                 <div class="row g-3">
                                     <div class="col-md-4">
-                                        <label class="form-label" for="set_dl_webp_quality">有损质量</label>
-                                        <input type="number" class="form-control" id="set_dl_webp_quality" min="1" max="100" step="1">
-                                        <div class="form-text">推荐 88；越高越接近原图，体积也越大。</div>
+                                        <label class="form-label" for="set_dl_avif_quality">有损质量</label>
+                                        <input type="number" class="form-control" id="set_dl_avif_quality" min="1" max="100" step="1">
+                                        <div class="form-text">默认 65；越高越接近原图，体积也越大。</div>
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label" for="set_dl_webp_method">编码强度</label>
-                                        <input type="number" class="form-control" id="set_dl_webp_method" min="0" max="6" step="1">
-                                        <div class="form-text">推荐 4；越高压缩稍好，但更占用 CPU。</div>
+                                        <label class="form-label" for="set_dl_avif_speed">编码速度</label>
+                                        <input type="number" class="form-control" id="set_dl_avif_speed" min="0" max="10" step="1">
+                                        <div class="form-text">默认 8；越低压缩更慢，可能得到更小体积。</div>
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label" for="set_dl_webp_min_savings">最低节省比例 (%)</label>
-                                        <input type="number" class="form-control" id="set_dl_webp_min_savings" min="0" max="100" step="0.5">
+                                        <label class="form-label" for="set_dl_avif_min_savings">最低节省比例 (%)</label>
+                                        <input type="number" class="form-control" id="set_dl_avif_min_savings" min="0" max="100" step="0.5">
                                         <div class="form-text">推荐 5；不足此比例时保留服务器返回格式。</div>
                                     </div>
                                 </div>
                                 <div class="alert alert-secondary py-2 px-3 mt-3 mb-0 small">
-                                    已是 WebP 或动态图时不会二次有损；现有本地图片不会自动转换或删除。
+                                    JPEG、PNG、WebP 会尝试转为 AVIF；已是 AVIF 或动态图时不会二次有损。现有本地图片不会自动转换或删除。
                                 </div>
                             </div>
 
@@ -664,13 +664,15 @@
                                 </div>
                                 <div class="col-6 col-lg-2">
                                     <label class="form-label" for="compress_quality">Quality</label>
-                                    <input type="number" min="1" max="100" value="88" class="form-control" id="compress_quality">
+                                    <input type="number" min="1" max="100" value="65" class="form-control" id="compress_quality">
                                 </div>
                                 <div class="col-6 col-lg-2">
-                                    <label class="form-label" for="compress_method">Method</label>
-                                    <select class="form-select" id="compress_method">
-                                        <option value="0">0（最快）</option><option value="1">1</option><option value="2">2</option>
-                                        <option value="3">3</option><option value="4" selected>4（默认）</option><option value="5">5</option><option value="6">6（最慢）</option>
+                                    <label class="form-label" for="compress_speed">Speed</label>
+                                    <select class="form-select" id="compress_speed">
+                                        <option value="0">0（最慢）</option><option value="1">1</option><option value="2">2</option>
+                                        <option value="3">3</option><option value="4">4</option><option value="5" selected>5（默认）</option>
+                                        <option value="6">6</option><option value="7">7</option><option value="8">8</option>
+                                        <option value="9">9</option><option value="10">10（最快）</option>
                                     </select>
                                 </div>
                                 <div class="col-6 col-lg-2">

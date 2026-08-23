@@ -16,6 +16,32 @@ let _cc_ctx = {
     pollingTimer: null
 };
 
+function _ccPageUsed(page) {
+    return !!(page && (page.used_candidate || page.used_avif || page.used_webp));
+}
+
+function _ccCandidateFormat(page) {
+    var info = _cc_ctx.info || {};
+    var value = (page && page.candidate_format) || info.target_format || '';
+    if (!value && page && page.used_avif) value = 'AVIF';
+    if (!value && page && page.used_webp) value = 'WEBP';
+    return String(value || 'AVIF').toUpperCase();
+}
+
+function _ccCandidateBytes(page) {
+    return parseInt(
+        (page && (page.candidate_bytes ?? page.avif_bytes ?? page.webp_bytes)) || 0,
+        10
+    ) || 0;
+}
+
+function _ccCandidateFile(page, originalName) {
+    var format = _ccCandidateFormat(page);
+    var extension = format === 'WEBP' ? '.webp' : '.avif';
+    return (page && (page.candidate_file_name || page.avif_file_name || page.webp_file_name))
+        || String(originalName || '').replace(/\.[^.]+$/, '') + extension;
+}
+
 function openCompressCompare(args) {
     args = args || {};
     var gid = String(args.gallery_id || '');
@@ -130,9 +156,7 @@ async function _ccFetchInfo() {
         }
         _cc_ctx.gallery = r.gallery || {};
         _cc_ctx.info = r.info || null;
-        _cc_ctx.pages = ((r.info && r.info.pages) ? r.info.pages.filter(function (page) {
-            return page && page.used_webp;
-        }) : []);
+        _cc_ctx.pages = ((r.info && r.info.pages) ? r.info.pages.filter(_ccPageUsed) : []);
         _cc_ctx.work_dir_exists = !!r.work_dir_served;
         _cc_ctx.page_sizes = r.page_sizes || [];
         if (_cc_ctx.pages.length === 0) {
@@ -179,15 +203,16 @@ function _ccRenderHeader() {
 
     var params = [];
     params.push('quality=' + (s.quality ?? '?'));
-    params.push('method=' + (s.method ?? '?'));
+    params.push('speed=' + (s.speed ?? s.method ?? '?'));
     params.push('min_savings=' + (s.min_savings_percent ?? '?') + '%');
     if (s.override_used) params.push('override_used=true');
     if (s.force_candidates) params.push('忽略节省率阈值=true');
     params.push('原整本 ' + (s.orig_bytes_total ?? 0).toLocaleString() + 'B');
-    params.push('预计整本 ' + (s.webp_bytes_total ?? 0).toLocaleString() + 'B');
+    params.push('预计整本 ' + (s.candidate_bytes_total ?? s.avif_bytes_total ?? s.webp_bytes_total ?? 0).toLocaleString() + 'B');
     var sp = parseFloat(s.savings_pct_overall ?? 0);
     params.push('节省 ' + sp.toFixed(2) + '%');
-    if (s.used_webp_count != null) params.push('used=' + s.used_webp_count + '/' + (s.total_pages ?? _cc_ctx.pages.length));
+    var usedCount = s.used_candidate_count ?? s.used_avif_count ?? s.used_webp_count;
+    if (usedCount != null) params.push('used=' + usedCount + '/' + (s.total_pages ?? _cc_ctx.pages.length));
     if (s.failed_pages_count) params.push('failed=' + s.failed_pages_count);
     document.getElementById('cc_params').textContent = params.join(' · ');
     // 升级提示（方案 B 提示）
@@ -204,7 +229,7 @@ function _ccRenderThumbs() {
         var p = _cc_ctx.pages[i] || {};
         var dotClass = 'dot-skipped', dotLetter = 'Skipped';
         if (p.exception) { dotClass = 'dot-failed'; dotLetter = 'Failed'; }
-        else if (p.used_webp) { dotClass = 'dot-used'; dotLetter = 'Used'; }
+        else if (_ccPageUsed(p)) { dotClass = 'dot-used'; dotLetter = 'Used'; }
         var thumb = document.createElement('div');
         thumb.className = 'cc-thumb' + (i === _cc_ctx.cur_idx ? ' active' : '');
         thumb.dataset.idx = String(i);
@@ -219,7 +244,7 @@ function _ccRenderThumbs() {
             '&page=' + pageNo;
         thumb.innerHTML =
             '<div class="cc-thumb-dot ' + dotClass + '" title="' +
-                escapeAttr(p.used_webp ? '已生成 WebP 候选' : (p.exception ? '压缩失败' : '未生成 (skipped)')) +
+                escapeAttr(_ccPageUsed(p) ? ('已生成 ' + _ccCandidateFormat(p) + ' 候选') : (p.exception ? '压缩失败' : '未生成 (skipped)')) +
                 '">' + dotLetter + '</div>' +
             '<img src="' + escapeAttr(imgSrc) + '" loading="lazy" alt="" onerror="this.style.background=\'#1e293b\'">' +
             '<div class="cc-thumb-label">' + String(pageNo).padStart(2, '0') + '</div>';
@@ -244,7 +269,8 @@ function _ccRenderPage() {
     var pageNo = (parseInt(p.page_index, 10) >= 0 ? (parseInt(p.page_index, 10) + 1) : (i + 1));
     var origName = p.name || '';
     var origBytes = parseInt(p.orig_bytes || 0, 10) || 0;
-    var webpBytes = parseInt(p.webp_bytes || 0, 10) || 0;
+    var candidateBytes = _ccCandidateBytes(p);
+    var candidateFormat = _ccCandidateFormat(p);
     var savingsPct = parseFloat(p.savings_pct || 0);
     var srcFormat = (p.src_format || '').toUpperCase() || (origName.split('.').pop() || '').toUpperCase();
     var wh = { w: p.width || '', h: p.height || '' };
@@ -287,7 +313,7 @@ function _ccRenderPage() {
         }
         cmpTag.className = 'badge bg-danger';
         cmpTag.textContent = 'FAILED';
-    } else if (!p.used_webp || !_cc_ctx.work_dir_exists) {
+    } else if (!_ccPageUsed(p) || !_cc_ctx.work_dir_exists) {
         imgCmp.removeAttribute('src');
         imgCmp.removeAttribute('data-path');
         imgCmp.style.display = 'none';
@@ -295,7 +321,7 @@ function _ccRenderPage() {
         cmpTag.className = 'badge bg-secondary';
         if (p.no_savings) cmpTag.textContent = 'SKIPPED (no_savings)';
         else if (p.poor_ratio) cmpTag.textContent = 'SKIPPED (poor_ratio)';
-        else if (p.src_format && (p.src_format.toLowerCase() === 'gif' || p.src_format.toLowerCase() === 'webp')) {
+        else if (p.src_format && (p.src_format.toLowerCase() === 'gif' || p.src_format.toLowerCase() === 'avif')) {
             cmpTag.textContent = 'SKIPPED (src_format=' + escapeHtml(p.src_format.toUpperCase()) + ')';
         } else if (!_cc_ctx.work_dir_exists) {
             cmpTag.textContent = 'SKIPPED (work_dir 不存在)';
@@ -304,19 +330,20 @@ function _ccRenderPage() {
         }
         if (cmpPlaceholder) cmpPlaceholder.textContent = cmpTag.textContent;
     } else {
-        var webpFile = p.webp_file_name || (origName.replace(/\.[^.]+$/, '') + '.webp');
+        var candidateFile = _ccCandidateFile(p, origName);
         var cmpUrl = 'api.php?action=serve_compress_work_image&gallery_id=' + encodeURIComponent(_cc_ctx.gallery_id) +
-            '&file=' + encodeURIComponent(webpFile) + '&v=' + encodeURIComponent((_cc_ctx.info || {}).finished_at || '');
+            '&file=' + encodeURIComponent(candidateFile) + '&v=' + encodeURIComponent((_cc_ctx.info || {}).finished_at || '');
         imgCmp.src = cmpUrl;
         imgCmp.style.display = 'block';
         if (cmpPlaceholder) {
             cmpPlaceholder.style.display = 'none';
             cmpPlaceholder.textContent = '';
         }
-        imgCmp.dataset.path = p.webp_disk_path || _ccJoinDiskPath((_cc_ctx.info || {}).work_dir, webpFile);
-        imgCmp.dataset.name = webpFile;
+        imgCmp.dataset.path = p.candidate_disk_path || p.avif_disk_path || p.webp_disk_path
+            || _ccJoinDiskPath((_cc_ctx.info || {}).work_dir, candidateFile);
+        imgCmp.dataset.name = candidateFile;
         cmpTag.className = 'badge bg-success';
-        cmpTag.textContent = 'USED WEBP';
+        cmpTag.textContent = 'USED ' + candidateFormat;
     }
     document.getElementById('cc_orig_tag').className = 'badge bg-info';
     document.getElementById('cc_orig_tag').textContent = srcFormat;
@@ -330,13 +357,13 @@ function _ccRenderPage() {
     document.getElementById('cc_meta_orig').textContent =
         (origName || '') + '  ' + whStr + '  ' + (srcFormat || '?') + '  ' + origBytes.toLocaleString() + ' bytes';
     var cmpMetaParts = [];
-    cmpMetaParts.push(escapeHtml(p.webp_file_name || (origName.replace(/\.[^.]+$/, '') + '.webp')));
+    cmpMetaParts.push(escapeHtml(_ccCandidateFile(p, origName)));
     if (wh.w && wh.h) cmpMetaParts.push(whStr);
-    cmpMetaParts.push('WebP');
-    cmpMetaParts.push(webpBytes.toLocaleString() + ' bytes');
+    cmpMetaParts.push(candidateFormat);
+    cmpMetaParts.push(candidateBytes.toLocaleString() + ' bytes');
     if (p.exception) {
         cmpMetaParts = ['Failed: ' + escapeHtml((p.exception || '').toString().substring(0, 120))];
-    } else if (!p.used_webp) {
+    } else if (!_ccPageUsed(p)) {
         var skippedReason = p.no_savings ? 'no_savings' : (p.poor_ratio ? 'poor_ratio' : ('src_format=' + (p.src_format || 'unknown')));
         cmpMetaParts.push('Skipped: ' + escapeHtml(skippedReason));
     } else {
@@ -434,7 +461,7 @@ async function _ccOnApprove() {
     if (!_cc_ctx.info) { showToast('还未加载压缩信息', 'warning'); return; }
     var ok = await confirmDialog({
         title: '确认通过并应用整本压缩？',
-        message: '将立即用体积变小的 WebP 候选替换对应原图。',
+        message: '将立即用体积变小的 AVIF 候选替换对应原图。',
         detail: '应用成功后原图和候选文件都会删除，无法回退；应用中途失败会自动恢复原图。',
         okText: '通过并应用',
         okClass: 'btn-success'
@@ -463,7 +490,7 @@ async function _ccOnRerun() {
     var btn = document.getElementById('cc_btn_rerun');
     var ok = await confirmDialog({
         title: '确认整本重做压缩？',
-        message: '会以默认参数 quality=88 / method=4 / min_savings=5% 重跑 Phase 1 CLI。',
+        message: '会以默认参数 quality=65 / speed=5 / min_savings=5% 重跑整本 AVIF 候选。',
         detail: '会检查所有静态页，只保留体积严格变小的候选，不修改原图；现有审核结果会被重置。',
         okText: '开始重做',
         okClass: 'btn-warning'
@@ -493,9 +520,7 @@ async function _ccOnRerun() {
                         showToast('重跑完成，状态=' + gst, (gst === 'failed' ? 'danger' : 'success'));
                         _cc_ctx.gallery = rr.gallery || {};
                         _cc_ctx.info = rr.info || null;
-                        _cc_ctx.pages = (rr.info && rr.info.pages) ? rr.info.pages.filter(function (page) {
-                            return page && page.used_webp;
-                        }) : [];
+                        _cc_ctx.pages = (rr.info && rr.info.pages) ? rr.info.pages.filter(_ccPageUsed) : [];
                         _cc_ctx.work_dir_exists = !!rr.work_dir_served;
                         _cc_ctx.page_sizes = rr.page_sizes || [];
                         _cc_ctx.cur_idx = 0;

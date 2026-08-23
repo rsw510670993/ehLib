@@ -72,11 +72,14 @@ function renderCompressionRows() {
         var meta = compressionStatusMeta(row.compression_status);
         var primary = row.title_jp || row.title || '未命名';
         var secondary = row.title_jp && row.title && row.title_jp !== row.title ? row.title : '';
-        var used = parseInt(row.used_webp_count || 0, 10) || 0;
+        var used = parseInt(row.used_candidate_count || row.used_webp_count || 0, 10) || 0;
         var pages = parseInt(row.total_pages || 0, 10) || 0;
-        var savings = Number(row.savings_pct_overall || 0);
+        var hasSavings = row.savings_pct_overall !== null && row.savings_pct_overall !== '';
+        var savings = hasSavings ? Number(row.savings_pct_overall) : null;
         var candidate = used > 0
-            ? used + '/' + pages + ' · <span class="' + (savings >= 0 ? 'text-success' : 'text-danger') + '">' + savings.toFixed(2) + '%</span>'
+            ? used + '/' + pages + (hasSavings && isFinite(savings)
+                ? ' · <span class="' + (savings >= 0 ? 'text-success' : 'text-danger') + '">' + savings.toFixed(2) + '%</span>'
+                : ' · <span class="text-muted">—</span>')
             : '<span class="text-muted">—</span>';
         var compareBtn = ['user_review_required', 'failed'].includes(String(row.compression_status || ''))
             ? '<button class="btn btn-sm btn-outline-warning" onclick="compressionOpenCompare(' + Number(row.id) + ')" title="打开压缩对比"><i class="fas fa-code-compare"></i></button>'
@@ -115,7 +118,7 @@ function renderCompressionActiveTasks() {
         return '<div class="compression-task mb-3" data-gallery-id="' + Number(row.id) + '">' +
             '<div class="d-flex justify-content-between gap-2 mb-1"><span class="fw-semibold">#' + Number(row.id) + ' ' + escapeHtml(title) + '</span><span class="small text-muted">' + current + ' / ' + total + '</span></div>' +
             '<div class="progress" style="height:12px"><div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width:' + pct + '%">' + pct + '%</div></div>' +
-            '<div class="d-flex justify-content-between mt-1 small text-muted"><span>' + escapeHtml(p.message || '等待任务状态…') + '</span><span>候选 ' + (parseInt(p.used_webp_count || 0, 10) || 0) + ' · 失败 ' + (parseInt(p.failed_pages_count || 0, 10) || 0) + '</span></div>' +
+            '<div class="d-flex justify-content-between mt-1 small text-muted"><span>' + escapeHtml(p.message || '等待任务状态…') + '</span><span>候选 ' + (parseInt(p.used_candidate_count || p.used_avif_count || p.used_webp_count || 0, 10) || 0) + ' · 失败 ' + (parseInt(p.failed_pages_count || 0, 10) || 0) + '</span></div>' +
             '</div>';
     }).join('');
 }
@@ -146,18 +149,18 @@ function selectCompressionGallery(id) {
 
 async function startCompressionTask() {
     var id = parseInt(document.getElementById('compress_gallery_id')?.value || '0', 10);
-    var quality = parseInt(document.getElementById('compress_quality')?.value || '88', 10);
-    var method = parseInt(document.getElementById('compress_method')?.value || '4', 10);
+    var quality = parseInt(document.getElementById('compress_quality')?.value || '65', 10);
+    var speed = parseInt(document.getElementById('compress_speed')?.value || '5', 10);
     var minSavings = parseFloat(document.getElementById('compress_min_savings')?.value || '5');
     var forceCandidates = !!document.getElementById('compress_force_candidates')?.checked;
-    if (!id || quality < 1 || quality > 100 || method < 0 || method > 6 || !isFinite(minSavings) || minSavings < 0 || minSavings > 100) {
+    if (!id || quality < 1 || quality > 100 || speed < 0 || speed > 10 || !isFinite(minSavings) || minSavings < 0 || minSavings > 100) {
         showToast('请检查 Gallery ID 和压缩参数范围', 'warning');
         return;
     }
     var confirmed = await confirmDialog({
         title: '开始图片压缩？',
-        message: '将为 Gallery #' + id + ' 生成新的 WebP 审核候选。',
-        detail: '参数：quality=' + quality + ' / method=' + method + ' / min_savings=' + minSavings + '% / 忽略节省率阈值=' + (forceCandidates ? '是' : '否') + '。只有体积严格变小的候选会被保留，不会修改原图。',
+        message: '将为 Gallery #' + id + ' 生成新的 AVIF 审核候选。',
+        detail: '参数：quality=' + quality + ' / speed=' + speed + ' / min_savings=' + minSavings + '% / 忽略节省率阈值=' + (forceCandidates ? '是' : '否') + '。只有体积严格变小的候选会被保留，不会修改原图。',
         okText: '开始压缩',
         okClass: 'btn-primary'
     });
@@ -167,7 +170,7 @@ async function startCompressionTask() {
         var res = await api('start_compression_task', { form: {
             gallery_id: id,
             quality: quality,
-            method: method,
+            speed: speed,
             min_savings: minSavings,
             force_candidates: forceCandidates ? '1' : '0'
         }});

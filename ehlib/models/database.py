@@ -1312,6 +1312,24 @@ class Database:
             await db.commit()
             return cursor.rowcount > 0
 
+    async def update_gallery_compression(
+        self,
+        source: str,
+        source_id: str,
+        status: str,
+        info_json: str,
+    ) -> bool:
+        """记录下载阶段已经直接应用的图片转码结果。"""
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                """UPDATE galleries
+                      SET compression_status=?, compression_info=?, updated_at=?
+                    WHERE source=? AND source_id=?""",
+                (status, info_json, datetime.now().isoformat(), source, source_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def export_json(self, output_path: str) -> None:
         galleries = await self.search_galleries(limit=999999)
         result = []

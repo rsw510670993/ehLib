@@ -6,20 +6,39 @@ from io import BytesIO
 from pathlib import Path
 
 from ehlib.storage.file_manager import FileManager
+from ehlib.core.downloader import Downloader
 from ehlib.utils.image_compression import ImageCompressor
 
 
 class ImageCompressionTests(unittest.TestCase):
+    def test_download_compression_stats_use_kept_bytes(self):
+        request_stats = {}
+        Downloader._record_compression_stats(request_stats, {
+            "used_candidate": True,
+            "orig_bytes": 1000,
+            "candidate_bytes": 600,
+        })
+        Downloader._record_compression_stats(request_stats, {
+            "used_candidate": False,
+            "orig_bytes": 500,
+            "candidate_bytes": 550,
+        })
+        stats = request_stats["compression"]
+        self.assertEqual(stats["processed_pages"], 2)
+        self.assertEqual(stats["used_candidate_count"], 1)
+        self.assertEqual(stats["orig_bytes_total"], 1500)
+        self.assertEqual(stats["result_bytes_total"], 1100)
+
     def test_conservative_defaults_and_invalid_value_bounds(self):
         compressor = ImageCompressor()
         self.assertTrue(compressor.enabled)
-        self.assertEqual(compressor.quality, 88)
-        self.assertEqual(compressor.method, 4)
+        self.assertEqual(compressor.quality, 65)
+        self.assertEqual(compressor.speed, 5)
         self.assertEqual(compressor.min_savings_percent, 5.0)
 
-        bounded = ImageCompressor(quality="bad", method=99, min_savings_percent=-1)
-        self.assertEqual(bounded.quality, 88)
-        self.assertEqual(bounded.method, 6)
+        bounded = ImageCompressor(quality="bad", speed=99, min_savings_percent=-1)
+        self.assertEqual(bounded.quality, 65)
+        self.assertEqual(bounded.speed, 10)
         self.assertEqual(bounded.min_savings_percent, 0.0)
 
     def test_disabled_compression_preserves_original_bytes(self):
@@ -40,87 +59,92 @@ class ImageCompressionTests(unittest.TestCase):
             saved_path = compressor.save_page_bytes(data, path)
             self.assertEqual(saved_path, path)
             self.assertEqual(path.read_bytes(), data)
-            self.assertFalse(path.with_suffix(".webp").exists())
+            self.assertFalse(path.with_suffix(".avif").exists())
 
-    def test_existing_webp_satisfies_original_page_request(self):
+    def test_existing_avif_satisfies_original_page_request(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             requested_path = Path(temp_dir) / "001.jpg"
-            webp_path = requested_path.with_suffix(".webp")
-            webp_path.write_bytes(b"existing-webp")
-            self.assertEqual(ImageCompressor.find_existing_page_file(requested_path), webp_path)
+            avif_path = requested_path.with_suffix(".avif")
+            avif_path.write_bytes(b"existing-avif")
+            self.assertEqual(ImageCompressor.find_existing_page_file(requested_path), avif_path)
 
-    def test_first_page_prefers_webp_without_deleting_original(self):
+    def test_first_page_prefers_avif_without_deleting_original(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             gallery_dir = Path(temp_dir) / "gallery"
             gallery_dir.mkdir()
             jpg_path = gallery_dir / "001.jpg"
-            webp_path = gallery_dir / "001.webp"
+            avif_path = gallery_dir / "001.avif"
             jpg_path.write_bytes(b"original-jpg")
-            webp_path.write_bytes(b"compressed-webp")
+            avif_path.write_bytes(b"compressed-avif")
             manager = FileManager(temp_dir)
-            self.assertEqual(manager.first_page_path(gallery_dir), webp_path)
+            self.assertEqual(manager.first_page_path(gallery_dir), avif_path)
             self.assertTrue(jpg_path.exists())
-    def test_lossy_webp_keeps_dimensions_when_encoder_is_available(self):
+    def test_lossy_avif_keeps_dimensions_when_encoder_is_available(self):
         try:
             from PIL import Image, features
         except ImportError:
             self.skipTest("Pillow is not installed in this development environment")
-        if not features.check("webp"):
-            self.skipTest("Pillow WebP encoder is unavailable")
+        if not features.check("avif"):
+            self.skipTest("Pillow AVIF encoder is unavailable")
 
         image = Image.new("RGB", (640, 960), "white")
         source = BytesIO()
         image.save(source, format="BMP")
-        compressor = ImageCompressor(quality=88, method=4, min_savings_percent=5)
+        compressor = ImageCompressor(quality=65, speed=8, min_savings_percent=5)
         with tempfile.TemporaryDirectory() as temp_dir:
             requested_path = Path(temp_dir) / "001.png"
             requested_path.write_bytes(b"existing-original")
-            saved_path = compressor.save_page_bytes(source.getvalue(), requested_path)
-            self.assertEqual(saved_path.suffix, ".webp")
+            saved_path, stats = compressor.save_page_bytes_with_stats(source.getvalue(), requested_path)
+            self.assertEqual(saved_path.suffix, ".avif")
+            self.assertTrue(stats["used_candidate"])
+            self.assertEqual(stats["orig_bytes"], len(source.getvalue()))
+            self.assertEqual(stats["candidate_bytes"], saved_path.stat().st_size)
             self.assertLess(saved_path.stat().st_size, len(source.getvalue()) * 0.95)
             self.assertEqual(requested_path.read_bytes(), b"existing-original")
             with Image.open(saved_path) as result:
                 self.assertEqual(result.size, (640, 960))
-                self.assertEqual(result.format, "WEBP")
+                self.assertEqual(result.format, "AVIF")
 
-    def test_force_candidate_never_keeps_a_larger_existing_webp(self):
+    def test_existing_avif_is_never_reencoded(self):
         try:
             from PIL import Image, features
         except ImportError:
             self.skipTest("Pillow is not installed in this development environment")
-        if not features.check("webp"):
-            self.skipTest("Pillow WebP encoder is unavailable")
+        if not features.check("avif"):
+            self.skipTest("Pillow AVIF encoder is unavailable")
 
         source = BytesIO()
-        Image.new("RGB", (80, 120), "navy").save(source, format="WEBP", quality=88)
-        compressor = ImageCompressor(quality=88, method=4, min_savings_percent=100)
+        Image.new("RGB", (80, 120), "navy").save(source, format="AVIF", quality=65)
+        compressor = ImageCompressor(quality=65, speed=8, min_savings_percent=100)
 
         used, candidate, normal_stats = compressor._encode_one_page(source.getvalue())
         self.assertFalse(used)
         self.assertIsNone(candidate)
-        self.assertEqual(normal_stats["src_format"], "WEBP")
+        self.assertEqual(normal_stats["src_format"], "AVIF")
 
         used, candidate, forced_stats = compressor._encode_one_page(
             source.getvalue(), force_candidate=True
         )
         self.assertFalse(used)
         self.assertIsNone(candidate)
-        self.assertTrue(forced_stats["forced_candidate"])
-        self.assertTrue(forced_stats["no_savings"])
+        self.assertFalse(forced_stats["forced_candidate"])
+        self.assertFalse(forced_stats["no_savings"])
 
     def test_force_candidates_workdir_scans_existing_webp_pages(self):
         try:
             from PIL import Image, features
         except ImportError:
             self.skipTest("Pillow is not installed in this development environment")
-        if not features.check("webp"):
-            self.skipTest("Pillow WebP encoder is unavailable")
+        if not features.check("avif"):
+            self.skipTest("Pillow AVIF encoder is unavailable")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             gallery_dir = root / "gallery"
             gallery_dir.mkdir()
-            Image.new("RGB", (60, 90), "red").save(gallery_dir / "001.webp", format="WEBP")
+            Image.effect_noise((600, 900), 100).convert("RGB").save(
+                gallery_dir / "001.webp", format="WEBP", quality=95
+            )
             Image.new("RGB", (60, 90), "blue").save(gallery_dir / "002.webp", format="WEBP")
             Image.new("RGB", (600, 900), "green").save(gallery_dir / "003.jpg", format="JPEG", quality=100)
             Image.new("RGB", (60, 90), "black").save(gallery_dir / "cover.webp", format="WEBP")
@@ -146,13 +170,23 @@ class ImageCompressionTests(unittest.TestCase):
 
             self.assertEqual(status, "user_review_required")
             self.assertEqual(info["total_pages"], 3)
-            self.assertEqual(info["used_webp_count"], 1)
-            self.assertEqual(info["discarded_pages_count"], 2)
+            self.assertGreaterEqual(info["used_candidate_count"], 1)
+            self.assertEqual(info["target_format"], "AVIF")
+            self.assertTrue(
+                any(
+                    page["src_format"] == "WEBP" and page["used_candidate"]
+                    for page in info["pages"]
+                )
+            )
+            self.assertEqual(
+                info["discarded_pages_count"],
+                info["total_pages"] - info["used_candidate_count"],
+            )
             self.assertGreater(info["savings_pct_overall"], 0)
             self.assertTrue(info["force_candidates"])
             self.assertEqual(
-                [path.name for path in (root / "compress_work" / "54").glob("*.webp")],
-                ["003.webp"],
+                len(list((root / "compress_work" / "54").glob("*.avif"))),
+                info["used_candidate_count"],
             )
             self.assertEqual([event["current"] for event in progress_events], [0, 1, 2, 3])
             self.assertTrue(all(event["total"] == 3 for event in progress_events))
@@ -162,8 +196,8 @@ class ImageCompressionTests(unittest.TestCase):
             from PIL import Image, features
         except ImportError:
             self.skipTest("Pillow is not installed in this development environment")
-        if not features.check("webp"):
-            self.skipTest("Pillow WebP encoder is unavailable")
+        if not features.check("avif"):
+            self.skipTest("Pillow AVIF encoder is unavailable")
 
         class FailingResultConnection:
             def __init__(self, connection):
@@ -209,8 +243,8 @@ class ImageCompressionTests(unittest.TestCase):
             from PIL import Image, features
         except ImportError:
             self.skipTest("Pillow is not installed in this development environment")
-        if not features.check("webp"):
-            self.skipTest("Pillow WebP encoder is unavailable")
+        if not features.check("avif"):
+            self.skipTest("Pillow AVIF encoder is unavailable")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -229,7 +263,7 @@ class ImageCompressionTests(unittest.TestCase):
                 )
                 conn.commit()
                 status, info = ImageCompressor(
-                    quality=88, method=4, min_savings_percent=100
+                    quality=65, speed=8, min_savings_percent=100
                 ).compress_gallery_to_workdir(
                     24,
                     gallery_dir,
@@ -252,9 +286,9 @@ class ImageCompressionTests(unittest.TestCase):
             finally:
                 conn.close()
 
-    def test_missing_webp_encoder_fails_before_clearing_existing_candidates(self):
+    def test_missing_avif_encoder_fails_before_clearing_existing_candidates(self):
         class MissingEncoderCompressor(ImageCompressor):
-            def _ensure_pillow_webp(self):
+            def _ensure_pillow_avif(self):
                 return False
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -264,7 +298,7 @@ class ImageCompressionTests(unittest.TestCase):
             (gallery_dir / "001.jpg").write_bytes(b"original")
             work_dir = root / "compress_work" / "54"
             work_dir.mkdir(parents=True)
-            old_candidate = work_dir / "001.webp"
+            old_candidate = work_dir / "001.avif"
             old_summary = work_dir / "summary.json"
             old_candidate.write_bytes(b"old-candidate")
             old_summary.write_text('{"old": true}', encoding="utf-8")
@@ -277,7 +311,7 @@ class ImageCompressionTests(unittest.TestCase):
                     "INSERT INTO galleries(id,compression_status,compression_info) VALUES (54,'queued','old-info')"
                 )
                 conn.commit()
-                with self.assertRaisesRegex(RuntimeError, "Pillow/WebP"):
+                with self.assertRaisesRegex(RuntimeError, "Pillow/AVIF"):
                     MissingEncoderCompressor().compress_gallery_to_workdir(
                         54,
                         gallery_dir,

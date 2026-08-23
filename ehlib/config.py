@@ -13,10 +13,10 @@ DEFAULT_CONFIG = {
         "max_concurrent": 3,
         "retry_times": 3,
         "retry_delay": 5,
-        "convert_to_webp": True,
-        "webp_quality": 88,
-        "webp_method": 4,
-        "webp_min_savings_percent": 5,
+        "convert_to_avif": True,
+        "avif_quality": 65,
+        "avif_speed": 5,
+        "avif_min_savings_percent": 5,
     },
     "request": {
         "user_agent": (

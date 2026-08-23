@@ -244,7 +244,7 @@ function count_downloaded_pages($local_path) {
         $path = $dir . DIRECTORY_SEPARATOR . $item;
         if (!is_file($path)) continue;
         $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
-        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) continue;
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'], true)) continue;
         $name = pathinfo($item, PATHINFO_FILENAME);
         if (ctype_digit($name)) $count++;
     }
@@ -267,8 +267,15 @@ function public_image_url_from_path($path) {
     return 'ehlib_images/' . implode('/', $encoded);
 }
 
+function gallery_image_api_url($source, $source_id, $page) {
+    return 'api.php?action=serve_image'
+        . '&source=' . rawurlencode((string)$source)
+        . '&source_id=' . rawurlencode((string)$source_id)
+        . '&page=' . rawurlencode((string)$page);
+}
+
 function find_gallery_image_path($local_path, $page) {
-    $exts = ['webp', 'jpg', 'jpeg', 'png', 'gif'];
+    $exts = ['avif', 'webp', 'jpg', 'jpeg', 'png', 'gif'];
     if ($page === 'cover') {
         foreach (['001', '1'] as $name) {
             foreach ($exts as $ext) {
@@ -293,11 +300,19 @@ function find_gallery_image_path($local_path, $page) {
     return '';
 }
 
-function public_cover_url($local_path) {
+function public_cover_url($local_path, $source = '', $source_id = '') {
     $dir = normalize_path((string)$local_path);
     $download_base = resolve_download_path();
     if (!is_path_within($dir, $download_base) || !is_dir($dir)) return '';
     $img_path = find_gallery_image_path($dir, 'cover');
+    if (
+        $img_path
+        && strtolower(pathinfo($img_path, PATHINFO_EXTENSION)) === 'avif'
+        && $source !== ''
+        && $source_id !== ''
+    ) {
+        return gallery_image_api_url($source, $source_id, 'cover');
+    }
     return $img_path ? public_image_url_from_path($img_path) : '';
 }
 
@@ -484,7 +499,7 @@ print("EH_RUNTIME=" + json.dumps({
     "parents": parents,
 }, ensure_ascii=False))
 from PIL import features
-assert features.check("webp"), "Pillow WebP encoder unavailable"
+assert features.check("avif"), "Pillow AVIF encoder unavailable"
 PY;
     $cmd = escapeshellarg($python) . ' -c ' . escapeshellarg($probe) . ' 2>&1';
     $output = [];
@@ -512,7 +527,7 @@ PY;
         $repair = 'cd ' . escapeshellarg($root)
             . ' && ./venv/bin/python -m pip install --upgrade --force-reinstall '
             . escapeshellarg('Pillow>=10.0.0');
-        $reason = 'Pillow 未安装或 WebP 编码器不可用';
+        $reason = 'Pillow 未安装或 AVIF 编码器不可用';
     }
     return [
         'ok' => false,
@@ -1203,14 +1218,19 @@ try {
                         'compression_status' => $row['compression_status'] ?? '',
                         'compression_savings_pct' => isset($compression_info['savings_pct_overall'])
                             ? (float)$compression_info['savings_pct_overall'] : null,
-                        'compression_used_count' => (int)($compression_info['used_webp_count'] ?? 0),
+                        'compression_used_count' => (int)($compression_info['used_candidate_count']
+                            ?? ($compression_info['used_avif_count'] ?? ($compression_info['used_webp_count'] ?? 0))),
                         'pages' => $total_pages,
                         'total_pages' => $total_pages,
                         'downloaded_pages' => $downloaded_pages,
                         'is_complete' => $is_complete,
                         'downloaded_at' => $row['downloaded_at'] ?? '',
                         'uploaded_at' => $row['uploaded_at'] ?? '',
-                        'cover_url' => public_cover_url($row['local_path'] ?? ''),
+                        'cover_url' => public_cover_url(
+                            $row['local_path'] ?? '',
+                            $row['source'] ?? '',
+                            $row['source_id'] ?? ''
+                        ),
                     ];
                 }
                 json_exit(['galleries' => $galleries, 'total' => $total, 'page' => $page, 'per_page' => $per_page]);
@@ -1451,19 +1471,31 @@ try {
                 $images = [];
                 for ($i = 1; $i <= $total_pages; $i++) {
                     $found = false;
-                    foreach (['webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
+                    foreach (['avif', 'webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
                         $candidate = $local_path . DIRECTORY_SEPARATOR . sprintf('%03d', $i) . '.' . $ext;
                         if (is_file($candidate)) {
-                            $images[] = ['page' => $i, 'file' => sprintf('%03d', $i) . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
+                            $images[] = [
+                                'page' => $i,
+                                'file' => sprintf('%03d', $i) . '.' . $ext,
+                                'url' => $ext === 'avif'
+                                    ? gallery_image_api_url($source, $source_id, $i)
+                                    : public_image_url_from_path($candidate),
+                            ];
                             $found = true;
                             break;
                         }
                     }
                     if (!$found) {
-                        foreach (['webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
+                        foreach (['avif', 'webp', 'jpg', 'jpeg', 'png', 'gif'] as $ext) {
                             $candidate = $local_path . DIRECTORY_SEPARATOR . $i . '.' . $ext;
                             if (is_file($candidate)) {
-                                $images[] = ['page' => $i, 'file' => $i . '.' . $ext, 'url' => public_image_url_from_path($candidate)];
+                                $images[] = [
+                                    'page' => $i,
+                                    'file' => $i . '.' . $ext,
+                                    'url' => $ext === 'avif'
+                                        ? gallery_image_api_url($source, $source_id, $i)
+                                        : public_image_url_from_path($candidate),
+                                ];
                                 $found = true;
                                 break;
                             }
@@ -1499,7 +1531,7 @@ try {
                 $thumb_path = (string)$row['thumb_path'];
                 // ——— 安全：防止 DB 里被注入 .. / \ / Windows 绝对路径穿越
                 //     1. realpath 解析后必须以真实的 data_dir 根开头
-                //     2. 扩展名白名单 jpg/jpeg/png/gif/webp 只允许图片
+                //     2. 扩展名白名单 jpg/jpeg/png/gif/webp/avif 只允许图片
                 $data_dir = realpath($root . '/data') ?: $root . '/data';
                 $rp = @realpath($thumb_path);
                 if ($rp === false) error_exit('Thumb file not found');
@@ -1510,7 +1542,7 @@ try {
                 }
                 if (!is_file($rp)) error_exit('Thumb file not found');
                 $ext = strtolower(pathinfo($rp, PATHINFO_EXTENSION));
-                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
+                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp','avif'=>'image/avif'];
                 if (!isset($mime[$ext])) error_exit('Invalid thumb extension');
                 header('Content-Type: ' . $mime[$ext]);
                 header('Cache-Control: max-age=86400');
@@ -1553,7 +1585,7 @@ try {
                     error_exit('Invalid image path (outside download dir)');
                 }
                 $ext = strtolower(pathinfo($rp, PATHINFO_EXTENSION));
-                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp'];
+                $mime = ['jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png','gif'=>'image/gif','webp'=>'image/webp','avif'=>'image/avif'];
                 if (!isset($mime[$ext])) error_exit('Invalid image extension');
                 header('Content-Type: ' . $mime[$ext]);
                 header('Cache-Control: max-age=86400');
@@ -3044,13 +3076,19 @@ try {
                         'file_size' => (int)($row['file_size'] ?? 0),
                         'compression_status' => (string)($row['compression_status'] ?? ''),
                         'updated_at' => (string)($row['updated_at'] ?? ''),
-                        'used_webp_count' => (int)($info['used_webp_count'] ?? 0),
+                        'used_candidate_count' => (int)($info['used_candidate_count']
+                            ?? ($info['used_avif_count'] ?? ($info['used_webp_count'] ?? 0))),
                         'failed_pages_count' => (int)($info['failed_pages_count'] ?? 0),
                         'orig_bytes_total' => (int)($info['orig_bytes_total'] ?? 0),
-                        'webp_bytes_total' => (int)($info['webp_bytes_total'] ?? 0),
-                        'savings_pct_overall' => (float)($info['savings_pct_overall'] ?? 0),
+                        'candidate_bytes_total' => (int)($info['candidate_bytes_total']
+                            ?? ($info['avif_bytes_total'] ?? ($info['webp_bytes_total'] ?? 0))),
+                        'savings_pct_overall' => isset($info['savings_pct_overall'])
+                            ? (float)$info['savings_pct_overall'] : null,
                         'quality' => isset($info['quality']) ? (int)$info['quality'] : null,
-                        'method' => isset($info['method']) ? (int)$info['method'] : null,
+                        'speed' => isset($info['speed']) ? (int)$info['speed']
+                            : (isset($info['method']) ? (int)$info['method'] : null),
+                        'target_format' => (string)($info['target_format']
+                            ?? (isset($info['used_webp_count']) ? 'WEBP' : '')),
                         'min_savings_percent' => isset($info['min_savings_percent']) ? (float)$info['min_savings_percent'] : null,
                         'force_candidates' => !empty($info['force_candidates']),
                         'progress' => $progress,
@@ -3102,12 +3140,12 @@ try {
                 json_exit(['ok' => false, 'error' => 'gallery_id 必须是正整数'], false);
             }
             $galleryId = (int)$galleryIdRaw;
-            $quality = filter_var($_POST['quality'] ?? 88, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
-            $method = filter_var($_POST['method'] ?? 4, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 6]]);
+            $quality = filter_var($_POST['quality'] ?? 65, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
+            $speed = filter_var($_POST['speed'] ?? ($_POST['method'] ?? 5), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => 10]]);
             $minSavingsRaw = $_POST['min_savings'] ?? 5;
             $minSavings = is_numeric($minSavingsRaw) ? (float)$minSavingsRaw : -1;
-            if ($quality === false || $method === false || $minSavings < 0 || $minSavings > 100) {
-                json_exit(['ok' => false, 'error' => '参数范围无效：quality 1..100，method 0..6，min_savings 0..100'], false);
+            if ($quality === false || $speed === false || $minSavings < 0 || $minSavings > 100) {
+                json_exit(['ok' => false, 'error' => '参数范围无效：quality 1..100，speed 0..10，min_savings 0..100'], false);
             }
             $forceCandidates = in_array(strtolower((string)($_POST['force_candidates'] ?? '0')), ['1', 'true', 'yes', 'on'], true);
             $db_path = $root . '/data/ehlib.db';
@@ -3173,8 +3211,8 @@ try {
                     '--progress-file', $progressFile,
                     '--force',
                 ];
-                if ((int)$quality !== 88) { $args[] = '--quality'; $args[] = (string)$quality; }
-                if ((int)$method !== 4) { $args[] = '--method'; $args[] = (string)$method; }
+                if ((int)$quality !== 65) { $args[] = '--quality'; $args[] = (string)$quality; }
+                if ((int)$speed !== 5) { $args[] = '--speed'; $args[] = (string)$speed; }
                 if ((float)$minSavings !== 5.0) { $args[] = '--min-savings'; $args[] = (string)$minSavings; }
                 if ($forceCandidates) $args[] = '--force-candidates';
                 $pid = run_python_module_background('ehlib.cmd_compress', $args, $pidFile);
@@ -3344,20 +3382,20 @@ try {
                 $compressRoot = resolve_compress_work_path();
                 if (!is_dir($compressRoot)) error_exit('compress_work 根目录不存在');
                 if (!is_path_within($workDir, $compressRoot)) error_exit('Path outside compress_work directory');
-                // 必须原样就是 basename；不能悄悄把 ../../001.webp 降级为 001.webp。
+                // 必须原样就是 basename；不能悄悄把 ../../001.avif 降级为 001.avif。
                 $fileName = basename($file_req);
                 if ($fileName === '' || $fileName !== $file_req) error_exit('Invalid file name');
-                // 扩展名白名单：只允许 webp（给前端查看候选）；json 虽允许但走独立 route 更安全，此处暂只放 webp
+                // 新候选为 AVIF；保留 WebP 以便查看尚未处理的旧审核记录。
                 $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-                $allowedExts = ['webp'];
+                $allowedExts = ['avif', 'webp'];
                 if (!in_array($ext, $allowedExts, true)) error_exit('Invalid image extension');
                 $target = $workDir . DIRECTORY_SEPARATOR . $fileName;
                 $rp = realpath($target);
                 if ($rp === false || !is_file($rp)) error_exit('候选文件不存在');
                 if (!is_path_within($rp, $workDir)) error_exit('Path outside work directory');
                 // MIME + 输出
-                $mime = 'image/webp';
-                header('Content-Type: ' . $mime);
+                $mime = ['avif' => 'image/avif', 'webp' => 'image/webp'];
+                header('Content-Type: ' . $mime[$ext]);
                 header('Cache-Control: private, max-age=3600');
                 header('Content-Length: ' . (int)@filesize($rp));
                 readfile($rp);

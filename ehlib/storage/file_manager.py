@@ -46,11 +46,11 @@ class FileManager:
     def first_page_path(self, gallery_dir: Path) -> Path | None:
         if not gallery_dir.exists():
             return None
-        for ext in (".webp", ".jpg", ".jpeg", ".png", ".gif"):
+        for ext in (".avif", ".webp", ".jpg", ".jpeg", ".png", ".gif"):
             candidate = gallery_dir / f"001{ext}"
             if candidate.exists() and candidate.stat().st_size > 0:
                 return candidate
-        for ext in (".webp", ".jpg", ".jpeg", ".png", ".gif"):
+        for ext in (".avif", ".webp", ".jpg", ".jpeg", ".png", ".gif"):
             candidate = gallery_dir / f"1{ext}"
             if candidate.exists() and candidate.stat().st_size > 0:
                 return candidate
@@ -76,7 +76,7 @@ class FileManager:
             return []
         pages = []
         for f in sorted(gallery_dir.iterdir()):
-            if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+            if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"):
                 name = f.stem
                 if name.isdigit():
                     pages.append(int(name))
@@ -102,7 +102,7 @@ class FileManager:
     def _extract_ext(url: str) -> str:
         url_path = url.split("?")[0]
         ext = Path(url_path).suffix
-        if ext.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        if ext.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"):
             return ext.lower()
         return ".jpg"
 
