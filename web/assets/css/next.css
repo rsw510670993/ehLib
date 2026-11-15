@@ -149,8 +149,6 @@
 .gallery-card .title-double-clamp { font-size: 12.5px; line-height: 1.45; font-weight: 500; color: var(--text); }
 .gallery-card .title-primary { color: inherit; }
 .gallery-card .title-secondary { color: var(--text-3); }
-.gallery-card .badge { border-radius: 6px; font-size: 10.5px; font-weight: 600; filter: saturate(.4) brightness(1.15); }
-.gallery-card .lang-badge { font-size: 10.5px; filter: saturate(.55); }
 .gallery-card .card-info-row { min-height: 20px; }
 .gallery-card .btn, .gallery-card .gallery-mini-btn { border-radius: 6px; }
 .gallery-card .gallery-compress-state { font-size: 10.5px; }
@@ -172,14 +170,7 @@ button.cat-tag:hover { background: var(--surface-3); color: var(--text); }
 button.cat-tag.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--text); }
 button.cat-tag.active::before { background: var(--accent); opacity: 1; }
 
-/* 分页 */
-.pager-host .pagination { gap: 4px; }
-.pager-host .page-link {
-  border-radius: 8px !important; border: 1px solid var(--line);
-  background: var(--surface); color: var(--text-2); font-size: 12px;
-}
-.pager-host .page-item.active .page-link { background: var(--accent); border-color: var(--accent); color: #fff; }
-.pager-host .page-item.disabled .page-link { opacity: .45; }
+/* 分页：统一实现在文末 §23（原 .pager-host 分散定义已合并进去，此处保留占位避免误解） */
 
 /* ── 4. 下载托盘 ───────────────────────────────────────── */
 .downloads-tray { position: sticky; bottom: 0; z-index: 25; background: var(--surface); border-top: 1px solid var(--line); }
@@ -249,9 +240,7 @@ button.cat-tag.active::before { background: var(--accent); opacity: 1; }
 }
 
 /* ── 8. 打磨（首轮实机截图后修） ─────────────────────── */
-/* 卡内分类/语言徽章：JS 用内联 background 上色，只能靠 filter 压暗，配白字 */
-.gallery-card .badge { filter: saturate(.34) brightness(.78) contrast(1.08); color: #fff; }
-.gallery-card .lang-badge { filter: saturate(.5) brightness(.95); }
+/* 卡内徽章统一见 §26；保留分类内联色相。 */
 .gallery-card .card-info-body .card-row-top { gap: 5px; }
 .gallery-card .gallery-compress-state { color: var(--ok); opacity: .9; }
 .gallery-card .gallery-compress-state.is-none { color: var(--text-3); opacity: 1; }
@@ -346,9 +335,7 @@ button.cat-tag.active::before { background: var(--accent); opacity: 1; }
 :root, [data-theme="dark"] { --text-3: #7d8a9c; }
 :root[data-theme="light"], [data-theme="light"] { --text-3: #6b7788; }
 
-/* 12.2 卡内徽章：压暗 + 文字投影，救 JS 内联的高饱和底色 */
-.gallery-card .badge { filter: saturate(.3) brightness(.68) contrast(1.12); text-shadow: 0 1px 1px rgba(0, 0, 0, .6); }
-.gallery-card .lang-badge { filter: saturate(.45) brightness(.9); }
+/* 12.2 卡内徽章：统一见 §26。 */
 
 /* 12.3 移动端 chrome 减负：侧栏不再 sticky（只顶栏常驻），导航改 wrap 让 7 个入口全可见 */
 @media (max-width: 1000px) {
@@ -421,8 +408,9 @@ button.cat-tag.active::before { background: var(--accent); opacity: 1; }
 .card-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .01em; color: var(--text); }
 .card-head .hint { font-size: 11.5px; color: var(--text-3); font-weight: 400; margin-left: 8px; }
 .card-foot { padding: 12px 16px; border-top: 1px solid var(--line); background: transparent; }
-.card > .card-body { padding: 16px; }
-.card > .card-body + .card-body { padding-top: 0; }
+/* 显式排除 .gallery-card：图库卡片正文用更紧的 10px 12px 12px（见 §3 与 §24） */
+.card:not(.gallery-card) > .card-body { padding: 16px; }
+.card:not(.gallery-card) > .card-body + .card-body { padding-top: 0; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
 .stat-grid.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
@@ -617,15 +605,9 @@ input[type="radio"]:checked::after {
 .page-section .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .page-section .btn-danger, .page-section .btn-outline-danger { --bs-btn-color: var(--danger); --bs-btn-border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
 .page-section .btn-outline-danger:hover { background: color-mix(in srgb, var(--danger) 16%, var(--surface)); color: var(--danger); }
-.pager-host .page-link, #cache_pagination .page-link, #gallery_pagination .page-link {
-  color: var(--text-2); background: var(--surface); border-color: var(--line);
-}
-.pager-host .page-item.active .page-link, #cache_pagination .page-item.active .page-link, #gallery_pagination .page-item.active .page-link {
-  background: var(--accent); border-color: var(--accent); color: #fff;
-}
+/* 21.2b 分页配色：已并入文末 §23，不再重复 */
 
-/* 21.3 卡内白字徽章：再压一档，保证白字可读 */
-.gallery-card .badge { filter: brightness(.5) saturate(.42) contrast(1.25); }
+/* 21.3 卡内信息行间距（徽章见 §26） */
 .gallery-card .card-info-row { gap: 4px; }
 .gallery-card .card-info-row .btn, .gallery-card .gallery-mini-btn { margin: 0 !important; }
 .gallery-card .gallery-row-actions { gap: 3px; }
@@ -643,131 +625,6 @@ input[type="radio"]:checked::after {
   .downloads-tray.collapsed .downloads-tray-header { padding-top: 5px; padding-bottom: 5px; }
   .gallery-card .card-info-row .btn { min-width: 28px; }
 }
-
-/* ══════════════════════════════════════════════════════════
-   22. 脱离 Bootstrap CSS：自实现它仍在承担的样式
-   （Bootstrap JS 保留，它负责 tab 切换、modal 显隐与类名）
-   ══════════════════════════════════════════════════════════ */
-
-/* 22.1 Modal 系统 */
-.modal { position: fixed; inset: 0; z-index: 1085; display: none; overflow: hidden; outline: 0; }
-.modal.show { display: block; }
-.modal-dialog { position: relative; width: auto; max-width: 560px; margin: 1.75rem auto; pointer-events: none; }
-.modal-dialog-centered { display: flex; align-items: center; min-height: calc(100% - 3.5rem); }
-.modal-dialog-centered .modal-content { margin: auto; }
-.modal-dialog-scrollable { height: calc(100% - 3.5rem); }
-.modal-dialog-scrollable .modal-body { overflow-y: auto; }
-.modal.fade .modal-dialog { transform: translateY(10px); transition: transform .18s ease-out; }
-.modal.show .modal-dialog { transform: none; }
-.modal-content {
-  position: relative; display: flex; flex-direction: column; width: 100%; pointer-events: auto;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
-  box-shadow: 0 24px 64px -16px rgba(0, 0, 0, .72); outline: 0;
-}
-.modal-backdrop { position: fixed; inset: 0; z-index: 1080; background: #060a10; }
-.modal-backdrop.fade { opacity: 0; transition: opacity .18s linear; }
-.modal-backdrop.show { opacity: .7; }
-.modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
-.modal-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.4; }
-.modal-body { position: relative; flex: 1 1 auto; padding: 18px; color: var(--text-2); font-size: 13px; }
-.modal-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--line); }
-body.modal-open { overflow: hidden; }
-.btn-close { width: 30px; height: 30px; flex: 0 0 auto; border: 0; border-radius: 8px; background: transparent; color: var(--text-3); cursor: pointer; transition: background-color .16s, color .16s; }
-.btn-close::before { content: "\f00d"; font-family: "Font Awesome 6 Free", "Font Awesome 5 Free"; font-weight: 900; font-size: 13px; }
-.btn-close:hover { background: var(--surface-3); color: var(--text); }
-.modal-fullscreen-xl-down .modal-dialog { max-width: 98vw; }
-
-/* 22.2 Tab 显隐（Bootstrap JS 只加 active / show） */
-.tab-content > .tab-pane { display: none; }
-.tab-content > .tab-pane.active { display: block; }
-.tab-pane.fade { opacity: 0; transition: opacity .15s linear; }
-.tab-pane.fade.show { opacity: 1; }
-
-/* 22.3 仍被引用的工具类（最小集） */
-.d-none { display: none !important; }
-.d-flex { display: flex !important; }
-.d-inline-flex { display: inline-flex !important; }
-.d-block { display: block !important; }
-.flex-wrap { flex-wrap: wrap !important; }
-.flex-grow-1 { flex-grow: 1 !important; }
-.align-items-center { align-items: center !important; }
-.align-items-start { align-items: flex-start !important; }
-.justify-content-between { justify-content: space-between !important; }
-.justify-content-center { justify-content: center !important; }
-.text-center { text-align: center !important; }
-.text-end { text-align: right !important; }
-.text-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.text-muted { color: var(--text-3) !important; }
-.text-danger { color: var(--danger) !important; }
-.text-info { color: var(--accent) !important; }
-.text-success { color: var(--ok) !important; }
-.text-warning { color: var(--warn) !important; }
-.small { font-size: 11.5px; }
-.fw-bold { font-weight: 700 !important; }
-.fw-semibold { font-weight: 600 !important; }
-.h-100 { height: 100% !important; }
-.position-relative { position: relative !important; }
-.gap-1 { gap: 4px !important; }
-.gap-2 { gap: 8px !important; }
-.gap-3 { gap: 12px !important; }
-.me-1 { margin-right: 4px !important; }
-.me-2 { margin-right: 8px !important; }
-.ms-2 { margin-left: 8px !important; }
-.mt-1 { margin-top: 4px !important; }
-.mt-2 { margin-top: 8px !important; }
-.mt-3 { margin-top: 12px !important; }
-.mb-1 { margin-bottom: 4px !important; }
-.mb-2 { margin-bottom: 8px !important; }
-.mb-3 { margin-bottom: 12px !important; }
-.py-0 { padding-top: 0 !important; padding-bottom: 0 !important; }
-.py-2 { padding-top: 8px !important; padding-bottom: 8px !important; }
-.px-1 { padding-left: 4px !important; padding-right: 4px !important; }
-.px-2 { padding-left: 8px !important; padding-right: 8px !important; }
-.px-3 { padding-left: 12px !important; padding-right: 12px !important; }
-.p-0 { padding: 0 !important; }
-.mx-2 { margin-left: 8px !important; margin-right: 8px !important; }
-.rounded { border-radius: 8px !important; }
-.border-top { border-top: 1px solid var(--line) !important; }
-.border-bottom { border-bottom: 1px solid var(--line) !important; }
-.table-responsive { overflow-x: auto; }
-
-/* 22.4 按钮变体（Bootstrap 命名沿用） */
-.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; min-height: 34px; border: 1px solid transparent; border-radius: 9px; font-size: 12.5px; font-weight: 500; cursor: pointer; text-decoration: none; transition: background-color .16s, border-color .16s, color .16s, box-shadow .16s; }
-.btn-sm { min-height: 28px; padding: 0 9px; font-size: 11.5px; border-radius: 7px; }
-.btn-dark { background: var(--surface-3); border-color: var(--line); color: var(--text-2); }
-.btn-dark:hover { background: var(--surface-2); color: var(--text); }
-.btn-outline-secondary { border-color: var(--line); color: var(--text-2); background: transparent; }
-.btn-outline-secondary:hover { background: var(--surface-2); color: var(--text); }
-.btn-outline-warning { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); color: var(--warn); }
-.btn-outline-warning:hover { background: color-mix(in srgb, var(--warn) 14%, var(--surface)); }
-.btn-group { display: inline-flex; }
-.btn-group > .btn { border-radius: 0; margin-left: -1px; }
-.btn-group > .btn:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
-.btn-group > .btn:last-child { border-radius: 0 8px 8px 0; }
-.btn-group-sm > .btn { min-height: 26px; padding: 0 8px; font-size: 11px; }
-
-/* 22.5 表单与进度 */
-.form-control, .form-select { display: block; width: 100%; min-height: 34px; padding: 0 10px; font-size: 12.5px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: var(--text); }
-.form-control:focus, .form-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.form-control-sm { min-height: 30px; font-size: 12px; }
-.progress { display: flex; height: 8px; overflow: hidden; border-radius: 999px; background: var(--surface-3); }
-.progress-bar { background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .3s; }
-
-/* 22.6 卡片内密集体（阅读器/比较弹窗用） */
-.cc-thumbs { width: 132px; flex: 0 0 132px; overflow-y: auto; }
-.cc-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.cc-pane-divider { width: 2px; background: var(--line); flex: 0 0 2px; }
-.cc-scroll { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; }
-.cc-scroll img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.cc-toolbar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; }
-.cc-page-nav { display: flex; align-items: center; gap: 4px; }
-.reader-header-top { display: flex; align-items: center; gap: 10px; padding: 8px 14px; }
-.reader-title { font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reader-meta { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
-.reader-body { display: flex; flex: 1; min-height: 0; }
-.reader-thumbstrip { width: 116px; flex: 0 0 116px; overflow-y: auto; }
-.reader-main { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; }
-.reader-main img { max-width: 100%; max-height: 100%; object-fit: contain; }
 
 /* ══════════════════════════════════════════════════════════
    22. 脱离 Bootstrap CSS：自实现它仍在承担的样式
@@ -897,3 +754,226 @@ body.modal-open { overflow: hidden; }
 .btn-close-reader:hover, .btn-toggle-details:hover, .reader-pagenav button:hover { background: var(--surface-3); color: var(--text); }
 .reader-pagenav { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .reader-pagenav .page-input { width: 56px; min-height: 30px; text-align: center; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); }
+
+/* ══════════════════════════════════════════════════════════
+   23. 分页（Bootstrap CSS 缺席：.pagination 结构自实现）
+   DOM: .pager-host > div.d-flex > nav > ul.pagination.pagination-sm
+        > li.page-item > a|span.page-link
+   原先散落在 §3 与 §21.2 的 .pager-host / #gallery_pagination /
+   #cache_pagination 配色全部并入此处，不再重复定义。
+   ══════════════════════════════════════════════════════════ */
+.pagination {
+  display: flex; flex-wrap: wrap; align-items: center;
+  padding-left: 0; margin: 0;
+  list-style: none; list-style-type: none;
+  gap: 4px;
+}
+.page-item { display: block; list-style: none; }
+.page-link {
+  display: block; padding: 4px 9px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text-2);
+  font-size: 12px; line-height: 1.5; text-decoration: none;
+  cursor: pointer;
+  transition: background-color .16s, border-color .16s, color .16s;
+}
+.page-link:hover { background: var(--surface-3); border-color: var(--text-3); color: var(--text); }
+.page-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pagination-sm .page-link { padding: 3px 8px; font-size: 11.5px; }
+.page-item.active .page-link,
+.page-item.active .page-link:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.page-item.disabled .page-link,
+.page-item.disabled .page-link:hover {
+  opacity: .45; pointer-events: none;
+  background: var(--surface); border-color: var(--line); color: var(--text-3);
+}
+/* 三个分页宿主统一居中（图库与缓存 DOM 结构相同，样式只写一份） */
+.pager-host .pagination,
+#gallery_pagination .pagination,
+#cache_pagination .pagination { justify-content: center; }
+
+/* ══════════════════════════════════════════════════════════
+   24. 图库卡片：等高 + 底部余白
+   包装层 <div data-source> 是 grid item，会被 stretch 到行高；
+   卡片必须吃满包装层，否则矮卡底部露出包装层底色。
+   ══════════════════════════════════════════════════════════ */
+.gallery-card {
+  display: flex; flex-direction: column;
+  height: 100%; min-height: 0;
+  margin-bottom: 0; /* 抵掉 §16 .card 的 margin-bottom:14px，避免包装层多出 14px 空隙 */
+}
+.gallery-card > .card-img-wrapper { flex: 0 0 auto; }
+/* 权重 (0-3-0) + !important：压过 §16 的 .card > .card-body{padding:16px}
+   与 JS 里的 .px-2 / .py-1 工具类，恢复 §3 的 10px 12px 12px 意图 */
+.card.gallery-card > .card-body {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  padding: 10px 12px 12px !important;
+}
+/* 标题区固定 3 行高（line-height:1.45 见 §3）：1/2/3 行标题不再让下方信息行错位 */
+.gallery-card .title-double-clamp { min-height: calc(3 * 1.45em); }
+
+/* ══════════════════════════════════════════════════════════
+   25. 工具类补齐
+   只补 gallery.js / cache.js / _nav.php / _pages.php /
+   _pages2.php / _overlays.php 里真实出现、而 §22.3 缺失的类。
+   ══════════════════════════════════════════════════════════ */
+
+/* 25.1 文本 */
+.text-nowrap { white-space: nowrap !important; }
+.text-break { word-break: break-word !important; overflow-wrap: anywhere; }
+.text-secondary { color: var(--text-2) !important; }
+.text-dark { color: var(--text-2) !important; }
+.align-middle { vertical-align: middle !important; }
+
+/* 25.2 间距（Bootstrap 刻度：1=4px 2=8px 3=12px 5=40px） */
+.ms-auto { margin-left: auto !important; }
+.me-auto { margin-right: auto !important; }
+.mb-0 { margin-bottom: 0 !important; }
+.mt-0 { margin-top: 0 !important; }
+.py-1 { padding-top: 4px !important; padding-bottom: 4px !important; }
+.py-5 { padding-top: 40px !important; padding-bottom: 40px !important; }
+.pt-2 { padding-top: 8px !important; }
+
+/* 25.3 布局 */
+.d-inline-block { display: inline-block !important; }
+.flex-shrink-0 { flex-shrink: 0 !important; }
+.img-fluid { max-width: 100%; height: auto; }
+
+/* 25.4 语义底色（gallery.js 来源/状态徽章、cache.js 任务状态表）
+   卡内徽章由 §26 统一尺寸与可读性，不压暗分类色相。 */
+.bg-primary { background-color: var(--accent) !important; }
+.bg-info { background-color: #0dcaf0 !important; }
+.bg-danger { background-color: #dc3545 !important; }
+.bg-warning { background-color: #ffc107 !important; }
+.bg-success { background-color: #198754 !important; }
+.bg-secondary { background-color: var(--surface-3) !important; }
+.bg-light { background-color: var(--surface-2) !important; color: var(--text); }
+
+/* 25.5 按钮变体（gallery.js 阅读/压缩按钮、cache.js 下载/跳转按钮） */
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover, var(--accent-2)); border-color: var(--accent-hover, var(--accent-2)); color: #fff; }
+.btn-success { background: var(--ok); border-color: var(--ok); color: #08130d; }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-outline-primary { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); color: var(--accent); background: transparent; }
+.btn-outline-primary:hover { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); }
+.btn-outline-success { border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); color: var(--ok); background: transparent; }
+.btn-outline-success:hover { background: color-mix(in srgb, var(--ok) 14%, var(--surface)); color: var(--ok); }
+.btn-outline-info { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); color: var(--text-2); background: transparent; }
+.btn-outline-info:hover { background: var(--surface-2); color: var(--text); }
+.btn-outline-danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); color: var(--danger); background: transparent; }
+.btn-outline-danger:hover { background: color-mix(in srgb, var(--danger) 16%, var(--surface)); color: var(--danger); }
+
+/* 25.6 表格变体（cache.js 任务表 / 详情表） */
+.table-sm th, .table-sm td { padding: 6px 9px; }
+.table-borderless th, .table-borderless td { border-bottom: 0; }
+.table-hover tbody tr:hover td { background: var(--surface-2); }
+
+/* 25.7 栅格：只给 #cache_detail_modal 的 row / col-md-4 / col-md-8 兜住，
+   不定义全局 .row——refresh_targets.js / test_verify.js 的 .row 依赖一整套
+   Bootstrap 工具类（.col/.bg-white/.fs-5/.rounded-2/.shadow-sm…），目前仍是原样堆叠，
+   全局 .row{display:flex} 会把那两页的统计卡从竖排改成挤在一行，属于本任务范围外的回归。 */
+#cache_detail_modal .row { display: flex; flex-wrap: wrap; gap: var(--gutter, 12px); }
+#cache_detail_modal .row > .col-md-4 { flex: 1 1 0; min-width: 0; }
+#cache_detail_modal .row > .col-md-8 { flex: 2 1 0; min-width: 0; }
+@media (max-width: 768px) {
+  #cache_detail_modal .row > .col-md-4,
+  #cache_detail_modal .row > .col-md-8 { flex: 1 1 100%; }
+}
+.modal-dialog.modal-lg { max-width: 800px; }
+
+/* 25.8 input-group（cache.js 分页「跳转」控件） */
+.input-group { display: flex; align-items: stretch; width: 100%; }
+.input-group > .form-control, .input-group > .form-select { flex: 1 1 auto; width: 1%; min-width: 0; border-radius: 0; }
+.input-group > .btn { border-radius: 0; min-height: 34px; }
+.input-group > :first-child { border-top-left-radius: 9px; border-bottom-left-radius: 9px; }
+.input-group > :last-child { border-top-right-radius: 9px; border-bottom-right-radius: 9px; }
+.input-group-text {
+  display: flex; align-items: center; padding: 0 9px;
+  border: 1px solid var(--line); background: var(--surface-3);
+  color: var(--text-2); font-size: 12px;
+}
+.input-group-sm > .form-control, .input-group-sm > .btn, .input-group-sm > .input-group-text {
+  min-height: 30px; font-size: 12px;
+}
+
+/* ── 26. 卡内徽章与元信息：单一视觉语法 ────────────────── */
+.gallery-card {
+  --meta-bg: #202b3a;
+  --meta-fg: #b9c5d5;
+  --meta-ok: #71ddb1;
+  --meta-warn: #f6ce73;
+  --meta-danger: #ff9aab;
+  --meta-info: #a8bdff;
+}
+[data-theme="light"] .gallery-card {
+  --meta-bg: #eef1f5;
+  --meta-fg: #4a596b;
+  --meta-ok: #176343;
+  --meta-warn: #785000;
+  --meta-danger: #a52840;
+  --meta-info: #354f9a;
+}
+/* 唯一 filter：不再叠加压暗；同时适用于分类、语言与来源。 */
+.gallery-card .badge, .gallery-card .lang-badge {
+  filter: saturate(.95) brightness(1.03);
+  text-shadow: none;
+}
+.card.gallery-card .gallery-meta-chip,
+.card.gallery-card .badge,
+.card.gallery-card .lang-badge,
+.card.gallery-card .gallery-compress-state {
+  box-sizing: border-box; display: inline-flex; align-items: center;
+  justify-content: center; flex: 0 0 auto; gap: 3px;
+  height: 20px; padding: 0 6px; border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, .16);
+  font-size: 10.5px !important; font-weight: 600; line-height: 1;
+  white-space: nowrap; letter-spacing: 0; opacity: 1;
+}
+.card.gallery-card .badge { color: #000; }
+/* 唯一深棕分类保留白字；灰色回退分类使用深字，不覆盖内联背景。
+   同时兼容 HTML 原始十六进制与 CSSOM 规范化后的 rgb 写法。 */
+.card.gallery-card .badge[style*="#795548"],
+.card.gallery-card .badge[style*="rgb(121, 85, 72)"] { color: #fff; }
+.card.gallery-card .lang-badge {
+  background: var(--meta-bg); border-color: color-mix(in srgb, currentColor 55%, var(--line));
+  /* text-fill 保留内联 currentColor 作为语种色源，只抬高文字明度。 */
+  -webkit-text-fill-color: oklch(from currentColor max(l, .80) min(c, .13) h);
+}
+[data-theme="light"] .card.gallery-card .lang-badge {
+  -webkit-text-fill-color: oklch(from currentColor min(l, .40) min(c, .13) h);
+}
+/* 来源仍沿用原有语义类，但卡内用经过对比度校验的底色。 */
+.card.gallery-card .badge.bg-info { background-color: #88d7ed !important; }
+.card.gallery-card .badge.bg-danger { background-color: #f29ca8 !important; }
+.card.gallery-card .gallery-page-count,
+#cache_grid .gallery-card .card-row-top > .small,
+.card.gallery-card .gallery-compress-saving {
+  color: var(--meta-fg) !important; font-size: 10.5px; font-weight: 400;
+  line-height: 1; font-variant-numeric: tabular-nums;
+}
+.card.gallery-card .gallery-compress-state {
+  color: var(--meta-fg); background: var(--meta-bg);
+  border-color: var(--line); font-variant-numeric: tabular-nums;
+}
+.card.gallery-card .gallery-compress-state.text-success { color: var(--meta-ok) !important; }
+.card.gallery-card .gallery-compress-state.text-warning { color: var(--meta-warn) !important; }
+.card.gallery-card .gallery-compress-state.text-danger { color: var(--meta-danger) !important; }
+.card.gallery-card .gallery-compress-state.text-info { color: var(--meta-info) !important; }
+.card.gallery-card .gallery-compress-state.text-secondary { color: var(--meta-fg) !important; }
+.card.gallery-card .card-info-row { min-height: 26px; gap: 4px; }
+.card.gallery-card .gallery-row-actions,
+.card.gallery-card .gallery-compression-row > .ms-auto { display: inline-flex; align-items: center; gap: 4px; }
+.card.gallery-card .card-info-row .btn,
+.card.gallery-card .gallery-mini-btn {
+  box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; min-width: 26px; min-height: 26px;
+  padding: 0 !important; border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--meta-fg); font-size: 11px; line-height: 1; flex: 0 0 auto;
+}
+.card.gallery-card .card-info-row .btn-outline-success { color: var(--meta-ok); }
+.card.gallery-card .card-info-row .btn-outline-primary { color: var(--meta-info); }
+.card.gallery-card .card-info-row .btn-outline-warning { color: var(--meta-warn); }
+.card.gallery-card .card-info-row .btn-outline-danger { color: var(--meta-danger); }
+.card.gallery-card .card-info-row .btn:hover { border-color: var(--text-3); background: var(--surface-2); }
+.card.gallery-card .card-info-row .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
