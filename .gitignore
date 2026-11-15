@@ -16,3 +16,8 @@ web/ehlib_images/
 data/downloads/compress_work/
 data/downloads/*/.deleted.*/
 data/downloads/*/.wipe_*/
+
+# 本地配置备份（含 Cookie 凭据，绝不入库）
+config.yaml.bak-*
+# CSS 契约校验产物（每次运行重新生成，不入库）
+web/assets/css/css-contract-check.txt
