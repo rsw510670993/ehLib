@@ -14,8 +14,6 @@ $jsBase = is_dir(__DIR__ . '/assets/js') ? 'assets/js' : '../web/assets/js';
     <link rel="icon" href="data:,">
     <title>ehLib</title>
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <!-- 迁移期：未重写的 5 页仍依赖 Bootstrap 布局类，全部页面重写完成后移除 -->
-    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.1/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/css/app.css?v=<?= $v ?>">
     <link rel="stylesheet" href="assets/css/next.css?v=<?= $v ?>">
     <script>try{var t=localStorage.getItem('ehlib-theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
