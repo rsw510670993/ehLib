@@ -2,7 +2,7 @@
 $scriptName = $_SERVER['SCRIPT_NAME'] ?? $_SERVER['PHP_SELF'] ?? '/index.php';
 $base = rtrim(dirname($scriptName), '/');
 $projectPath = realpath(__DIR__ . '/..');
-$v = 'dev9';
+$v = 'dev24';
 // 前端重写版：JS 与 api.php 沿用原文件，未做任何改动
 $jsBase = is_dir(__DIR__ . '/assets/js') ? 'assets/js' : '../web/assets/js';
 ?>
@@ -113,7 +113,7 @@ $jsBase = is_dir(__DIR__ . '/assets/js') ? 'assets/js' : '../web/assets/js';
 <script src="<?= $jsBase ?>/config.js?v=2"></script>
 <script src="<?= $jsBase ?>/download.js?v=3"></script>
 <script src="<?= $jsBase ?>/cache.js?v=29"></script>
-<script src="<?= $jsBase ?>/gallery.js?v=17"></script>
+<script src="<?= $jsBase ?>/gallery.js?v=20"></script>
 <script src="<?= $jsBase ?>/compress_compare.js?v=5"></script>
 <script src="<?= $jsBase ?>/compression.js?v=5"></script>
 <script src="<?= $jsBase ?>/reader.js?v=2"></script>

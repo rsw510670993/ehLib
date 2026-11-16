@@ -134,11 +134,11 @@
 .gallery-card {
   border-radius: var(--radius); border: 1px solid var(--line);
   background: var(--surface); overflow: hidden;
-  transition: transform .16s, box-shadow .16s, border-color .16s;
+  transition: box-shadow .16s, border-color .16s;
   --bs-link-color: var(--text);
 }
+/* hover 不做位移：上移会让整排卡片在鼠标划过时抖动 */
 .gallery-card:hover {
-  transform: translateY(-3px);
   box-shadow: var(--shadow-2);
   border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
   --bs-link-color: var(--accent);
@@ -151,7 +151,6 @@
 .gallery-card .title-secondary { color: var(--text-3); }
 .gallery-card .card-info-row { min-height: 20px; }
 .gallery-card .btn, .gallery-card .gallery-mini-btn { border-radius: 6px; }
-.gallery-card .gallery-compress-state { font-size: 10.5px; }
 
 /* 分类 chip：中性 pill + 色点 */
 button.cat-tag {
@@ -242,8 +241,6 @@ button.cat-tag.active::before { background: var(--accent); opacity: 1; }
 /* ── 8. 打磨（首轮实机截图后修） ─────────────────────── */
 /* 卡内徽章统一见 §26；保留分类内联色相。 */
 .gallery-card .card-info-body .card-row-top { gap: 5px; }
-.gallery-card .gallery-compress-state { color: var(--ok); opacity: .9; }
-.gallery-card .gallery-compress-state.is-none { color: var(--text-3); opacity: 1; }
 /* 缓存页顶部一行：检索范围 + 关键词不换行 */
 .view-head .chips { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; flex-wrap: nowrap; }
 .chip-label { white-space: nowrap; }
@@ -609,7 +606,7 @@ input[type="radio"]:checked::after {
 
 /* 21.3 卡内信息行间距（徽章见 §26） */
 .gallery-card .card-info-row { gap: 4px; }
-.gallery-card .card-info-row .btn, .gallery-card .gallery-mini-btn { margin: 0 !important; }
+.gallery-card .card-body .btn, .gallery-card .gallery-mini-btn { margin: 0 !important; }
 .gallery-card .gallery-row-actions { gap: 3px; }
 
 /* 21.4 触控目标与遮挡（移动端） */
@@ -623,7 +620,7 @@ input[type="radio"]:checked::after {
   }
   .downloads-tray-toggle { min-width: 32px; min-height: 32px; }
   .downloads-tray.collapsed .downloads-tray-header { padding-top: 5px; padding-bottom: 5px; }
-  .gallery-card .card-info-row .btn { min-width: 28px; }
+  .gallery-card .card-body .btn { min-width: 28px; }
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -921,8 +918,7 @@ body.modal-open { overflow: hidden; }
 }
 .card.gallery-card .gallery-meta-chip,
 .card.gallery-card .badge,
-.card.gallery-card .lang-badge,
-.card.gallery-card .gallery-compress-state {
+.card.gallery-card .lang-badge {
   box-sizing: border-box; display: inline-flex; align-items: center;
   justify-content: center; flex: 0 0 auto; gap: 3px;
   height: 20px; padding: 0 6px; border-radius: 6px;
@@ -952,28 +948,191 @@ body.modal-open { overflow: hidden; }
   color: var(--meta-fg) !important; font-size: 10.5px; font-weight: 400;
   line-height: 1; font-variant-numeric: tabular-nums;
 }
-.card.gallery-card .gallery-compress-state {
-  color: var(--meta-fg); background: var(--meta-bg);
-  border-color: var(--line); font-variant-numeric: tabular-nums;
-}
-.card.gallery-card .gallery-compress-state.text-success { color: var(--meta-ok) !important; }
-.card.gallery-card .gallery-compress-state.text-warning { color: var(--meta-warn) !important; }
-.card.gallery-card .gallery-compress-state.text-danger { color: var(--meta-danger) !important; }
-.card.gallery-card .gallery-compress-state.text-info { color: var(--meta-info) !important; }
-.card.gallery-card .gallery-compress-state.text-secondary { color: var(--meta-fg) !important; }
 .card.gallery-card .card-info-row { min-height: 26px; gap: 4px; }
 .card.gallery-card .gallery-row-actions,
 .card.gallery-card .gallery-compression-row > .ms-auto { display: inline-flex; align-items: center; gap: 4px; }
-.card.gallery-card .card-info-row .btn,
+.card.gallery-card .card-body .btn,
 .card.gallery-card .gallery-mini-btn {
   box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; min-width: 26px; min-height: 26px;
-  padding: 0 !important; border: 1px solid var(--line); border-radius: 6px;
-  background: transparent; color: var(--meta-fg); font-size: 11px; line-height: 1; flex: 0 0 auto;
+  padding: 0 !important; border: 1px solid rgba(158, 168, 184, .92); border-radius: 6px;
+  background: rgba(9, 15, 24, .62); color: var(--meta-fg); font-size: 13.5px; line-height: 1; flex: 0 0 auto;
+  transition: background-color .15s ease, border-color .15s ease;
 }
-.card.gallery-card .card-info-row .btn-outline-success { color: var(--meta-ok); }
-.card.gallery-card .card-info-row .btn-outline-primary { color: var(--meta-info); }
-.card.gallery-card .card-info-row .btn-outline-warning { color: var(--meta-warn); }
-.card.gallery-card .card-info-row .btn-outline-danger { color: var(--meta-danger); }
-.card.gallery-card .card-info-row .btn:hover { border-color: var(--text-3); background: var(--surface-2); }
-.card.gallery-card .card-info-row .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card.gallery-card .card-body .btn-outline-success { color: #9df0cc; }
+.card.gallery-card .card-body .btn-outline-secondary { color: #e3eaf4; }
+.card.gallery-card .card-body .btn-outline-primary { color: #c8d6ff; }
+.card.gallery-card .card-body .btn-outline-warning { color: #ffd98a; }
+.card.gallery-card .card-body .btn i { font-size: 13.5px; line-height: 1; }
+.card.gallery-card .card-body .btn-outline-danger { color: var(--meta-danger); }
+.card.gallery-card .card-body .btn:hover,
+.card.gallery-card .gallery-mini-btn:hover {
+  border-color: rgba(198, 208, 222, .95); background: rgba(9, 15, 24, .84);
+}
+.card.gallery-card .card-body .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ══════════════════════════════════════════════════════════
+   27. 卡片 F4：封面铺满 · 右下页数 · hover 全宽渐隐盖板
+   只覆盖布局与可见性，不改任何 JS 钩子类名。
+   权重统一用 .card.gallery-card 前缀压过 §24 的 flex 布局与 §26 的徽章尺寸。
+   ══════════════════════════════════════════════════════════ */
+.card.gallery-card {
+  position: relative; isolation: isolate;
+  display: block; height: auto;
+}
+.card.gallery-card > .card-img-wrapper {
+  flex: 0 0 auto; aspect-ratio: 3/4; height: auto;
+}
+
+/* 盖板：与卡片同宽、底部贴齐，纵向渐隐；默认不可见 */
+.card.gallery-card > .card-body.card-info-body {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+  height: 76%; min-height: 0;
+  padding: 26px 12px 14px !important;   /* 底部只需 14：给页码让位改由右侧列宽承担 */
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: linear-gradient(transparent, rgba(122,132,148,.30) 12%, rgba(72,80,94,.86) 36%, rgba(56,63,75,.95) 64%, rgba(46,53,64,.98) 100%);
+  visibility: hidden; opacity: 0;
+  clip-path: inset(96% 0 0 0);
+  pointer-events: none;
+  /* 两列：左侧信息，右侧三按钮纵列 */
+  /* 右列 78px 专留给页码块，左列文字不再被底部 padding 顶起 */
+  display: grid; grid-template-columns: minmax(0, 1fr) 78px;
+  grid-template-rows: auto auto auto auto;
+  align-content: end; justify-content: stretch;
+  gap: 2px 8px;
+  transition: visibility .26s, opacity .26s, clip-path .26s;
+}
+.card.gallery-card:hover > .card-info-body,
+.card.gallery-card:focus-within > .card-info-body,
+.card.gallery-card[data-open="true"] > .card-info-body {
+  visibility: visible; opacity: 1; clip-path: inset(0 0 0 0); pointer-events: auto;
+}
+
+/* 标题必须裁行：§27 把盖板改成 absolute + 固定 76% 高度后，容器高度成了硬约束，
+   未 clamp 的 6 行标题会溢出盒外压在徽章行上（375 实测 13/30 卡，最坏 -48.4px）。 */
+.card.gallery-card .title-primary {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden; word-break: break-word;
+}
+@media (max-width: 560px) {
+  .card.gallery-card .title-primary { -webkit-line-clamp: 2; }
+}
+
+/* 盖板内文字：标题是唯一落在渐变浅区的正文，必须靠阴影兜住亮封面。
+   实测未加阴影时 12.5px 标题在 6 张真实卡上对比度只有 1.41–2.17:1（需 4.5）。 */
+.card.gallery-card .title-primary {
+  color: #fff !important;
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .92), 0 0 8px rgba(0, 0, 0, .62);
+}
+.card.gallery-card .title-secondary {
+  color: #dfe6f0 !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 8px rgba(0, 0, 0, .55);
+}
+
+/* 压缩行：容量与压缩状态同一行（需求第 2 条），文字版状态进明细，默认态只留圆点 */
+.card.gallery-card .gallery-compression-inline {
+  font-size: 10.5px; line-height: 1; color: #cfd8e4;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .85);
+}
+
+.card.gallery-card .title-double-clamp { grid-column: 1 / -1; grid-row: 1; }
+.card.gallery-card .card-row-top { grid-column: 1; grid-row: 2; }
+.card.gallery-card .card-row-bottom { grid-column: 1; grid-row: 3; }
+.card.gallery-card > .card-info-body > .gallery-row-actions { grid-column: 1; grid-row: 4; }
+
+/* 按钮横排占左列第 4 行；页码块在右列（仍由 .card 层绝对定位） */
+.card.gallery-card > .card-info-body > .gallery-row-actions {
+  display: flex; flex-direction: row; gap: 4px; align-items: center;
+  justify-self: start;
+}
+
+/* 页数：默认态唯一强信息，同时是触摸与键盘的明细入口 */
+.card.gallery-card .gallery-page-count {
+  position: absolute; right: 12px; bottom: 10px; z-index: 4;
+  display: inline-flex; align-items: baseline; gap: 2px;
+  margin: 0 !important; padding: 2px 0 !important;
+  border: 0; background: none; cursor: pointer;
+  font-size: 28px !important; font-weight: 800 !important; line-height: 1;
+  letter-spacing: -.045em; font-variant-numeric: tabular-nums;
+  color: #fff !important; text-shadow: 0 1px 2px rgba(0, 0, 0, .55);
+  white-space: nowrap;
+  /* 浅色封面上白字严格对比度会掉到 1.0:1（AA 不认 text-shadow），必须给实底 */
+  background: rgba(26, 32, 42, .78);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  backdrop-filter: blur(6px) saturate(120%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .16);
+  border-radius: 9px; padding: 4px 9px 5px !important;
+}
+.card.gallery-card .gallery-page-count small {
+  font-size: 10px; font-weight: 500; letter-spacing: 0;
+  opacity: .78; margin-left: 1px;
+}
+.card.gallery-card .gallery-page-count.text-warning { color: #f6cd88 !important; }
+.card.gallery-card .gallery-page-count:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px;
+}
+
+/* 压缩按钮禁用态：保持色相可辨，只降到 72% 并去掉 hover 反馈 */
+.card.gallery-card .gallery-compress-action:disabled {
+  opacity: .72; cursor: default; pointer-events: none;
+}
+.card.gallery-card .gallery-compress-action.is-done { opacity: .9; }
+.card.gallery-card .gallery-compress-action:disabled i { opacity: .95; }
+
+/* 未完成：左上角标签保持，卡片补一圈琥珀描边 */
+.card.gallery-card.gallery-card-incomplete {
+  box-shadow: inset 0 0 0 2px rgba(185, 139, 69, .75);
+}
+
+/* 封面上的三个浮层：未完成标签(左上) / 删除(右上，hover 现) / 压缩点(左下)。
+   这三个类此前没有任何定位声明，作为块级元素排在封面 img 之后、被
+   .card-img-wrapper 的 overflow:hidden 裁掉——视觉上看不到，几何上越界 33px。 */
+.card.gallery-card > .card-img-wrapper { position: relative; }
+.card.gallery-card .gallery-status-badge {
+  position: absolute; left: 8px; top: 8px; z-index: 6;
+  display: inline-flex; align-items: center; height: 19px; padding: 0 6px;
+  border-radius: 5px; background: #ebbc73; color: #23190c;
+  font-size: 10px; font-weight: 700; line-height: 1; letter-spacing: .02em;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, .35);
+}
+.card.gallery-card .delete-overlay {
+  position: absolute; right: 8px; top: 8px; z-index: 6;
+  opacity: 0; transition: opacity .16s;
+}
+.card.gallery-card:hover .delete-overlay,
+.card.gallery-card:focus-within .delete-overlay { opacity: 1; }
+.card.gallery-card .delete-overlay .btn {
+  width: 26px; height: 26px; min-width: 26px; min-height: 26px;
+  padding: 0 !important; border-radius: 6px;
+  background: rgba(9, 15, 24, .62); border: 1px solid rgba(158, 168, 184, .92);
+  color: #e7eaf0; backdrop-filter: blur(4px);
+}
+
+.card.gallery-card .card-info-row { flex-wrap: wrap; row-gap: 4px; min-width: 0; }
+.card.gallery-card .card-info-row > * { min-width: 0; }
+.card.gallery-card .gallery-row-actions { flex: 0 0 auto; }
+
+/* 触摸端：不靠 hover，只认点击页数写下的 data-open */
+@media (hover: none), (pointer: coarse) {
+  .card.gallery-card:hover > .card-info-body {
+    visibility: hidden; opacity: 0; clip-path: inset(96% 0 0 0); pointer-events: none;
+  }
+  .card.gallery-card[data-open="true"] > .card-info-body {
+    visibility: visible; opacity: 1; clip-path: inset(0 0 0 0); pointer-events: auto;
+  }
+}
+@media (max-width: 560px) {
+  .card.gallery-card .gallery-page-count { font-size: 26px !important; right: 10px; bottom: 9px; }
+  .card.gallery-card > .card-body.card-info-body { padding: 20px 10px 48px !important; }
+  /* 窄卡一行放不下，按钮组退回右列纵列 */
+  .card.gallery-card > .card-info-body > .gallery-row-actions {
+    position: static; left: auto; bottom: auto;
+    grid-column: 2; grid-row: 1 / span 3;
+    flex-direction: column; align-items: flex-end; align-self: end;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card.gallery-card > .card-info-body { transition: none; }
+}

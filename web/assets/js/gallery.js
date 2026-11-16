@@ -64,8 +64,7 @@ function setGalleryPerPage(n) {
     loadGalleries(_galleryFilters);
 }
 
-function openIncompleteGalleryRetry(source, sourceId) {
-    switchPage('download');
+function openIncompleteGalleryRetry(source, sourceId) {    switchPage('download');
     showToast('这本画廊尚未下载完成，请使用“重试未完成下载”。', 'warning');
     setTimeout(function() {
         var retryBtn = document.getElementById('retry_btn');
@@ -76,6 +75,32 @@ function openIncompleteGalleryRetry(source, sourceId) {
         }
     }, 80);
 }
+// ═══ F4 卡片明细开关 ═══
+// 右下页数按钮是默认态唯一可聚焦入口：桌面 hover/focus 也会展开，
+// touch 端靠它写 data-open（:hover 在触摸设备上不可靠）。Esc 收起。
+function toggleCardDetail(btn) {
+    var card = btn && btn.closest ? btn.closest('.gallery-card') : null;
+    if (!card) return;
+    var open = card.getAttribute('data-open') !== 'true';
+    card.setAttribute('data-open', String(open));
+    btn.setAttribute('aria-expanded', String(open));
+}
+document.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Escape') return;
+    var openCards = document.querySelectorAll('.gallery-card[data-open="true"]');
+    for (var i = 0; i < openCards.length; i++) {
+        openCards[i].setAttribute('data-open', 'false');
+        var btn = openCards[i].querySelector('.gallery-page-count');
+        if (btn) {
+            btn.setAttribute('aria-expanded', 'false');
+            // 焦点还在页数按钮上时 :focus-within 会让盖板保持展开，Esc 必须同时移走焦点
+            // 焦点可能停在面板内任意按钮上（阅读/外链/压缩），都要移走才能真收起
+            var act = document.activeElement;
+            if (act && openCards[i].contains(act)) act.blur();
+        }
+    }
+});
+
 async function loadGalleries(filters) {
     filters = filters || _galleryFilters || {};
     _galleryFilters = { ...filters };
@@ -152,19 +177,22 @@ async function loadGalleries(filters) {
                 compressStateLabel = '失败';
                 compressStateClass = 'text-danger';
             }
-            var compressState = '<span class="gallery-compress-state ' + compressStateClass + '">' + compressStateLabel + '</span>';
-            var savingsBadge = hasCompressionResult && hasSavings
-                ? '<span class="gallery-compress-saving ' + (savings > 0 ? 'text-success' : 'text-secondary') + '">' + savings.toFixed(2) + '%</span>'
-                : '';
+            var sizeMb = Number(g.file_size) > 0 ? (Number(g.file_size) / 1048576).toFixed(1) + ' MB' : '';
+            var compressInline = compressStateLabel + (hasCompressionResult && hasSavings ? ' -' + savings.toFixed(2) + '%' : '');
             var compressBtn = '';
+            // 压缩状态与按钮合体：颜色与图标直接编码状态，已压/进行中/未下载不可点击
             if (!isComplete) {
-                compressBtn = '<button class="btn btn-sm btn-outline-secondary gallery-mini-btn" disabled title="下载完成后才能压缩"><i class="fas fa-compress"></i></button>';
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-secondary gallery-mini-btn gallery-compress-action" disabled title="未下载完成，暂不能压缩" aria-label="压缩状态：未可压缩"><i class="fas fa-compress"></i></button>';
+            } else if (hasCompressionResult) {
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-success gallery-mini-btn gallery-compress-action is-done" disabled title="已压缩' + (hasSavings ? '，节省 ' + savings.toFixed(2) + '%' : '') + '" aria-label="压缩状态：已压缩"><i class="fas fa-circle-check"></i></button>';
             } else if (compressStatus === 'user_review_required') {
-                compressBtn = '<button class="btn btn-sm btn-outline-warning gallery-mini-btn" data-compare-gallery="' + escapeAttr(String(g.id ?? '')) + '" data-source="' + escapeAttr(g.source) + '" data-source-id="' + escapeAttr(g.source_id || '') + '" title="审核压缩候选"><i class="fas fa-code-compare"></i></button>';
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-warning gallery-mini-btn gallery-compress-action" data-compare-gallery="' + escapeAttr(String(g.id ?? '')) + '" data-source="' + escapeAttr(g.source) + '" data-source-id="' + escapeAttr(g.source_id || '') + '" title="待审核：点击审核压缩候选" aria-label="压缩状态：待审核"><i class="fas fa-scale-balanced"></i></button>';
             } else if (compressStatus === 'queued' || compressStatus === 'compressing') {
-                compressBtn = '<button class="btn btn-sm btn-outline-info gallery-mini-btn" disabled title="压缩任务进行中"><i class="fas fa-spinner fa-spin"></i></button>';
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-info gallery-mini-btn gallery-compress-action" disabled title="压缩任务进行中" aria-label="压缩状态：压缩中"><i class="fas fa-spinner fa-spin"></i></button>';
+            } else if (compressStatus === 'failed') {
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-danger gallery-mini-btn gallery-compress-action" onclick="event.stopPropagation();openGalleryCompressionSetup(' + Number(g.id || 0) + ')" title="上次压缩失败：点击重新设置参数" aria-label="压缩状态：失败"><i class="fas fa-triangle-exclamation"></i></button>';
             } else {
-                compressBtn = '<button class="btn btn-sm btn-outline-primary gallery-mini-btn" onclick="event.stopPropagation();openGalleryCompressionSetup(' + Number(g.id || 0) + ')" title="设置参数并压缩"><i class="fas fa-compress"></i></button>';
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-primary gallery-mini-btn gallery-compress-action" onclick="event.stopPropagation();openGalleryCompressionSetup(' + Number(g.id || 0) + ')" title="未压缩：点击设置参数并压缩" aria-label="压缩状态：未压缩"><i class="fas fa-compress"></i></button>';
             }
             var escapedSid = escapeAttr(g.source_id || '');
             var exLink = (g.source && g.source.toLowerCase() === 'exhentai')
@@ -178,7 +206,7 @@ async function loadGalleries(filters) {
                 statusBadge +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitles.primary) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
-                '<div class="card-body px-2 py-1 card-info-body">' +
+                '<div class="card-body px-2 py-1 card-info-body" onclick="if(event.target.closest(\'a,button\'))event.stopPropagation()">' +
                 // 第1~3行：双标题严格 3 行高共享（Flex Column + 独立 line-clamp，与 cache.js 同构）
                 // 注：_zwspWrap() 在 cache.js 里注入，给 CJK/假名/罗马字序列强制软换行点，防止 -webkit-box 里不换行
                 '<div class="title-double-clamp" title="' + escapeAttr(titleTooltip) + '">' +
@@ -190,14 +218,16 @@ async function loadGalleries(filters) {
                 catBadge +
                 langBadge +
                 sourceBadge +
-                '<span class="' + progressClass + '">' + progressText + '</span>' +
-                '<span class="gallery-row-actions ms-auto">' + readBtn + exLink + '</span>' +
                 '</div>' +
                 // 第5行：压缩状态、整本节省率 + 压缩/审核按钮
                 '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom gallery-compression-row">' +
-                compressState + savingsBadge + '<span class="ms-auto">' + compressBtn + '</span>' +
+                '<span class="gallery-compression-inline">' + (sizeMb ? sizeMb + ' · ' : '') + compressInline + '</span>' +
                 '</div>' +
+                '<span class="gallery-row-actions">' + readBtn + exLink + compressBtn + '</span>' +
                 '</div>' +
+                // F4：页数脱离信息行，成为卡片右下角的大字入口（默认态唯一强信息）
+                '<button type="button" class="' + progressClass + '" aria-expanded="false" aria-label="' + progressText + ' 页，展开明细" onclick="event.stopPropagation();toggleCardDetail(this)">' +
+                progressText + '<small>页</small></button>' +
                 '</div>' +
                 '</div>';
         }).join('') +
