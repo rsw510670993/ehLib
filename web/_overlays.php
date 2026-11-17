@@ -36,12 +36,14 @@
         <div id="reader_page" class="section-hidden">
             <div class="reader-header">
                 <div class="reader-header-top">
+                    <button class="btn-close-reader reader-menu-btn" id="reader_menu_btn" onclick="readerToggleDrawer()" title="缩略图"><i class="fas fa-bars"></i></button>
                     <button class="btn-close-reader" onclick="closeReader()" title="关闭 (Esc)"><i class="fas fa-arrow-left"></i></button>
                     <span class="reader-title" id="reader_title"></span>
                     <span class="reader-meta" id="reader_meta"></span>
                     <div class="reader-pagenav">
                         <button onclick="readerPrevPage()" title="上一页 (←)"><i class="fas fa-chevron-left"></i></button>
                         <input type="number" class="page-input" id="reader_page_input" min="1" onchange="readerGoToPage(parseInt(this.value))">
+                        <span class="mode-badge" id="reader_mode_badge" data-mode="single">单页</span>
                         <span id="reader_page_total"></span>
                         <button onclick="readerNextPage()" title="下一页 (→)"><i class="fas fa-chevron-right"></i></button>
                     </div>
@@ -59,8 +61,12 @@
                 <div class="reader-thumbstrip" id="reader_thumbstrip">
                     <div id="reader_thumb_list"></div>
                 </div>
+                <div class="reader-drawer-scrim" id="reader_drawer_scrim" onclick="readerToggleDrawer(false)"></div>
                 <div class="reader-main" id="reader_main">
-                    <img id="reader_main_img" src="" alt="loading...">
+                    <div class="page-stage" id="reader_page_stage">
+                        <img class="page-img" id="reader_main_img" alt="loading...">
+                        <img class="page-img" id="reader_second_img" alt="" hidden>
+                    </div>
                 </div>
             </div>
         </div>

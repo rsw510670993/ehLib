@@ -1136,3 +1136,88 @@ body.modal-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .card.gallery-card > .card-info-body { transition: none; }
 }
+
+/* ── 28. 阅读页：缩略图侧栏（T1 胶片条）+ 主图高度适配 / 单双页 ──
+   背景：fa2dbbd 移除 Bootstrap CSS 时，.thumb-item / .thumb-page-label / .active
+   的布局规则整块丢失，只剩 116px 宽度与一条背景。于是每个缩略图按原图
+   1280×1743 撑开，82 页把侧栏顶到 10341px。这里补齐整块规则。 */
+
+/* 28.1 侧栏：112px 窄栏，纯封面 + 右下角页码角标 */
+.reader-thumbstrip {
+  width: 112px; flex: 0 0 112px; overflow-y: auto; overflow-x: hidden; min-height: 0;
+  padding: 12px 10px; box-sizing: border-box;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+}
+#reader_thumb_list { display: flex; flex-direction: column; gap: 8px; }
+.thumb-item {
+  position: relative; display: block; width: 100%; padding: 0; margin: 0; border: 0;
+  border-radius: 6px; overflow: hidden; background: var(--surface-3);
+  cursor: pointer; outline: none; flex: 0 0 auto;
+  aspect-ratio: 16 / 22; box-shadow: 0 0 0 1px transparent inset;
+  transition: box-shadow .15s ease;
+}
+.thumb-item img {
+  display: block; width: 100%; height: 100%; object-fit: cover; max-width: none;
+  border-radius: inherit; background: var(--surface-3);
+}
+.thumb-item:hover { box-shadow: 0 0 0 1.5px rgba(109, 139, 255, .55) inset; }
+.thumb-item:focus-visible { box-shadow: 0 0 0 2px var(--accent) inset; }
+.thumb-item.active { box-shadow: 0 0 0 1.5px #fff inset; }
+.thumb-item.active::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--accent); z-index: 2;
+}
+.thumb-page-label {
+  position: absolute; right: 6px; bottom: 6px; padding: 1px 7px; border-radius: 999px;
+  background: rgba(0, 0, 0, .6); color: #fff; font-size: 11px; line-height: 16px;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.thumb-item.active .thumb-page-label { background: var(--accent); color: #0b1218; font-weight: 600; }
+.thumb-item.is-broken {
+  background: repeating-linear-gradient(45deg, var(--surface-3), var(--surface-3) 6px, #232d3b 6px, #232d3b 12px);
+}
+.thumb-item.is-broken img { visibility: hidden; }
+
+/* 28.2 主图：高度适配（页高铺满、宽度随页比），双页并排贴中间 */
+.reader-main {
+  flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; padding: 10px 12px;
+  display: flex; align-items: stretch; justify-content: center;
+}
+.page-stage {
+  flex: 1 1 auto; min-width: 0; min-height: 0; height: 100%;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+/* 权重高于 §24 的 .reader-main img{max-width:100%;max-height:100%} */
+.reader-main .page-img {
+  flex: 0 0 auto; height: 100%; width: auto; max-width: 100%;
+  object-fit: contain; object-position: center;
+  border-radius: 4px; background: var(--surface-3); display: block;
+}
+.reader-main .page-img[hidden] { display: none; }
+.reader-main .page-img.is-broken {
+  background: repeating-linear-gradient(45deg, var(--surface-3), var(--surface-3) 8px, #232d3b 8px, #232d3b 16px);
+}
+.mode-badge {
+  font-size: 10.5px; color: var(--text-3); border: 1px solid var(--line); border-radius: 999px;
+  padding: 1px 7px; line-height: 16px; white-space: nowrap;
+}
+.mode-badge[data-mode="spread"] { color: var(--accent); border-color: rgba(109, 139, 255, .5); }
+
+/* 28.3 ≤639px：侧栏变左侧抽屉（原来 116px 固定要吃掉 31% 屏宽） */
+.reader-menu-btn { display: none; }
+@media (max-width: 639px) {
+  .reader-menu-btn { display: inline-flex; align-items: center; justify-content: center; }
+  .reader-thumbstrip {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 60;
+    width: min(150px, 62vw); flex: none;
+    transform: translateX(-100%); transition: transform .2s ease;
+    box-shadow: 4px 0 16px rgba(0, 0, 0, .5);
+  }
+  .reader-thumbstrip.is-open { transform: translateX(0); }
+  .reader-drawer-scrim {
+    position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .5);
+    opacity: 0; pointer-events: none; transition: opacity .2s ease;
+  }
+  .reader-drawer-scrim.is-open { opacity: 1; pointer-events: auto; }
+  .reader-main { padding: 6px; }
+}

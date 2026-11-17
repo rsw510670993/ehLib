@@ -12,6 +12,11 @@ const _READER_PRELOAD_AFTER = 3;
 let _readerPreloadImages = {};
 let _readerThumbObserver = null;
 let _readerOpenToken = 0;
+// 主图区：高度适配 + 按可用宽度自适配单页/双页
+var _readerIsSpread = false;
+var _readerPageRatio = 1280 / 1743;   // 首张图 onload 后按真实比例更新
+var _readerResizeBound = false;
+var _readerResizeTimer = null;
 // ─── Reader ───
 
 
@@ -230,8 +235,97 @@ function readerResetLazyImages() {
     for (var i = 0; i < imgs.length; i++) readerUnloadThumbImage(imgs[i]);
 }
 
-function readerResetWheelGesture() {
-    if (_readerWheelResetTimer) {
+// ─── 主图区：高度适配 + 单页/双页自适配 ───
+function readerStageEl() { return document.getElementById('reader_page_stage'); }
+function readerSecondImgEl() { return document.getElementById('reader_second_img'); }
+
+function readerToggleDrawer(on) {
+    var strip = document.getElementById('reader_thumbstrip');
+    var scrim = document.getElementById('reader_drawer_scrim');
+    if (!strip) return;
+    var open = (typeof on === 'boolean') ? on : !strip.classList.contains('is-open');
+    try { strip.classList.toggle('is-open', open); } catch (_) {}
+    if (scrim) try { scrim.classList.toggle('is-open', open); } catch (_) {}
+}
+
+function readerMeasureRatio() {
+    var img = document.getElementById('reader_main_img');
+    if (img && img.naturalWidth && img.naturalHeight) {
+        _readerPageRatio = img.naturalWidth / img.naturalHeight;
+    }
+}
+
+// 高度适配时单页占宽 = 可用高 × 页宽高比；能并排两页 + 中缝(6) + 余量(16) 才算双页
+function readerComputeSpread() {
+    var stage = readerStageEl();
+    if (!stage) return false;
+    var w = stage.clientWidth, h = stage.clientHeight;
+    if (!w || !h) return false;
+    return w >= (h * _readerPageRatio) * 2 + 6 + 16;
+}
+
+// 成对规则：p1 单独（封面），此后偶数页起成对 [2,3] [4,5] …
+function readerPairOf(page) {
+    if (!_readerIsSpread || page <= 1) return [page];
+    var left = (page % 2 === 0) ? page : page - 1;
+    if (left + 1 > _readerTotalPages) return [page];
+    return [left, left + 1];
+}
+
+function readerSetPageImg(el, page) {
+    if (!el) return;
+    if (!page) {
+        el.hidden = true;
+        try { el.removeAttribute('src'); } catch (_) {}
+        el.alt = '';
+        return;
+    }
+    var url = readerImageUrl(page);
+    var fallback = (_readerSource && _readerSourceId) ? imageApiUrl(_readerSource, _readerSourceId, page) : '';
+    el.hidden = false;
+    try { el.classList.remove('is-broken'); } catch (_) {}
+    el.alt = '第 ' + page + ' 页';
+    if (fallback) { try { el.dataset.fallback = fallback; } catch (_) {} }
+    el.onload = function () { readerMeasureRatio(); };
+    el.onerror = function () {
+        var fb = this.getAttribute && this.getAttribute('data-fallback');
+        if (fb && this.getAttribute('src') !== fb) {
+            try { this.removeAttribute('data-fallback'); } catch (_) {}
+            this.src = fb;
+            return;
+        }
+        try { this.classList.add('is-broken'); } catch (_) {}
+    };
+    if (el.getAttribute('src') !== url) el.src = url;
+}
+
+function readerRenderPages(page) {
+    readerMeasureRatio();
+    var pair = readerPairOf(page);
+    readerSetPageImg(document.getElementById('reader_main_img'), pair[0]);
+    readerSetPageImg(readerSecondImgEl(), pair.length > 1 ? pair[1] : null);
+    var spread = pair.length > 1;
+    var stage = readerStageEl();
+    if (stage) try { stage.classList.toggle('is-spread', spread); } catch (_) {}
+    var badge = document.getElementById('reader_mode_badge');
+    if (badge) {
+        badge.dataset.mode = spread ? 'spread' : 'single';
+        badge.textContent = spread ? '双页' : '单页';
+        badge.title = spread ? '当前按双页显示（可用宽度够并排两页）' : '当前按单页显示';
+    }
+}
+
+function readerEnsureResizeHook() {
+    if (_readerResizeBound) return;
+    _readerResizeBound = true;
+    window.addEventListener('resize', function () {
+        if (!_readerTotalPages) return;
+        if (_readerResizeTimer) clearTimeout(_readerResizeTimer);
+        _readerResizeTimer = setTimeout(function () { readerGoToPage(_readerCurrentPage); }, 120);
+    });
+}
+
+function readerResetWheelGesture() {    if (_readerWheelResetTimer) {
         clearTimeout(_readerWheelResetTimer);
         _readerWheelResetTimer = null;
     }
@@ -304,12 +398,24 @@ function openReader(source, sourceId) {
     _readerImageList = [];
     document.getElementById('reader_page').classList.remove('section-hidden');
     readerBindWheel();
+    readerToggleDrawer(false);
+    readerEnsureResizeHook();
+    _readerIsSpread = false;
     var mainImg = document.getElementById('reader_main_img');
     if (mainImg) {
         try { mainImg.removeAttribute && mainImg.removeAttribute('src'); } catch (_) {}
-        mainImg.src = '';
+        try { mainImg.classList.remove('is-broken'); } catch (_) {}
     }
     if (mainImg) mainImg.alt = '加载中...';
+    var secondImg = document.getElementById('reader_second_img');
+    if (secondImg) {
+        try { secondImg.removeAttribute && secondImg.removeAttribute('src'); } catch (_) {}
+        try { secondImg.classList.remove('is-broken'); } catch (_) {}
+        secondImg.hidden = true;
+        secondImg.alt = '';
+    }
+    var modeBadge = document.getElementById('reader_mode_badge');
+    if (modeBadge) { modeBadge.dataset.mode = 'single'; modeBadge.textContent = '单页'; }
     var thumbList = document.getElementById('reader_thumb_list');
     if (thumbList) thumbList.innerHTML = '<div class="text-center text-muted small py-3"><i class="fas fa-spinner fa-spin"></i></div>';
 
@@ -380,14 +486,14 @@ function openReader(source, sourceId) {
                 var fallbackThumbUrl = imageApiUrl(source, sourceId, pageNum);
                 var thumbUrl = img.url || fallbackThumbUrl;
                 if (img.file && thumbUrl) {
-                    thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')">' +
+                    thumbHtml += '<button type="button" class="thumb-item" data-page="' + pageNum + '" aria-label="第 ' + pageNum + ' 页" onclick="readerGoToPage(' + pageNum + ')">' +
                         '<img data-src="' + thumbUrl + '" data-fallback="' + fallbackThumbUrl + '" alt="p' + pageNum + '" onload="readerThumbLoaded(this)" onerror="readerThumbError(this)">' +
                         '<span class="thumb-page-label">p' + pageNum + '</span>' +
-                        '</div>';
+                        '</button>';
                 } else {
-                    thumbHtml += '<div class="thumb-item" data-page="' + pageNum + '" onclick="readerGoToPage(' + pageNum + ')">' +
+                    thumbHtml += '<button type="button" class="thumb-item" data-page="' + pageNum + '" aria-label="第 ' + pageNum + ' 页" onclick="readerGoToPage(' + pageNum + ')">' +
                         '<span class="thumb-page-label">p' + pageNum + '</span>' +
-                        '</div>';
+                        '</button>';
                 }
             });
             var thumbList = document.getElementById('reader_thumb_list');
@@ -409,12 +515,21 @@ function closeReader() {
     _readerOpenToken++;
     readerUnbindWheel();
     readerResetLazyImages();
+    readerToggleDrawer(false);
     document.getElementById('reader_page').classList.add('section-hidden');
     var mainImg = document.getElementById('reader_main_img');
     if (mainImg) {
         try { mainImg.removeAttribute && mainImg.removeAttribute('src'); } catch (_) {}
-        mainImg.src = '';
+        try { mainImg.classList.remove('is-broken'); } catch (_) {}
     }
+    var secondImg = document.getElementById('reader_second_img');
+    if (secondImg) {
+        try { secondImg.removeAttribute && secondImg.removeAttribute('src'); } catch (_) {}
+        try { secondImg.classList.remove('is-broken'); } catch (_) {}
+        secondImg.hidden = true;
+        secondImg.alt = '';
+    }
+    _readerIsSpread = false;
     var thumbList = document.getElementById('reader_thumb_list');
     if (thumbList) try { thumbList.innerHTML = ''; } catch (_) {}
     _readerImageList = [];
@@ -433,6 +548,7 @@ function readerGoToPage(page) {
     if (page < 1) page = 1;
     if (page > _readerTotalPages) page = _readerTotalPages;
     _readerCurrentPage = page;
+    _readerIsSpread = readerComputeSpread();   // 每次渲染前按当前可用宽度重判，避免初始尺寸未稳定时算错
     var pageInput = document.getElementById('reader_page_input'); if (pageInput) pageInput.value = page;
     readerUpdateThumbWindow(page);
 
@@ -444,40 +560,36 @@ function readerGoToPage(page) {
         try { activeThumb.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (_) {}
     }
 
-    var fallbackImgUrl = _readerSource && _readerSourceId ? imageApiUrl(_readerSource, _readerSourceId, page) : '';
-    var imgUrl = readerImageUrl(page);
-    var mainImg = document.getElementById('reader_main_img');
-    if (mainImg) {
-        mainImg.alt = 'p' + page;
-        try { delete mainImg.dataset.fallback; } catch (_) { try { mainImg.removeAttribute && mainImg.removeAttribute('data-fallback'); } catch (_) {} }
-        mainImg.onerror = function() {
-            var fb = this.getAttribute && this.getAttribute('data-fallback');
-            if (fb) {
-                this.onerror = function() { fallbackImageOnError(this); };
-                try { this.style.display = ''; } catch (_) {}
-                this.dataset.fallback = fb;
-                this.src = fb;
-            } else {
-                fallbackImageOnError(this);
-            }
-        };
-        if (imgUrl) {
-            try { mainImg.style.display = ''; } catch (_) {}
-            if (fallbackImgUrl) mainImg.dataset.fallback = fallbackImgUrl;
-            mainImg.src = imgUrl;
-        } else {
-            try { mainImg.removeAttribute && mainImg.removeAttribute('src'); } catch (_) {}
-            try { mainImg.style.display = 'none'; } catch (_) {}
-        }
+    readerRenderPages(page);
+
+    // 双页时两侧缩略图都要挂载，别让右页留在卸载态
+    var pairPages = readerPairOf(page);
+    for (var p = 0; p < pairPages.length; p++) {
+        var btn = document.querySelector('#reader_thumb_list .thumb-item[data-page="' + pairPages[p] + '"] img[data-src]');
+        if (btn && !btn.getAttribute('src')) readerLoadThumbImage(btn);
     }
 
     readerUpdatePreloadWindow(page);
+
+    // 移动端：点缩略图后收起抽屉
+    if (window.innerWidth <= 639) readerToggleDrawer(false);
 }
 
 function readerPrevPage() {
+    if (_readerIsSpread) {
+        if (_readerCurrentPage <= 2) return readerGoToPage(1);
+        readerGoToPage(Math.max(1, readerPairOf(_readerCurrentPage)[0] - 2));
+        return;
+    }
     if (_readerCurrentPage > 1) readerGoToPage(_readerCurrentPage - 1);
 }
 
 function readerNextPage() {
+    if (_readerIsSpread) {
+        if (_readerCurrentPage === 1) return readerGoToPage(2);
+        var nx = readerPairOf(_readerCurrentPage)[0] + 2;
+        readerGoToPage(nx <= _readerTotalPages ? nx : Math.min(_readerCurrentPage + 1, _readerTotalPages));
+        return;
+    }
     if (_readerCurrentPage < _readerTotalPages) readerGoToPage(_readerCurrentPage + 1);
 }
