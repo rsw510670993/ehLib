@@ -26,8 +26,10 @@ var _readerResizeTimer = null;
 function readerToggleDetails() {
     var el = document.getElementById('reader_header_details');
     var btn = document.getElementById('reader_toggle_details');
-    el.classList.toggle('show');
-    btn.innerHTML = el.classList.contains('show') ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
+    if (!el) return;
+    var collapsed = el.classList.toggle('is-collapsed');
+    el.classList.toggle('show', !collapsed);
+    if (btn) btn.innerHTML = collapsed ? '<i class="fas fa-chevron-down"></i>' : '<i class="fas fa-chevron-up"></i>';
 }
 
 function readerSearchTag(type, name) {
@@ -41,8 +43,7 @@ function readerSearchTag(type, name) {
 }
 
 async function readerRefreshMetadata(source, sourceId) {
-    var warningDiv = document.getElementById('reader_tag_warning');
-    var btn = warningDiv ? warningDiv.querySelector('button') : null;
+    var btn = document.getElementById('reader_refresh_meta');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
     try {
         var res = await api('refresh_metadata', { form: { action: 'refresh_metadata', source: source, source_id: sourceId } });
@@ -51,8 +52,33 @@ async function readerRefreshMetadata(source, sourceId) {
         openReader(source, sourceId);
     } catch (err) {
         showToast('刷新元数据失败: ' + (err.message || ''), 'danger');
-        if (btn) { btn.disabled = false; btn.innerHTML = '重下载元数据'; }
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-rotate"></i> 刷新元数据'; }
     }
+}
+
+function readerRefreshMetaCurrent() {
+    if (_readerSource && _readerSourceId) readerRefreshMetadata(_readerSource, _readerSourceId);
+}
+
+// 标签行默认最多两行，超出给「展开全部」按钮
+function readerSetupTagToggle() {
+    var wrap = document.getElementById('reader_detail_tags');
+    var btn = document.getElementById('reader_tag_toggle');
+    if (!wrap || !btn) return;
+    wrap.classList.remove('is-expanded');
+    btn.hidden = true;
+    var total = wrap.querySelectorAll('.tag-badge').length;
+    var measure = function() {
+        var overflow = wrap.scrollHeight > wrap.clientHeight + 2;
+        btn.hidden = !overflow;
+        if (overflow) btn.textContent = '展开全部 ' + total + ' 个标签';
+    };
+    if (window.requestAnimationFrame) window.requestAnimationFrame(measure);
+    else setTimeout(measure, 30);
+    btn.onclick = function() {
+        var open = wrap.classList.toggle('is-expanded');
+        btn.textContent = open ? '收起标签' : '展开全部 ' + total + ' 个标签';
+    };
 }
 
 var _readerSource, _readerSourceId;
@@ -427,48 +453,51 @@ function openReader(source, sourceId) {
             var displayTitle = g.title_jp || g.title;
             var titleEl = document.getElementById('reader_title'); if (titleEl) titleEl.textContent = displayTitle;
             var metaEl = document.getElementById('reader_meta'); if (metaEl) metaEl.textContent = g.total_pages + 'p · ' + (g.language || '-') + ' · ' + (g.uploaded_at || '-');
-            var aEl = document.getElementById('reader_detail_artist'); if (aEl) aEl.textContent = '作者: ' + (g.artist || '-');
-            var lEl = document.getElementById('reader_detail_lang'); if (lEl) lEl.textContent = '语言: ' + (g.language || '-');
-            var cEl = document.getElementById('reader_detail_category'); if (cEl) cEl.textContent = '分类: ' + (g.category || '-');
-            var uEl = document.getElementById('reader_detail_uploaded'); if (uEl) uEl.textContent = '上传: ' + (g.uploaded_at || '-');
+            var aEl = document.getElementById('reader_detail_artist'); if (aEl) aEl.textContent = g.artist || '-';
+            var lEl = document.getElementById('reader_detail_lang'); if (lEl) lEl.textContent = g.language || '-';
+            var cEl = document.getElementById('reader_detail_category'); if (cEl) cEl.textContent = g.category || '-';
+            var uEl = document.getElementById('reader_detail_uploaded'); if (uEl) uEl.textContent = g.uploaded_at || '-';
             var headerDetails = document.getElementById('reader_header_details');
-            if (headerDetails) headerDetails.classList.remove('show');
+            if (headerDetails) { headerDetails.classList.remove('show'); headerDetails.classList.remove('is-collapsed'); }
             var tagsHtml = '';
             var tagCount = (g.tags && g.tags.length > 0) ? g.tags.length : 0;
-            if (tagCount > 0) {
-                var typeLabels = { artist: 'bg-danger', parody: 'bg-warning text-dark', character: 'bg-primary', group: 'bg-success', language: 'bg-secondary', category: 'bg-info text-dark', tag: 'bg-light text-dark' };
-                g.tags.forEach(function(t) {
-                    var cls = typeLabels[t.type] || 'bg-light text-dark';
-                    var rawName = String(t.name || t.raw || '');
-                    var cn = String(t.name_cn || t.cn || '');
-                    var aliases = [];
-                    if (rawName) {
-                        rawName.split(/\s*\|\s*/).forEach(function(p) {
-                            p = (p || '').trim();
-                            if (p && aliases.indexOf(p) < 0) aliases.push(p);
-                        });
-                    }
-                    var display = cn || (aliases.length > 0 ? aliases.slice().sort(function(a, b) { return a.length - b.length; })[0] : rawName) || '-';
-                    var tooltip = (cn && aliases.length > 0) ? (cn + ' — ' + aliases.join(' | ')) : (aliases.length > 1 ? aliases.join(' | ') : display);
-                    tagsHtml += '<span class="tag-badge ' + cls + '" title="' + escapeAttr(tooltip) + '" onclick="event.stopPropagation();readerSearchTag(\'' + escapeAttr(t.type) + '\',\'' + escapeAttr(rawName) + '\')">' + escapeHtml(t.type) + ': ' + escapeHtml(display) + '</span> ';
-                });
-            } else {
-                tagsHtml = '<span style="color:#666">无标签</span>';
-            }
-            var tagWarning = '<div class="mt-1" style="font-size:.75rem;color:#6b7280">标签: ' + tagCount + '个' +
-                ' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-2" onclick="readerRefreshMetadata(\'' + escapeAttr(source) + '\',\'' + escapeAttr(sourceId) + '\')" style="font-size:.7rem">刷新元数据</button></div>';
-            if (tagCount <= 1) {
-                tagWarning = '<div class="mt-1 p-1 rounded" style="background:rgba(255,193,7,.15);font-size:.75rem;color:#ffc107">' +
-                    '标签数 (<strong>' + tagCount + '</strong>) 过少，可能元数据不完整' +
-                    '<button class="btn btn-sm btn-warning py-0 px-1 ms-2" onclick="readerRefreshMetadata(\'' + escapeAttr(source) + '\',\'' + escapeAttr(sourceId) + '\')" style="font-size:.7rem">刷新元数据</button></div>';
-            }
+            var typeLabels = {
+                artist: '画师', parody: '原作', character: '角色', group: '社团', circle: '社团',
+                language: '语言', category: '分类', tag: '标签',
+                female: '女性', male: '男性', mixed: '混合', other: '其他'
+            };
+            g.tags && g.tags.forEach(function(t) {
+                var rawName = String(t.name || t.raw || '');
+                var cn = String(t.name_cn || t.cn || '');
+                var aliases = [];
+                if (rawName) {
+                    rawName.split(/\s*\|\s*/).forEach(function(p) {
+                        p = (p || '').trim();
+                        if (p && aliases.indexOf(p) < 0) aliases.push(p);
+                    });
+                }
+                var display = cn || (aliases.length > 0 ? aliases.slice().sort(function(a, b) { return a.length - b.length; })[0] : rawName) || '-';
+                var tooltip = (cn && aliases.length > 0) ? (cn + ' — ' + aliases.join(' | ')) : (aliases.length > 1 ? aliases.join(' | ') : display);
+                var typeKey = String(t.type || 'tag');
+                var typeLabel = typeLabels[typeKey] || typeKey;
+                tagsHtml += '<button type="button" class="tag-badge" data-type="' + escapeAttr(typeKey) + '"' +
+                    ' title="' + escapeAttr(typeLabel + ': ' + tooltip) + '"' +
+                    ' onclick="event.stopPropagation();readerSearchTag(\'' + escapeAttr(typeKey) + '\',\'' + escapeAttr(rawName) + '\')">' +
+                    '<span class="tag-type">' + escapeHtml(typeLabel) + '</span>' +
+                    '<span class="tag-name">' + escapeHtml(display) + '</span>' +
+                    '</button>';
+            });
             var detailTags = document.getElementById('reader_detail_tags');
-            if (detailTags) {
-                detailTags.innerHTML = tagsHtml;
-                var existingWarning = document.getElementById('reader_tag_warning');
-                if (existingWarning) { try { existingWarning.remove(); } catch (_) {} }
-                try { detailTags.insertAdjacentHTML('afterend', '<div id="reader_tag_warning">' + tagWarning + '</div>'); } catch (_) {}
+            if (detailTags) detailTags.innerHTML = tagsHtml || '<span class="tags-empty">无标签</span>';
+            var countEl = document.getElementById('reader_tag_count');
+            if (countEl) countEl.textContent = tagCount + ' 个标签';
+            var warningBox = document.getElementById('reader_tag_warning');
+            if (warningBox) {
+                warningBox.innerHTML = (tagCount <= 1)
+                    ? '<div class="tag-warning"><i class="fas fa-triangle-exclamation"></i><span>标签只有 ' + tagCount + ' 个，元数据可能不完整</span></div>'
+                    : '';
             }
+            readerSetupTagToggle();
         });
 
     fetch(API + '?action=get_image_list&source=' + encodeURIComponent(source) + '&source_id=' + encodeURIComponent(sourceId))

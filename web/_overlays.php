@@ -50,11 +50,20 @@
                     <button class="btn-toggle-details" id="reader_toggle_details" onclick="readerToggleDetails()" title="详细信息"><i class="fas fa-chevron-down"></i></button>
                 </div>
                 <div class="reader-header-details" id="reader_header_details">
-                    <div class="detail-row" id="reader_detail_artist"></div>
-                    <div class="detail-row" id="reader_detail_lang"></div>
-                    <div class="detail-row" id="reader_detail_category"></div>
-                    <div class="detail-row" id="reader_detail_uploaded"></div>
+                    <div class="reader-meta-row">
+                        <span class="meta-item"><span class="meta-k">作者</span><span class="meta-v" id="reader_detail_artist"></span></span>
+                        <span class="meta-item"><span class="meta-k">语言</span><span class="meta-v" id="reader_detail_lang"></span></span>
+                        <span class="meta-item"><span class="meta-k">分类</span><span class="meta-v" id="reader_detail_category"></span></span>
+                        <span class="meta-item"><span class="meta-k">上传</span><span class="meta-v" id="reader_detail_uploaded"></span></span>
+                        <span class="meta-spacer"></span>
+                        <span class="meta-count" id="reader_tag_count"></span>
+                        <button type="button" class="reader-meta-btn" id="reader_refresh_meta" onclick="readerRefreshMetaCurrent()">
+                            <i class="fas fa-rotate"></i> 刷新元数据
+                        </button>
+                    </div>
                     <div class="detail-tags" id="reader_detail_tags"></div>
+                    <button type="button" class="tag-toggle" id="reader_tag_toggle" hidden></button>
+                    <div id="reader_tag_warning"></div>
                 </div>
             </div>
             <div class="reader-body">

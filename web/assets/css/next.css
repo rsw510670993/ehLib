@@ -1221,3 +1221,111 @@ body.modal-open { overflow: hidden; }
   .reader-drawer-scrim.is-open { opacity: 1; pointer-events: auto; }
   .reader-main { padding: 6px; }
 }
+
+/* ── 29. 阅读页头部：meta 行 + 标签胶囊 ──
+   与 §28 同一个坑：.detail-row / .detail-tags / .tag-badge 在重写时丢了规则，
+   只剩 Bootstrap 的 bg-* 底色——白字压浅青、无 padding/圆角/行距，24 个标签
+   堆成一条裸文本。这里重做成「中性底 + 类型色前缀 + 两行折叠」的胶囊体系，
+   并把原来四行「作者: xxx」压成一行键值。 */
+
+.reader-header-details {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 4px 14px 10px;
+  background: var(--surface); border-top: 1px solid var(--line-soft);
+}
+.reader-header-details.is-collapsed { display: none; }
+
+/* meta 行：四项键值压成一行，右端标签计数与刷新 */
+.reader-meta-row {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--text-2); min-width: 0;
+}
+.reader-meta-row .meta-item { display: inline-flex; align-items: baseline; gap: 5px; min-width: 0; }
+.reader-meta-row .meta-k { color: var(--text-3); font-size: 10.5px; letter-spacing: .02em; white-space: nowrap; }
+.reader-meta-row .meta-v {
+  color: var(--text); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 22em;
+}
+.reader-meta-row .meta-spacer { flex: 1 1 auto; }
+.reader-meta-row .meta-count { color: var(--text-3); font-size: 11px; white-space: nowrap; }
+.reader-meta-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 22px; padding: 0 8px; border-radius: 6px;
+  background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2);
+  font-size: 11px; font-weight: 500; line-height: 1; font-family: inherit;
+  cursor: pointer; white-space: nowrap;
+}
+.reader-meta-btn:hover { border-color: var(--accent); color: var(--text); }
+.reader-meta-btn:disabled { opacity: .6; cursor: default; }
+
+/* 标签行：默认最多两行，超出给「展开全部」 */
+.detail-tags {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  max-height: 47px; overflow: hidden;
+  transition: max-height .18s ease;
+}
+.detail-tags.is-expanded { max-height: none; }
+.tags-empty { font-size: 11.5px; color: var(--text-3); }
+.tag-badge {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 220px;
+  height: 20px; padding: 0 7px; margin: 0;
+  border-radius: 6px; background: var(--surface-3);
+  border: 1px solid var(--line); color: var(--text-2);
+  font-size: 10.5px; font-weight: 600; line-height: 1; font-family: inherit;
+  cursor: pointer; white-space: nowrap;
+}
+.tag-badge .tag-type {
+  font-size: 9px; font-weight: 700; letter-spacing: .03em;
+  padding-right: 5px; border-right: 1px solid var(--line);
+  color: var(--text-3);
+}
+.tag-badge .tag-name { overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+.tag-badge:hover { border-color: var(--accent); color: var(--text); }
+.tag-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 类型色只染「类型前缀 + 描边」，底色恒为中性：白字不再压在浅色底上 */
+.tag-badge[data-type="artist"]    { border-color: color-mix(in srgb, #e06c75 45%, var(--line)); }
+.tag-badge[data-type="artist"] .tag-type    { color: color-mix(in srgb, #e06c75 78%, var(--text)); }
+.tag-badge[data-type="group"],
+.tag-badge[data-type="circle"]    { border-color: color-mix(in srgb, #98c379 45%, var(--line)); }
+.tag-badge[data-type="group"] .tag-type,
+.tag-badge[data-type="circle"] .tag-type    { color: color-mix(in srgb, #98c379 78%, var(--text)); }
+.tag-badge[data-type="parody"]    { border-color: color-mix(in srgb, #e5c07b 45%, var(--line)); }
+.tag-badge[data-type="parody"] .tag-type    { color: color-mix(in srgb, #e5c07b 78%, var(--text)); }
+.tag-badge[data-type="character"] { border-color: color-mix(in srgb, #61afef 45%, var(--line)); }
+.tag-badge[data-type="character"] .tag-type { color: color-mix(in srgb, #61afef 78%, var(--text)); }
+.tag-badge[data-type="language"]  { border-color: color-mix(in srgb, #c678dd 45%, var(--line)); }
+.tag-badge[data-type="language"] .tag-type  { color: color-mix(in srgb, #c678dd 78%, var(--text)); }
+.tag-badge[data-type="category"]  { border-color: color-mix(in srgb, #56b6c2 45%, var(--line)); }
+.tag-badge[data-type="category"] .tag-type  { color: color-mix(in srgb, #56b6c2 78%, var(--text)); }
+.tag-badge[data-type="female"]    { border-color: color-mix(in srgb, #e879a6 45%, var(--line)); }
+.tag-badge[data-type="female"] .tag-type    { color: color-mix(in srgb, #e879a6 78%, var(--text)); }
+.tag-badge[data-type="male"]      { border-color: color-mix(in srgb, #7aa2f7 45%, var(--line)); }
+.tag-badge[data-type="male"] .tag-type      { color: color-mix(in srgb, #7aa2f7 78%, var(--text)); }
+.tag-badge[data-type="mixed"],
+.tag-badge[data-type="other"]     { border-color: color-mix(in srgb, #9aa7b8 45%, var(--line)); }
+.tag-badge[data-type="mixed"] .tag-type,
+.tag-badge[data-type="other"] .tag-type     { color: color-mix(in srgb, #9aa7b8 78%, var(--text)); }
+
+.tag-toggle {
+  align-self: flex-start; margin-top: -2px; padding: 0;
+  background: none; border: 0; color: var(--accent);
+  font-size: 11px; font-weight: 500; line-height: 1.6; font-family: inherit;
+  cursor: pointer;
+}
+.tag-toggle:hover { text-decoration: underline; }
+
+.tag-warning {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-radius: 6px; font-size: 11px;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+}
+
+@media (max-width: 639px) {
+  .reader-header-details { padding: 4px 10px 8px; gap: 6px; }
+  .reader-meta-row { gap: 10px; font-size: 11px; }
+  .reader-meta-row .meta-v { max-width: 14em; }
+  .detail-tags { max-height: 24px; }   /* 手机上只留一行 */
+}
