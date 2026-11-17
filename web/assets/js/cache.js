@@ -301,13 +301,15 @@ function renderCacheBatchBar() {
     var allSel = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
     var bar = document.getElementById('cache_batch_bar');
     if (!bar) return;
-    var dlDisabled = hasSel ? '' : ' disabled';
+    var dis = hasSel ? '' : ' disabled';
     bar.innerHTML =
-        '<div class="d-flex align-items-center gap-2 py-1 px-2 bg-light rounded">' +
-        '<input class="form-check-input mt-0" type="checkbox" onchange="selectAllCache(this.checked)" ' + (allSel ? 'checked' : '') + ' title="全选/取消">' +
-        '<span class="small text-muted me-1" id="batch_count">' + (hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中') + '</span>' +
-        '<button class="btn btn-sm btn-outline-primary py-0 px-2" onclick="cacheBatchDownload()" title="批量下载"' + dlDisabled + '><i class="fas fa-download me-1"></i>批量下载</button>' +
-        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"' + dlDisabled + '><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
+        '<div class="cache-batch">' +
+        '<button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" id="cache_select_all" onclick="toggleSelectAllCache()" title="全选/取消全选">' +
+        (allSel ? '取消全选' : '全选') + '</button>' +
+        '<span class="cache-batch-count" id="batch_count">' + (hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中') + '</span>' +
+        '<span class="cache-batch-spacer"></span>' +
+        '<button class="btn btn-sm btn-outline-primary py-0 px-2" onclick="cacheBatchDownload()" title="批量下载"' + dis + '><i class="fas fa-download me-1"></i>批量下载</button>' +
+        '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="batchDeleteCache()" title="批量删除"' + dis + '><i class="fas fa-trash-alt me-1"></i>删除选中</button>' +
         '<button class="btn btn-sm btn-outline-secondary py-0 px-2' + (hasSel ? '' : ' d-none') + '" onclick="clearCacheSelection()">取消选择</button>' +
         '</div>';
 }
@@ -464,9 +466,8 @@ function renderCacheGrid() {
                 : '<button class="btn btn-sm btn-outline-primary py-0 px-1" onclick="cacheDownloadSingle(\'' + escapedSid + '\')" title="下载"><i class="fas fa-download"></i></button>';
             var sourceBtn = '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>';
             return '<div>' +
-                '<div class="card gallery-card">' +
-                '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0;cursor:pointer" onclick="toggleCacheSelect(\'' + escapedSid + '\',null,event)">' +
-                '<div class="card-checkbox"><input type="checkbox" class="form-check-input" onchange="toggleCacheSelect(\'' + escapedSid + '\',this.checked,event)" ' + (_selectedIds.has(source_id) ? 'checked' : '') + '></div>' +
+                '<div class="card gallery-card' + (_selectedIds.has(source_id) ? ' is-selected' : '') + '" data-sid="' + escapedSid + '">' +
+                '<div class="card-img-wrapper" data-sid="' + escapedSid + '" aria-pressed="' + (_selectedIds.has(source_id) ? 'true' : 'false') + '" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0;cursor:pointer" onclick="cacheCardClick(event,\'' + escapedSid + '\')">' +
                 thumbHtml +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
@@ -777,16 +778,35 @@ async function deleteSearchPreset(id) {
 
 // ─── Batch Delete ────────────────────────────────────────────
 
-function toggleCacheSelect(sid, checked, e) {
-    if (e) e.stopPropagation();
-    if (checked === null) {
-        var cb = e.currentTarget.querySelector('.form-check-input');
-        if (cb) { cb.checked = !cb.checked; checked = cb.checked; }
-        else return;
-    }
-    if (checked) _selectedIds.add(sid);
-    else _selectedIds.delete(sid);
+function toggleCacheSelect(sid) {
+    if (!sid) return;
+    if (_selectedIds.has(sid)) _selectedIds.delete(sid);
+    else _selectedIds.add(sid);
+    updateCacheCardState(sid);
     updateBatchBar();
+}
+
+// 点封面切换选中；点到盖板里的按钮/链接时放行（记忆教训：别用 stopPropagation 砍掉整卡入口）
+function cacheCardClick(ev, sid) {
+    if (ev && ev.target && ev.target.closest && ev.target.closest('a,button,input,label')) return;
+    toggleCacheSelect(sid);
+}
+
+function updateCacheCardState(sid) {
+    var cards = document.querySelectorAll('#cache_grid .gallery-card');
+    var on = _selectedIds.has(sid);
+    for (var i = 0; i < cards.length; i++) {
+        if (cards[i].getAttribute('data-sid') !== sid) continue;
+        cards[i].classList.toggle('is-selected', on);
+        var w = cards[i].querySelector('.card-img-wrapper');
+        if (w) w.setAttribute('aria-pressed', on ? 'true' : 'false');
+        break;
+    }
+}
+
+function toggleSelectAllCache() {
+    var allSel = _cacheResults.length > 0 && _selectedIds.size === _cacheResults.length;
+    selectAllCache(!allSel);
 }
 
 function selectAllCache(checked) {
@@ -811,12 +831,12 @@ function updateBatchBar() {
     var delBtn = bar.querySelector('.btn-outline-danger');
     var dlBtn = bar.querySelector('.btn-outline-primary');
     var cancelBtn = bar.querySelector('.btn-outline-secondary');
-    var selectAll = bar.querySelector('.form-check-input');
+    var selectAllBtn = bar.querySelector('#cache_select_all');
     if (countEl) countEl.textContent = hasSel ? '已选 ' + _selectedIds.size + '/' + _cacheResults.length + ' 项' : '未选中';
     if (delBtn) delBtn.disabled = !hasSel;
     if (dlBtn) dlBtn.disabled = !hasSel;
     if (cancelBtn) cancelBtn.classList.toggle('d-none', !hasSel);
-    if (selectAll) selectAll.checked = allSelected;
+    if (selectAllBtn) selectAllBtn.textContent = allSelected ? '取消全选' : '全选';
 }
 
 async function batchDeleteCache() {

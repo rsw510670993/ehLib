@@ -1329,3 +1329,54 @@ body.modal-open { overflow: hidden; }
   .reader-meta-row .meta-v { max-width: 14em; }
   .detail-tags { max-height: 24px; }   /* 手机上只留一行 */
 }
+
+/* ── 30. 缓存页多选：去掉 checkbox，改整卡边框选中 ──
+   原状两个问题：①.card-checkbox 是个块级 div（实测 218×21.5），把封面顶下去 21px
+   还露出底色，里面那个 18px checkbox 只剩个黑方块；②hover 时盖板在 §27 里
+   pointer-events 变 auto，把封面中下部的点击吃掉，点不到封面就没法选中。
+   现在：整张封面点一下就切换选中，选中态＝2px 强调色边框 + 封面压暗 + 左上对勾。 */
+
+.cache-batch {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--line);
+}
+.cache-batch .cache-batch-count { font-size: 11.5px; color: var(--text-2); }
+.cache-batch .cache-batch-spacer { flex: 1 1 auto; }
+
+/* 盖板永不接收点击，只有按钮/链接可点：点空白穿透到封面切选中 */
+#cache_grid .gallery-card > .card-info-body,
+#cache_grid .gallery-card > .card-info-body * { pointer-events: none; }
+#cache_grid .gallery-card > .card-info-body .btn,
+#cache_grid .gallery-card > .card-info-body a,
+#cache_grid .gallery-card > .card-info-body button { pointer-events: auto; }
+
+/* 选中态 */
+#cache_grid .gallery-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 18px 48px -18px rgba(0, 0, 0, .55);
+}
+#cache_grid .gallery-card.is-selected > .card-img-wrapper { background: #0d1420; }
+#cache_grid .gallery-card.is-selected > .card-img-wrapper > img {
+  filter: brightness(.72) saturate(.92);
+}
+#cache_grid .gallery-card.is-selected > .card-img-wrapper::after {
+  content: "\2713";
+  position: absolute; left: 8px; top: 8px; z-index: 6;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #0b1218;
+  font-size: 13px; font-weight: 800; line-height: 1;
+  box-shadow: 0 0 0 2px rgba(11, 18, 24, .55);
+  pointer-events: none;
+}
+#cache_grid .gallery-card.is-selected > .card-img-wrapper:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+@media (max-width: 639px) {
+  .cache-batch { gap: 6px; padding: 6px 8px; }
+  #cache_grid .gallery-card.is-selected > .card-img-wrapper::after {
+    left: 6px; top: 6px; width: 20px; height: 20px; font-size: 12px;
+  }
+}
