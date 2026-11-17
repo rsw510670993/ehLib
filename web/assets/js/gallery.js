@@ -1,8 +1,57 @@
 // ─── Gallery (Card Grid) ───
+// 共用工具（cache.js 先于 gallery.js 引入）：
+//   normalizeTitle / _zwspWrap / getGalleryDisplayTitles / CAT_COLORS
 let _galleryFilters = {};
 let _galleryPage = 1;
 let _galleryPerPage = 30;
 let _galleryTotal = 0;
+
+const GALLERY_CATEGORY_ZH = {
+    'doujinshi': '同人志',
+    'manga': '漫画',
+    'artist cg': '艺术家CG',
+    'game cg': '游戏CG',
+    'western': '西方',
+    'non-h': '非H',
+    'image set': '图集',
+    'cosplay': '角色扮演',
+    'asian porn': '亚洲色情',
+    'misc': '其他'
+};
+
+function compactGalleryCategory(value) {
+    var raw = String(value || '').trim();
+    return GALLERY_CATEGORY_ZH[raw.toLowerCase()] || raw;
+}
+
+function compactGalleryLanguage(value) {
+    var raw = String(value || '').trim().toLowerCase();
+    if (/chinese|中文|汉语|\bzh\b/.test(raw)) return '中';
+    if (/japanese|日语|日本語|\bja\b/.test(raw)) return '日';
+    if (/speechless|textless|no[ _-]?text|n\/a|无字|无言/.test(raw)) return '无字';
+    if (/text[ _-]?cleaned|去字|清字/.test(raw)) return '去字';
+    return '其他';
+}
+
+function compactGallerySource(value) {
+    var raw = String(value || '').trim().toLowerCase();
+    if (raw === 'exhentai') return 'Ex';
+    if (raw === 'nhentai') return 'N';
+    return raw ? raw.charAt(0).toUpperCase() : '?';
+}
+
+function openGalleryCompressionSetup(id) {
+    switchPage('tools');
+    setTimeout(function () {
+        var tabEl = document.querySelector('[data-bs-target="#tab_tools_compression"]');
+        if (tabEl && window.bootstrap && bootstrap.Tab) bootstrap.Tab.getOrCreateInstance(tabEl).show();
+        var input = document.getElementById('compress_gallery_id');
+        if (input) input.value = String(id);
+        var hint = document.getElementById('compress_selected_hint');
+        if (hint) hint.textContent = '已选择 Gallery #' + id;
+        if (typeof loadCompressionPage === 'function') loadCompressionPage();
+    }, 50);
+}
 
 function gotoGalleryPage(page) {
     _galleryPage = page;
@@ -15,8 +64,7 @@ function setGalleryPerPage(n) {
     loadGalleries(_galleryFilters);
 }
 
-function openIncompleteGalleryRetry(source, sourceId) {
-    switchPage('download');
+function openIncompleteGalleryRetry(source, sourceId) {    switchPage('download');
     showToast('这本画廊尚未下载完成，请使用“重试未完成下载”。', 'warning');
     setTimeout(function() {
         var retryBtn = document.getElementById('retry_btn');
@@ -27,6 +75,32 @@ function openIncompleteGalleryRetry(source, sourceId) {
         }
     }, 80);
 }
+// ═══ F4 卡片明细开关 ═══
+// 右下页数按钮是默认态唯一可聚焦入口：桌面 hover/focus 也会展开，
+// touch 端靠它写 data-open（:hover 在触摸设备上不可靠）。Esc 收起。
+function toggleCardDetail(btn) {
+    var card = btn && btn.closest ? btn.closest('.gallery-card') : null;
+    if (!card) return;
+    var open = card.getAttribute('data-open') !== 'true';
+    card.setAttribute('data-open', String(open));
+    btn.setAttribute('aria-expanded', String(open));
+}
+document.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Escape') return;
+    var openCards = document.querySelectorAll('.gallery-card[data-open="true"]');
+    for (var i = 0; i < openCards.length; i++) {
+        openCards[i].setAttribute('data-open', 'false');
+        var btn = openCards[i].querySelector('.gallery-page-count');
+        if (btn) {
+            btn.setAttribute('aria-expanded', 'false');
+            // 焦点还在页数按钮上时 :focus-within 会让盖板保持展开，Esc 必须同时移走焦点
+            // 焦点可能停在面板内任意按钮上（阅读/外链/压缩），都要移走才能真收起
+            var act = document.activeElement;
+            if (act && openCards[i].contains(act)) act.blur();
+        }
+    }
+});
+
 async function loadGalleries(filters) {
     filters = filters || _galleryFilters || {};
     _galleryFilters = { ...filters };
@@ -54,37 +128,106 @@ async function loadGalleries(filters) {
 
     body.innerHTML = '<div class="gallery-flex-grid" id="gallery_grid">' +
         data.galleries.map(function(g) {
-            var displayTitle = g.title_jp || g.title;
+            // 与 cache.js 共用的双标题优先级分配逻辑（日语 primary，中文/英文≠日语时放 secondary）
+            var displayTitles = getGalleryDisplayTitles(g);
+            var categoryColorKey = window.CAT_COLORS
+                ? Object.keys(window.CAT_COLORS).find(function (key) { return key.toLowerCase() === String(g.category || '').toLowerCase(); })
+                : null;
+            var catColor = categoryColorKey ? window.CAT_COLORS[categoryColorKey] : '#6c757d';
+            var categoryLabel = compactGalleryCategory(g.category);
+            var catBadge = g.category ? '<span class="badge gallery-meta-chip" style="background:' + catColor + '" title="' + escapeAttr(g.category) + '">' + escapeHtml(categoryLabel) + '</span>' : '';
             var badgeClass = g.source === 'nhentai' ? 'bg-danger' : 'bg-info';
-            var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
+            var sourceBadge = '<span class="badge gallery-meta-chip ' + badgeClass + '" title="' + escapeAttr(g.source) + '">' + escapeHtml(compactGallerySource(g.source)) + '</span>';
+            var langColor = { '日': '#0dcaf0', '中': '#dc3545', '无字': '#6f42c1', '去字': '#198754', '其他': '#6b7280' };
             var lang = g.language || '';
-            var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
+            var langLabel = compactGalleryLanguage(lang);
+            var langBadge = '<span class="lang-badge gallery-meta-chip" style="color:' + langColor[langLabel] + '" title="' + escapeAttr(lang || '其他') + '">' + langLabel + '</span>';
             var fallbackImgUrl = imageApiUrl(g.source, g.source_id, 'cover');
             var imgUrl = g.cover_url || fallbackImgUrl;
             var totalPages = parseInt(g.total_pages || g.pages || 0, 10) || 0;
             var downloadedPages = parseInt(g.downloaded_pages || 0, 10) || 0;
             var isComplete = g.is_complete !== false && g.is_complete !== 0 && g.is_complete !== '0';
-            var progressText = isComplete ? (totalPages + 'p') : (downloadedPages + '/' + totalPages + 'p');
+            var progressText = isComplete ? String(totalPages) : (downloadedPages + '/' + totalPages);
+            var progressClass = isComplete ? 'gallery-page-count text-muted' : 'gallery-page-count text-warning fw-semibold';
             var cardClass = isComplete ? '' : ' gallery-card-incomplete';
             var clickAction = isComplete
                 ? 'openReader(\'' + g.source + '\',\'' + g.source_id + '\')'
                 : 'openIncompleteGalleryRetry(\'' + g.source + '\',\'' + g.source_id + '\')';
             var statusBadge = isComplete ? '' : '<span class="badge bg-warning text-dark gallery-status-badge">未完成</span>';
+            // 按钮：本地阅览（已下载）/ 重试（未完成） + ExHentai 外链
+            var readBtn = isComplete
+                ? '<button class="btn btn-sm btn-outline-success py-0 px-1" onclick="event.stopPropagation();openReader(\'' + g.source + '\',\'' + g.source_id + '\')" title="本地阅览"><i class="fas fa-book-open"></i></button>'
+                : '<button class="btn btn-sm btn-outline-warning py-0 px-1" onclick="event.stopPropagation();openIncompleteGalleryRetry(\'' + g.source + '\',\'' + g.source_id + '\')" title="继续下载"><i class="fas fa-redo-alt"></i></button>';
+            var compressStatus = (g.compression_status || '').toString();
+            var compressStateLabel = '未压';
+            var compressStateClass = 'text-secondary';
+            var savings = Number(g.compression_savings_pct);
+            var hasSavings = g.compression_savings_pct !== null && g.compression_savings_pct !== '' && isFinite(savings);
+            var hasCompressionResult = ['applied', 'compressed', 'skipped'].includes(compressStatus);
+            if (compressStatus === 'user_review_required') {
+                compressStateLabel = '待审';
+                compressStateClass = 'text-warning';
+            } else if (['applied', 'compressed', 'skipped'].includes(compressStatus)) {
+                compressStateLabel = '已压';
+                compressStateClass = 'text-success';
+            } else if (compressStatus === 'queued' || compressStatus === 'compressing') {
+                compressStateLabel = '压缩中';
+                compressStateClass = 'text-info';
+            } else if (compressStatus === 'failed') {
+                compressStateLabel = '失败';
+                compressStateClass = 'text-danger';
+            }
+            var sizeMb = Number(g.file_size) > 0 ? (Number(g.file_size) / 1048576).toFixed(1) + ' MB' : '';
+            var compressInline = compressStateLabel + (hasCompressionResult && hasSavings ? ' -' + savings.toFixed(2) + '%' : '');
+            var compressBtn = '';
+            // 压缩状态与按钮合体：颜色与图标直接编码状态，已压/进行中/未下载不可点击
+            if (!isComplete) {
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-secondary gallery-mini-btn gallery-compress-action" disabled title="未下载完成，暂不能压缩" aria-label="压缩状态：未可压缩"><i class="fas fa-compress"></i></button>';
+            } else if (hasCompressionResult) {
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-success gallery-mini-btn gallery-compress-action is-done" disabled title="已压缩' + (hasSavings ? '，节省 ' + savings.toFixed(2) + '%' : '') + '" aria-label="压缩状态：已压缩"><i class="fas fa-circle-check"></i></button>';
+            } else if (compressStatus === 'user_review_required') {
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-warning gallery-mini-btn gallery-compress-action" data-compare-gallery="' + escapeAttr(String(g.id ?? '')) + '" data-source="' + escapeAttr(g.source) + '" data-source-id="' + escapeAttr(g.source_id || '') + '" title="待审核：点击审核压缩候选" aria-label="压缩状态：待审核"><i class="fas fa-scale-balanced"></i></button>';
+            } else if (compressStatus === 'queued' || compressStatus === 'compressing') {
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-info gallery-mini-btn gallery-compress-action" disabled title="压缩任务进行中" aria-label="压缩状态：压缩中"><i class="fas fa-spinner fa-spin"></i></button>';
+            } else if (compressStatus === 'failed') {
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-danger gallery-mini-btn gallery-compress-action" onclick="event.stopPropagation();openGalleryCompressionSetup(' + Number(g.id || 0) + ')" title="上次压缩失败：点击重新设置参数" aria-label="压缩状态：失败"><i class="fas fa-triangle-exclamation"></i></button>';
+            } else {
+                compressBtn = '<button type="button" class="btn btn-sm btn-outline-primary gallery-mini-btn gallery-compress-action" onclick="event.stopPropagation();openGalleryCompressionSetup(' + Number(g.id || 0) + ')" title="未压缩：点击设置参数并压缩" aria-label="压缩状态：未压缩"><i class="fas fa-compress"></i></button>';
+            }
+            var escapedSid = escapeAttr(g.source_id || '');
+            var exLink = (g.source && g.source.toLowerCase() === 'exhentai')
+                ? '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="https://exhentai.org/g/' + escapedSid + '/" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="在 ExHentai 打开"><i class="fas fa-arrow-up-right-from-square"></i></a>'
+                : '';
+            var titleTooltip = displayTitles.primary + (displayTitles.secondary ? '\n' + displayTitles.secondary : '');
             return '<div data-source="' + g.source + '" data-source-id="' + g.source_id + '">' +
-                '<div class="card h-100 gallery-card' + cardClass + '" onclick="' + clickAction + '">' +
+                '<div class="card gallery-card' + cardClass + '" onclick="' + clickAction + '">' +
                 '<div class="card-img-wrapper" style="aspect-ratio:3/4;overflow:hidden">' +
                 '<img src="' + imgUrl + '" data-fallback="' + fallbackImgUrl + '" class="card-img-top" alt="cover" loading="lazy" onerror="fallbackImageOnError(this)" onload="onCoverLoad(this)">' +
                 statusBadge +
-                '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitle) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
+                '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();deleteGalleryFromCard(this,\'' + g.source + '\',\'' + g.source_id + '\',\'' + escapeAttr(displayTitles.primary) + '\')" title="删除"><i class="fas fa-trash-alt"></i></button></div>' +
                 '</div>' +
-                '<div class="card-body p-2">' +
-                '<div class="small title-clamp" title="' + escapeAttr(displayTitle) + '">' + escapeHtml(displayTitle) + '</div>' +
-                '<div class="d-flex justify-content-between align-items-center gap-1">' +
+                '<div class="card-body px-2 py-1 card-info-body" onclick="if(event.target.closest(\'a,button\'))event.stopPropagation()">' +
+                // 第1~3行：双标题严格 3 行高共享（Flex Column + 独立 line-clamp，与 cache.js 同构）
+                // 注：_zwspWrap() 在 cache.js 里注入，给 CJK/假名/罗马字序列强制软换行点，防止 -webkit-box 里不换行
+                '<div class="title-double-clamp" title="' + escapeAttr(titleTooltip) + '">' +
+                '<div class="title-primary" style="color:var(--bs-link-color)">' + _zwspWrap(escapeHtml(displayTitles.primary)) + '</div>' +
+                (displayTitles.secondary ? '<div class="title-secondary text-muted">' + _zwspWrap(escapeHtml(displayTitles.secondary)) + '</div>' : '') +
+                '</div>' +
+                // 第4行：精简分类、语种、来源、页数 + 本地阅读/来源跳转
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-top">' +
+                catBadge +
                 langBadge +
-                '<span class="badge ' + badgeClass + '" style="font-size:.65rem">' + g.source + '</span>' +
-                '<span class="small ' + (isComplete ? 'text-muted' : 'text-warning fw-semibold') + '">' + progressText + '</span>' +
+                sourceBadge +
                 '</div>' +
+                // 第5行：压缩状态、整本节省率 + 压缩/审核按钮
+                '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom gallery-compression-row">' +
+                '<span class="gallery-compression-inline">' + (sizeMb ? sizeMb + ' · ' : '') + compressInline + '</span>' +
                 '</div>' +
+                '<span class="gallery-row-actions">' + readBtn + exLink + compressBtn + '</span>' +
+                '</div>' +
+                // F4：页数脱离信息行，成为卡片右下角的大字入口（默认态唯一强信息）
+                '<button type="button" class="' + progressClass + '" aria-expanded="false" aria-label="' + progressText + ' 页，展开明细" onclick="event.stopPropagation();toggleCardDetail(this)">' +
+                progressText + '<small>页</small></button>' +
                 '</div>' +
                 '</div>';
         }).join('') +
@@ -92,6 +235,37 @@ async function loadGalleries(filters) {
 
     renderGalleryPagination();
 }
+
+// ═══ Compress compare entry: 事件委托 ═══
+// 注意：画廊卡片主体会被完全替换（innerHTML），因此按钮委托绑在 #gallery_grid_body 上，
+// 防止 onclick 字符串拼接用户可控数据带来的转义和语法风险。
+document.addEventListener('DOMContentLoaded', function () {
+    var body = document.getElementById('gallery_grid_body');
+    if (!body) return;
+    body.addEventListener('click', function (ev) {
+        var t = ev.target && ev.target.closest ? ev.target.closest('[data-compare-gallery]') : null;
+        if (t && body.contains(t)) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            var gid = t.getAttribute('data-compare-gallery') || '';
+            var src = t.getAttribute('data-source') || '';
+            var sid = t.getAttribute('data-source-id') || '';
+            if (!gid || !src || !sid) {
+                showToast('压缩对比：缺少 gallery_id/source/source_id', 'warning');
+                return;
+            }
+            if (typeof openCompressCompare !== 'function') {
+                showToast('压缩对比模块尚未加载，请刷新页面重试', 'danger');
+                return;
+            }
+            openCompressCompare({
+                gallery_id: gid,
+                source: src,
+                source_id: sid
+            });
+        }
+    }, true);
+});
 
 function renderGalleryPagination() {
     const el = document.getElementById('gallery_pagination');

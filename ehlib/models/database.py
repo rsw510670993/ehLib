@@ -1,14 +1,18 @@
 import json
+import os
 from datetime import datetime
 import aiosqlite
 from pathlib import Path
 
 from ehlib.models.schemas import Gallery, Tag
+from ehlib.translate.tag_translator import TagTranslator
 from ehlib.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 DB_PATH = Path("data/ehlib.db")
+_QUERY_LABEL_TRANSLATOR = TagTranslator()
+_QUERY_LABEL_TRANSLATOR_LOADED = None
 
 CREATE_GALLERIES = """
 CREATE TABLE IF NOT EXISTS galleries (
@@ -32,6 +36,11 @@ CREATE TABLE IF NOT EXISTS galleries (
     is_complete INTEGER DEFAULT 0,
     created_at TEXT DEFAULT '',
     updated_at TEXT DEFAULT '',
+    tags TEXT DEFAULT '',
+    tags_cn TEXT DEFAULT '',
+    compression_status TEXT NOT NULL DEFAULT '',
+    compression_info TEXT NOT NULL DEFAULT '',
+    compression_savings_pct REAL DEFAULT NULL,
     UNIQUE(source, source_id)
 )
 """
@@ -41,6 +50,7 @@ CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,
     name TEXT NOT NULL,
+    match_keys TEXT NOT NULL DEFAULT '',
     UNIQUE(type, name)
 )
 """
@@ -86,6 +96,93 @@ CREATE TABLE IF NOT EXISTS search_presets (
 )
 """
 
+CREATE_REFRESH_TARGETS = """
+CREATE TABLE IF NOT EXISTS refresh_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    preset_id INTEGER UNIQUE,
+    origin_job_id INTEGER DEFAULT NULL,
+    name TEXT NOT NULL,
+    query TEXT NOT NULL,
+    categories TEXT DEFAULT '',
+    languages TEXT DEFAULT '',
+    force_crawl INTEGER DEFAULT 0,
+    completed_at TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT ''
+)
+"""
+CREATE_CRAWL_JOBS = """
+CREATE TABLE IF NOT EXISTS crawl_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL DEFAULT 'exhentai',
+    query TEXT NOT NULL,
+    categories TEXT DEFAULT '',
+    languages TEXT DEFAULT '',
+    force_crawl INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT '',
+    started_at TEXT DEFAULT '',
+    finished_at TEXT DEFAULT '',
+    refresh_target_id INTEGER DEFAULT NULL
+)
+"""
+
+CREATE_REMOTE_FAVORITES = """
+CREATE TABLE IF NOT EXISTS remote_favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL DEFAULT 'exhentai',
+    source_id TEXT NOT NULL,
+    favcat INTEGER NOT NULL,
+    title_en TEXT DEFAULT '',
+    title_jp TEXT DEFAULT '',
+    artists_json TEXT DEFAULT '',
+    category TEXT DEFAULT '',
+    added_at TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    thumbnail_url TEXT DEFAULT '',
+    synced_at TEXT NOT NULL DEFAULT '',
+    is_removed INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(source, source_id, favcat)
+)
+"""
+
+CREATE_EXCLUDED_SIDS = """
+CREATE TABLE IF NOT EXISTS excluded_sids (
+    source     TEXT NOT NULL,
+    source_id  TEXT NOT NULL,
+    reason     TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (source, source_id)
+)
+"""
+
+CREATE_EXCLUDED_PARTICIPANTS = """
+CREATE TABLE IF NOT EXISTS excluded_participants (
+    kind       TEXT NOT NULL,        -- 'artist' | 'group'
+    name       TEXT NOT NULL,
+    reason     TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (kind, name)
+)
+"""
+
+CREATE_TAG_BLACKLIST = """
+CREATE TABLE IF NOT EXISTS tag_blacklist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag_type TEXT NOT NULL DEFAULT '',
+    tag_value TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(tag_type, tag_value)
+)
+"""
+
+REMOTE_FAVORITE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_remote_favorites_favcat ON remote_favorites(favcat)",
+    "CREATE INDEX IF NOT EXISTS idx_remote_favorites_synced ON remote_favorites(synced_at)",
+    "CREATE INDEX IF NOT EXISTS idx_remote_favorites_source_id ON remote_favorites(source, source_id)",
+]
+
 CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_galleries_source ON galleries(source, source_id)",
     "CREATE INDEX IF NOT EXISTS idx_tags_type_name ON tags(type, name)",
@@ -98,10 +195,49 @@ CREATE_INDEXES = [
 ]
 
 
+def build_query_display_name(query: str) -> str:
+    query = (query or "").strip()
+    if not query:
+        return "未命名"
+
+    global _QUERY_LABEL_TRANSLATOR_LOADED
+    if _QUERY_LABEL_TRANSLATOR_LOADED is None:
+        _QUERY_LABEL_TRANSLATOR_LOADED = _QUERY_LABEL_TRANSLATOR.load()
+
+    if _QUERY_LABEL_TRANSLATOR_LOADED:
+        translated = _QUERY_LABEL_TRANSLATOR.translate_query_label(query).strip()
+        if translated:
+            return translated
+    return query
+
+
 class Database:
     def __init__(self, db_path: str | None = None):
         self._db_path = str(db_path or DB_PATH)
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+
+    async def _resolve_saved_search_name(
+        self,
+        db: aiosqlite.Connection,
+        query: str,
+        categories: str = "",
+        languages: str = "",
+        force_crawl: int | bool = 0,
+    ) -> str:
+        normalized_query = (query or "").strip()
+        normalized_categories = categories or ""
+        normalized_languages = languages or ""
+        normalized_force = 1 if force_crawl else 0
+        cursor = await db.execute(
+            """SELECT name FROM search_presets
+               WHERE keyword=? AND categories=? AND COALESCE(languages,'')=? AND force_crawl=?
+               ORDER BY id DESC LIMIT 1""",
+            (normalized_query, normalized_categories, normalized_languages, normalized_force),
+        )
+        row = await cursor.fetchone()
+        if row and row[0]:
+            return str(row[0])
+        return build_query_display_name(normalized_query)
 
     async def init(self) -> None:
         async with aiosqlite.connect(self._db_path) as db:
@@ -112,7 +248,15 @@ class Database:
             await db.execute(CREATE_GALLERY_TAGS)
             await db.execute(CREATE_SEARCH_CACHE)
             await db.execute(CREATE_SEARCH_PRESETS)
+            await db.execute(CREATE_CRAWL_JOBS)
+            await db.execute(CREATE_REFRESH_TARGETS)
+            await db.execute(CREATE_REMOTE_FAVORITES)
+            await db.execute(CREATE_EXCLUDED_SIDS)
+            await db.execute(CREATE_EXCLUDED_PARTICIPANTS)
+            await db.execute(CREATE_TAG_BLACKLIST)
             for index_sql in CREATE_INDEXES:
+                await db.execute(index_sql)
+            for index_sql in REMOTE_FAVORITE_INDEXES:
                 await db.execute(index_sql)
             # 兼容旧库：添加可能缺失的列
             for col in ["uploaded_at TEXT DEFAULT ''", "language TEXT DEFAULT ''", "group_name TEXT DEFAULT ''", "tags TEXT DEFAULT ''", "tags_cn TEXT DEFAULT ''"]:
@@ -120,15 +264,118 @@ class Database:
                     await db.execute(f"ALTER TABLE search_cache ADD COLUMN {col}")
                 except Exception:
                     pass
-            # 兼容旧库：search_presets 增加 languages 列，既存预设补默认语种（中日+speechless）
+            for col in [
+                "tags TEXT DEFAULT ''",
+                "tags_cn TEXT DEFAULT ''",
+                "compression_status TEXT NOT NULL DEFAULT ''",
+                "compression_info TEXT NOT NULL DEFAULT ''",
+                "compression_savings_pct REAL DEFAULT NULL",
+            ]:
+                try:
+                    await db.execute(f"ALTER TABLE galleries ADD COLUMN {col}")
+                except Exception:
+                    pass
+            try:
+                await db.execute("ALTER TABLE tags ADD COLUMN match_keys TEXT NOT NULL DEFAULT ''")
+            except Exception:
+                pass
+            # 兼容旧库：search_presets 增加 languages 列，既存预设补默认语种（中日+speechless+text cleaned）
             try:
                 await db.execute("ALTER TABLE search_presets ADD COLUMN languages TEXT DEFAULT NULL")
             except Exception:
                 pass
             try:
-                await db.execute("UPDATE search_presets SET languages='chinese,japanese,speechless' WHERE languages IS NULL")
+                await db.execute("UPDATE search_presets SET languages='japanese,chinese,speechless,text cleaned' WHERE languages IS NULL")
             except Exception:
                 pass
+            try:
+                await db.execute("ALTER TABLE crawl_jobs ADD COLUMN refresh_target_id INTEGER DEFAULT NULL")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_job_id INTEGER DEFAULT NULL")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_kind TEXT DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_artist TEXT DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE refresh_targets ADD COLUMN origin_favcats TEXT DEFAULT ''")
+            except Exception:
+                pass
+            await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_targets_origin_job ON refresh_targets(origin_job_id) WHERE origin_job_id IS NOT NULL")
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_refresh_targets_origin_kind_artist "
+                "ON refresh_targets(origin_kind, origin_artist)"
+            )
+
+            # ——— 迁移守卫：用临时表保证「老数据补 translate_tags 更新 tags_cn 列」只跑 1 次
+            try:
+                await db.execute(
+                    "CREATE TABLE IF NOT EXISTS migration_flags (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now','localtime')))"
+                )
+                cur = await db.execute(
+                    "SELECT 1 FROM migration_flags WHERE name='tag_alias_translate_v1'"
+                )
+                migrated = await cur.fetchone() is not None
+                if not migrated:
+                    global _QUERY_LABEL_TRANSLATOR_LOADED
+                    if _QUERY_LABEL_TRANSLATOR_LOADED is None:
+                        _QUERY_LABEL_TRANSLATOR_LOADED = _QUERY_LABEL_TRANSLATOR.load()
+                    tr = _QUERY_LABEL_TRANSLATOR if _QUERY_LABEL_TRANSLATOR_LOADED else None
+                    # 1) search_cache：所有 tags 非空的行全量重跑 translate_tags（逐 tag 补缺，幂等）
+                    try:
+                        sc_cur = await db.execute(
+                            "SELECT rowid, tags, tags_cn FROM search_cache WHERE (tags IS NOT NULL AND tags!='') LIMIT -1"
+                        )
+                        sc_rows = await sc_cur.fetchall()
+                    except Exception:
+                        sc_rows = []
+                    for sc_r in sc_rows:
+                        try:
+                            raw_tags = str(sc_r[1] if isinstance(sc_r[1], str) else "")
+                            if not raw_tags:
+                                continue
+                            new_cn = tr.translate_tags(raw_tags) if tr else raw_tags
+                            if new_cn and new_cn != str(sc_r[2] if sc_r[2] is not None else ""):
+                                await db.execute(
+                                    "UPDATE search_cache SET tags_cn=? WHERE rowid=?",
+                                    (new_cn, sc_r[0]),
+                                )
+                        except Exception:
+                            continue
+                    # 2) galleries：同理全量重跑
+                    try:
+                        g_cur = await db.execute(
+                            "SELECT id, tags, tags_cn FROM galleries WHERE (tags IS NOT NULL AND tags!='') LIMIT -1"
+                        )
+                        g_rows = await g_cur.fetchall()
+                    except Exception:
+                        g_rows = []
+                    for g_r in g_rows:
+                        try:
+                            raw_tags = str(g_r[1] if isinstance(g_r[1], str) else "")
+                            if not raw_tags:
+                                continue
+                            new_cn = tr.translate_tags(raw_tags) if tr else raw_tags
+                            if new_cn and new_cn != str(g_r[2] if g_r[2] is not None else ""):
+                                await db.execute(
+                                    "UPDATE galleries SET tags_cn=? WHERE id=?",
+                                    (new_cn, g_r[0]),
+                                )
+                        except Exception:
+                            continue
+                    await db.execute(
+                        "INSERT OR IGNORE INTO migration_flags (name) VALUES ('tag_alias_translate_v1')"
+                    )
+            except Exception:
+                pass
+
             await db.commit()
 
     async def gallery_exists(self, source: str, source_id: str) -> bool:
@@ -169,6 +416,35 @@ class Database:
             )
             existing = await cursor.fetchone()
 
+            # ——— 提前构造 gallery.tags 的 JSON 序列化 + translate_tags 后的 tags_cn JSON
+            #     供 galleries 表 tags/tags_cn 两列写入 + tag_blacklist 钩子复用
+            tags_json = ""
+            tags_cn_json = ""
+            if gallery.tags:
+                try:
+                    serialized = []
+                    for t in gallery.tags:
+                        item = {"type": t.type, "name": t.name}
+                        if isinstance(getattr(t, 'match_keys', None), list):
+                            item["match_keys"] = [str(k) for k in t.match_keys if k is not None and str(k) != ""]
+                        if isinstance(getattr(t, 'name_cn', None), str) and getattr(t, 'name_cn', ''):
+                            item["name_cn"] = t.name_cn
+                        serialized.append(item)
+                    tags_json = json.dumps(serialized, ensure_ascii=False)
+                except Exception:
+                    tags_json = ""
+                if tags_json:
+                    try:
+                        global _QUERY_LABEL_TRANSLATOR_LOADED
+                        if _QUERY_LABEL_TRANSLATOR_LOADED is None:
+                            _QUERY_LABEL_TRANSLATOR_LOADED = _QUERY_LABEL_TRANSLATOR.load()
+                        if _QUERY_LABEL_TRANSLATOR_LOADED:
+                            tags_cn_json = _QUERY_LABEL_TRANSLATOR.translate_tags(tags_json) or tags_json
+                        else:
+                            tags_cn_json = tags_json
+                    except Exception:
+                        tags_cn_json = tags_json
+
             if existing:
                 gallery_id = existing[0]
                 await db.execute(
@@ -176,7 +452,8 @@ class Database:
                        title=?, title_jp=?, artist=?, group_name=?,
                        language=?, category=?, total_pages=?, cover_url=?, cover_path=?,
                        thumbnail_url=?, uploaded_at=?, local_path=?, downloaded_at=?,
-                       file_size=?, is_complete=?, created_at=?, updated_at=?
+                       file_size=?, is_complete=?, created_at=?, updated_at=?,
+                       tags=?, tags_cn=?
                        WHERE id=?""",
                     (
                         gallery.title, gallery.title_jp, gallery.artist,
@@ -186,6 +463,7 @@ class Database:
                         gallery.local_path or existing[1], gallery.downloaded_at,
                         gallery.file_size, int(gallery.is_complete),
                         gallery.created_at, gallery.updated_at,
+                        tags_json, tags_cn_json,
                         gallery_id,
                     ),
                 )
@@ -195,8 +473,9 @@ class Database:
                        (source, source_id, title, title_jp, artist, group_name,
                         language, category, total_pages, cover_url, cover_path,
                         thumbnail_url, uploaded_at, local_path, downloaded_at,
-                        file_size, is_complete, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        file_size, is_complete, created_at, updated_at,
+                        tags, tags_cn)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         gallery.source, gallery.source_id, gallery.title,
                         gallery.title_jp, gallery.artist, gallery.group_name,
@@ -205,6 +484,7 @@ class Database:
                         gallery.uploaded_at, gallery.local_path, gallery.downloaded_at,
                         gallery.file_size, int(gallery.is_complete),
                         gallery.created_at, gallery.updated_at,
+                        tags_json, tags_cn_json,
                     ),
                 )
                 gallery_id = cursor.lastrowid or 0
@@ -215,25 +495,72 @@ class Database:
                 await self._link_tags(db, gallery_id, tag_ids)
 
             await db.commit()
+
+            # ——— 同步钩子：若命中 tag_blacklist → 写 excluded_sids + 从 galleries 立即删除
+            applied = await self._apply_tag_blacklist_to_entry(
+                db=db,
+                source=gallery.source,
+                source_id=gallery.source_id,
+                title=gallery.title,
+                title_jp=gallery.title_jp,
+                artist=gallery.artist,
+                group_name=gallery.group_name,
+                tags=tags_json,
+                tags_cn=tags_cn_json,
+            )
+            if applied:
+                # 命中黑名单后连带清 galleries 与本地记录，防止删除根除不了反复回显
+                try:
+                    import shutil
+                    lp = gallery.local_path
+                    if lp and os.path.isdir(lp):
+                        shutil.rmtree(lp, ignore_errors=True)
+                except Exception:
+                    pass
+                await db.execute("DELETE FROM galleries WHERE source=? AND source_id=?", (gallery.source, gallery.source_id))
+                await db.commit()
+                gallery_id = 0
+
             return gallery_id
 
     async def _save_tags(self, db: aiosqlite.Connection, tags: list[Tag]) -> list[int]:
         tag_ids = []
         for tag in tags:
-            cursor = await db.execute(
-                "INSERT OR IGNORE INTO tags (type, name) VALUES (?, ?)",
-                (tag.type, tag.name),
-            )
-            if cursor.rowcount > 0 and cursor.lastrowid:
-                tag_ids.append(cursor.lastrowid)
-            else:
+            mk_raw = ""
+            if isinstance(getattr(tag, 'match_keys', None), list):
+                cleaned = [str(k) for k in tag.match_keys if k is not None and str(k) != ""]
+                if cleaned:
+                    try:
+                        mk_raw = json.dumps(cleaned, ensure_ascii=False)
+                    except Exception:
+                        mk_raw = ""
+            inserted = False
+            try:
                 cursor = await db.execute(
-                    "SELECT id FROM tags WHERE type=? AND name=?",
+                    "INSERT OR IGNORE INTO tags (type, name, match_keys) VALUES (?, ?, ?)",
+                    (tag.type, tag.name, mk_raw),
+                )
+                if cursor.rowcount > 0 and cursor.lastrowid:
+                    tag_ids.append(cursor.lastrowid)
+                    inserted = True
+            except Exception:
+                inserted = False
+            if not inserted:
+                cursor = await db.execute(
+                    "SELECT id, match_keys FROM tags WHERE type=? AND name=?",
                     (tag.type, tag.name),
                 )
                 row = await cursor.fetchone()
                 if row:
                     tag_ids.append(row[0])
+                    if mk_raw and (row[1] is None or str(row[1]) == ""):
+                        try:
+                            await db.execute(
+                                "UPDATE tags SET match_keys=? WHERE id=?",
+                                (mk_raw, row[0]),
+                            )
+                        except Exception:
+                            pass
         return tag_ids
 
     async def _link_tags(self, db: aiosqlite.Connection, gallery_id: int, tag_ids: list[int]) -> None:
@@ -357,7 +684,7 @@ class Database:
 
     async def _get_tags_for_gallery(self, db: aiosqlite.Connection, gallery_id: int) -> list[Tag]:
         cursor = await db.execute(
-            """SELECT t.id, t.type, t.name
+            """SELECT t.id, t.type, t.name, COALESCE(t.match_keys, '')
                FROM tags t
                JOIN gallery_tags gt ON t.id = gt.tag_id
                WHERE gt.gallery_id = ?
@@ -365,7 +692,98 @@ class Database:
             (gallery_id,),
         )
         rows = await cursor.fetchall()
-        return [Tag(id=row[0], type=row[1], name=row[2]) for row in rows]
+        result: list[Tag] = []
+        for row in rows:
+            mk_list: list[str] = []
+            mk_raw = row[3] if len(row) > 3 and row[3] is not None else ""
+            if mk_raw:
+                try:
+                    parsed = json.loads(str(mk_raw))
+                    if isinstance(parsed, list):
+                        mk_list = [str(x) for x in parsed if x is not None and str(x) != ""]
+                except Exception:
+                    mk_list = []
+            # 如果 DB 没存 match_keys，fallback 对 name 自己拆 | 作为别名
+            if not mk_list and row[2]:
+                try:
+                    import re as _re
+                    parts = _re.split(r'\s*\|\s*', str(row[2]))
+                    mk_list = [p.strip() for p in parts if p and p.strip()]
+                except Exception:
+                    mk_list = []
+            result.append(Tag(id=row[0], type=row[1], name=row[2], match_keys=mk_list))
+        return result
+
+    # ── Tag Blacklist 同步入表钩子（一劳永逸解决 males only / dickgirl 等 fuzzy 标签在重复获取模式下"无法靠删除根除"问题）──────
+    async def _load_compiled_blacklist(
+        self,
+        db: aiosqlite.Connection,
+    ):
+        """读取 tag_blacklist 所有规则 + 用同于 PHP 前端 cache_search 的正则编译；
+        空时返回 None 避免 O(N*rules) 的正则构造成本。"""
+        try:
+            cursor = await db.execute(
+                "SELECT tag_type, tag_value FROM tag_blacklist WHERE tag_value IS NOT NULL AND tag_value!=''"
+            )
+            rows = await cursor.fetchall()
+        except Exception:
+            return None
+        if not rows:
+            return None
+        # 懒加载（避免启动时 import 成本），避免 tag_blacklist 表不存在时 import 报错
+        try:
+            from ehlib.utils.tag_blacklist import compile_blacklist
+        except Exception:
+            return None
+        return compile_blacklist([(r[0] if r and len(r) > 0 else "", r[1] if r and len(r) > 1 else "") for r in rows])
+
+    async def _apply_tag_blacklist_to_entry(
+        self,
+        db: aiosqlite.Connection,
+        *,
+        source: str,
+        source_id: str,
+        title: str = "",
+        title_jp: str = "",
+        artist: str = "",
+        group_name: str = "",
+        tags: str = "",
+        tags_cn: str = "",
+    ) -> bool:
+        """
+        判断 1 条漫画条目是否命中 tag_blacklist。
+        命中 → INSERT OR IGNORE excluded_sids（同步理由，O(1) 主键判重），并返回 True。
+        未命中 → 返回 False。
+        """
+        if not source or not source_id:
+            return False
+        cb = await self._load_compiled_blacklist(db)
+        if cb is None or cb.is_empty:
+            return False
+        try:
+            from ehlib.utils.tag_blacklist import entry_matches_blacklist
+        except Exception:
+            return False
+        matched, _reason = entry_matches_blacklist(
+            cb,
+            title=title or "",
+            title_jp=title_jp or "",
+            artist=artist or "",
+            group_name=group_name or "",
+            tags=tags or "",
+            tags_cn=tags_cn or "",
+        )
+        if not matched:
+            return False
+        reason_text = "auto by tag_blacklist on save_gallery/save_search_results hook"
+        try:
+            await db.execute(
+                "INSERT OR IGNORE INTO excluded_sids (source, source_id, reason) VALUES (?,?,?)",
+                (source, source_id, reason_text),
+            )
+        except Exception:
+            return False
+        return True
 
     async def get_gallery_tags(self, gallery_id: int) -> list[Tag]:
         async with aiosqlite.connect(self._db_path) as db:
@@ -425,8 +843,9 @@ class Database:
                 cursor = await db.execute(
                     """INSERT OR IGNORE INTO search_cache
                        (source, source_id, title, title_jp, artist, category,
-                        total_pages, uploaded_at, thumbnail, searched_at, crawled_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        total_pages, uploaded_at, thumbnail, searched_at, crawled_at,
+                        tags, tags_cn, language, group_name)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         r.get("source", "exhentai"),
                         r.get("source_id", ""),
@@ -439,19 +858,177 @@ class Database:
                         r.get("thumbnail", ""),
                         now,
                         now,
+                        r.get("tags", "") if isinstance(r.get("tags"), str) else "",
+                        r.get("tags_cn", "") if isinstance(r.get("tags_cn"), str) else "",
+                        r.get("language", "") if isinstance(r.get("language"), str) else "",
+                        r.get("group_name", "") if isinstance(r.get("group_name"), str) else "",
                     ),
                 )
                 if cursor.rowcount > 0:
                     saved += 1
-            # Update searched_at + thumbnail for existing records
+            # Update searched_at + thumbnail + tags_cn (translate if missing) for existing records
+            global _QUERY_LABEL_TRANSLATOR_LOADED
+            tr_loaded = False
+            tr = None
             for r in results:
+                raw_tags = r.get("tags", "") if isinstance(r.get("tags"), str) else ""
+                raw_tags_cn = r.get("tags_cn", "") if isinstance(r.get("tags_cn"), str) else ""
+                # 若传入 tags 有值但 tags_cn 没带 name_cn，懒加载翻译器现场补一次 translate_tags
+                if raw_tags and (not raw_tags_cn or '"name_cn"' not in raw_tags_cn):
+                    try:
+                        if not tr_loaded:
+                            if _QUERY_LABEL_TRANSLATOR_LOADED is None:
+                                _QUERY_LABEL_TRANSLATOR_LOADED = _QUERY_LABEL_TRANSLATOR.load()
+                            tr = _QUERY_LABEL_TRANSLATOR if _QUERY_LABEL_TRANSLATOR_LOADED else None
+                            tr_loaded = True
+                        if tr is not None:
+                            translated = tr.translate_tags(raw_tags)
+                            if translated:
+                                raw_tags_cn = translated
+                    except Exception:
+                        pass
                 await db.execute(
-                    "UPDATE search_cache SET searched_at=?, thumbnail=? WHERE source=? AND source_id=?",
-                    (now, r.get("thumbnail", ""), r.get("source", "exhentai"), r.get("source_id", "")),
+                    "UPDATE search_cache SET searched_at=?, thumbnail=?, tags=COALESCE(NULLIF(?,''),tags), tags_cn=COALESCE(NULLIF(?,''),tags_cn), language=COALESCE(NULLIF(?,''),language), group_name=COALESCE(NULLIF(?,''),group_name) WHERE source=? AND source_id=?",
+                    (
+                        now,
+                        r.get("thumbnail", ""),
+                        raw_tags,
+                        raw_tags_cn,
+                        r.get("language", "") if isinstance(r.get("language"), str) else "",
+                        r.get("group_name", "") if isinstance(r.get("group_name"), str) else "",
+                        r.get("source", "exhentai"),
+                        r.get("source_id", ""),
+                    ),
+                )
+            await db.commit()
+
+            # ——— 同步钩子：把这批 search_cache 新条目里命中 tag_blacklist 的立即写 excluded_sids
+            #     避免重复获取模式下 fuzzy 标签反复出现在缓存首页
+            for r in results:
+                await self._apply_tag_blacklist_to_entry(
+                    db=db,
+                    source=r.get("source", "exhentai"),
+                    source_id=r.get("source_id", ""),
+                    title=r.get("title", ""),
+                    title_jp=r.get("title_jp", ""),
+                    artist=r.get("artist", ""),
+                    group_name=r.get("group_name", "") if isinstance(r.get("group_name"), str) else "",
+                    tags=r.get("tags", "") if isinstance(r.get("tags"), str) else "",
+                    tags_cn=r.get("tags_cn", "") if isinstance(r.get("tags_cn"), str) else "",
                 )
             await db.commit()
         return saved
 
+    async def set_search_cache_origin(self, source: str, source_ids: list[str], job_id: int) -> None:
+        if not source_ids:
+            return
+        async with aiosqlite.connect(self._db_path) as db:
+            placeholders = ",".join("?" for _ in source_ids)
+            await db.execute(
+                f"UPDATE search_cache SET origin_job_id=? WHERE source=? AND source_id IN ({placeholders})",
+                [job_id, source, *source_ids],
+            )
+            await db.commit()
+
+    async def register_completed_refresh_target(self, source: str, source_id: str) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT j.* FROM search_cache sc
+                   JOIN crawl_jobs j ON j.id=sc.origin_job_id
+                   WHERE sc.source=? AND sc.source_id=?""",
+                (source, source_id),
+            )
+            job = await cursor.fetchone()
+            if job is None or job["refresh_target_id"] is not None:
+                return False
+            name = await self._resolve_saved_search_name(
+                db,
+                job["query"],
+                job["categories"],
+                job["languages"],
+                job["force_crawl"],
+            )
+            cursor = await db.execute(
+                """INSERT OR IGNORE INTO refresh_targets
+                   (preset_id,origin_job_id,name,query,categories,languages,force_crawl,completed_at,enabled,created_at)
+                   VALUES (NULL,?,?,?,?,?,?,?,1,?)""",
+                (job["id"], name, job["query"], job["categories"], job["languages"], job["force_crawl"], datetime.now().isoformat(), datetime.now().isoformat()),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def register_completed_crawl_job(self, job_id: int) -> bool:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT id, query, categories, languages, force_crawl, refresh_target_id, status
+                   FROM crawl_jobs
+                   WHERE id=?""",
+                (job_id,),
+            )
+            job = await cursor.fetchone()
+            if job is None or job["refresh_target_id"] is not None or job["status"] != "completed":
+                return False
+            name = await self._resolve_saved_search_name(
+                db,
+                job["query"],
+                job["categories"],
+                job["languages"],
+                job["force_crawl"],
+            )
+            cursor = await db.execute(
+                """INSERT OR IGNORE INTO refresh_targets
+                   (preset_id,origin_job_id,name,query,categories,languages,force_crawl,completed_at,enabled,created_at)
+                   VALUES (NULL,?,?,?,?,?,?,?,1,?)""",
+                (
+                    job["id"],
+                    name,
+                    job["query"],
+                    job["categories"],
+                    job["languages"],
+                    job["force_crawl"],
+                    datetime.now().isoformat(),
+                    datetime.now().isoformat(),
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def backfill_search_and_refresh_names(self) -> dict[str, int]:
+        stats = {"search_presets": 0, "refresh_targets": 0}
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            preset_rows = await (await db.execute(
+                "SELECT id, keyword FROM search_presets ORDER BY id"
+            )).fetchall()
+            for row in preset_rows:
+                name = build_query_display_name(row["keyword"] or "")
+                cursor = await db.execute(
+                    "UPDATE search_presets SET name=? WHERE id=? AND COALESCE(name,'')<>?",
+                    (name, row["id"], name),
+                )
+                stats["search_presets"] += cursor.rowcount
+
+            target_rows = await (await db.execute(
+                "SELECT id, query, categories, languages, force_crawl FROM refresh_targets ORDER BY id"
+            )).fetchall()
+            for row in target_rows:
+                name = await self._resolve_saved_search_name(
+                    db,
+                    row["query"],
+                    row["categories"],
+                    row["languages"],
+                    row["force_crawl"],
+                )
+                cursor = await db.execute(
+                    "UPDATE refresh_targets SET name=? WHERE id=? AND COALESCE(name,'')<>?",
+                    (name, row["id"], name),
+                )
+                stats["refresh_targets"] += cursor.rowcount
+
+            await db.commit()
+        return stats
     async def search_cache_exists(self, source: str, source_id: str) -> bool:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
@@ -459,6 +1036,34 @@ class Database:
                 (source, source_id),
             )
             return await cursor.fetchone() is not None
+
+    async def get_search_cache_states(
+        self, source: str, source_ids: list[str]
+    ) -> dict[str, tuple[str, int | None]]:
+        """Return upload date and origin job for cache rows that already exist."""
+        unique_ids = list(dict.fromkeys(sid for sid in source_ids if sid))
+        if not unique_ids:
+            return {}
+
+        states: dict[str, tuple[str, int | None]] = {}
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # Keep comfortably below SQLite's variable limit.
+            for start in range(0, len(unique_ids), 900):
+                chunk = unique_ids[start:start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = await db.execute(
+                    f"""SELECT source_id, uploaded_at, origin_job_id
+                        FROM search_cache
+                        WHERE source=? AND source_id IN ({placeholders})""",
+                    [source, *chunk],
+                )
+                for row in await cursor.fetchall():
+                    states[row["source_id"]] = (
+                        row["uploaded_at"] or "",
+                        row["origin_job_id"],
+                    )
+        return states
 
     async def get_search_cache(
         self,
@@ -571,6 +1176,80 @@ class Database:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
+    async def enqueue_enabled_refresh_targets(self) -> int:
+        category_map = {
+            "Misc": 1, "Doujinshi": 2, "Manga": 4, "Artist CG": 8,
+            "Game CG": 16, "Image Set": 32, "Cosplay": 64,
+            "Asian Porn": 128, "Non-H": 256, "Western": 512,
+        }
+        queued = 0
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            active_batch = await db.execute(
+                "SELECT 1 FROM crawl_jobs WHERE refresh_target_id IS NOT NULL "
+                "AND status IN ('pending','running','cancel_requested') LIMIT 1"
+            )
+            if await active_batch.fetchone():
+                await db.rollback()
+                return 0
+            cursor = await db.execute("SELECT * FROM refresh_targets WHERE enabled=1 ORDER BY id")
+            for row in await cursor.fetchall():
+                active = await db.execute(
+                    "SELECT 1 FROM crawl_jobs WHERE refresh_target_id=? AND status IN ('pending','running','cancel_requested') LIMIT 1",
+                    (row["id"],),
+                )
+                if await active.fetchone():
+                    continue
+                category_values = [str(category_map[name.strip()]) for name in (row["categories"] or "").split(",") if name.strip() in category_map]
+                await db.execute(
+                    """INSERT INTO crawl_jobs
+                       (source,query,categories,languages,force_crawl,status,created_at,refresh_target_id)
+                       VALUES ('exhentai',?,?,?,?, 'pending', ?, ?)""",
+                    (row["query"], ",".join(category_values), row["languages"], row["force_crawl"], datetime.now().isoformat(), row["id"]),
+                )
+                queued += 1
+            await db.commit()
+        return queued
+    async def recover_interrupted_crawl_jobs(self) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("UPDATE crawl_jobs SET status='pending', started_at='' WHERE status='running'")
+            await db.execute(
+                "UPDATE crawl_jobs SET status='cancelled', finished_at=? WHERE status='cancel_requested'",
+                (datetime.now().isoformat(),),
+            )
+            await db.commit()
+    async def claim_next_crawl_job(self) -> dict | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT * FROM crawl_jobs WHERE status='pending' ORDER BY id LIMIT 1"
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                await db.commit()
+                return None
+            await db.execute(
+                "UPDATE crawl_jobs SET status='running', started_at=?, error='' WHERE id=?",
+                (datetime.now().isoformat(), row["id"]),
+            )
+            await db.commit()
+            return dict(row)
+
+    async def get_crawl_job_status(self, job_id: int) -> str:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute("SELECT status FROM crawl_jobs WHERE id=?", (job_id,))
+            row = await cursor.fetchone()
+            return str(row[0]) if row else ""
+
+    async def finish_crawl_job(self, job_id: int, status: str, error: str = "") -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "UPDATE crawl_jobs SET status=?, error=?, finished_at=? WHERE id=?",
+                (status, error, datetime.now().isoformat(), job_id),
+            )
+            await db.commit()
     async def delete_search_cache(self, source: str, source_id: str) -> bool:
         async with aiosqlite.connect(self._db_path) as db:
             cursor = await db.execute(
@@ -642,6 +1321,35 @@ class Database:
             await db.commit()
             return cursor.rowcount > 0
 
+    async def update_gallery_compression(
+        self,
+        source: str,
+        source_id: str,
+        status: str,
+        info_json: str,
+    ) -> bool:
+        """记录下载阶段已经直接应用的图片转码结果。"""
+        try:
+            info = json.loads(info_json)
+        except (TypeError, ValueError):
+            info = {}
+        savings_pct = info.get("savings_pct_overall") if isinstance(info, dict) else None
+        if savings_pct is not None:
+            try:
+                savings_pct = float(savings_pct)
+            except (TypeError, ValueError):
+                savings_pct = None
+        stored_info = "" if status in {"applied", "compressed", "skipped"} else info_json
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                """UPDATE galleries
+                      SET compression_status=?, compression_info=?, compression_savings_pct=?, updated_at=?
+                    WHERE source=? AND source_id=?""",
+                (status, stored_info, savings_pct, datetime.now().isoformat(), source, source_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def export_json(self, output_path: str) -> None:
         galleries = await self.search_galleries(limit=999999)
         result = []
@@ -663,3 +1371,389 @@ class Database:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         logger.info("Exported %d galleries to %s", len(result), output_path)
+
+    async def upsert_remote_favorites(
+        self,
+        items: list[dict],
+        favcat: int,
+        synced_at: str,
+    ) -> tuple[set[str], int]:
+        """对单个 favcat 的一页列表做快照 upsert。
+        返回 (当前 favcat 本轮已见到的 source_id 集合, updated_count)。
+        """
+        now = synced_at or datetime.now().isoformat()
+        seen: set[str] = set()
+        updated = 0
+        if not items:
+            return seen, 0
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("PRAGMA synchronous=OFF")
+            for r in items:
+                source = (r.get("source") or "exhentai").strip() or "exhentai"
+                source_id = (r.get("source_id") or "").strip()
+                if not source_id:
+                    continue
+                seen.add(source_id)
+                title = (r.get("title") or r.get("title_en") or "").strip()
+                title_jp = (r.get("title_jp") or "").strip()
+                artists_raw_list = None
+                artists_json_raw = r.get("artists_json")
+                if artists_json_raw is None:
+                    artists_raw_list = list(r.get("artists") or [])
+                elif isinstance(artists_json_raw, list):
+                    artists_raw_list = list(artists_json_raw)
+                else:
+                    try:
+                        parsed = json.loads(str(artists_json_raw))
+                        artists_raw_list = list(parsed) if isinstance(parsed, list) else None
+                    except Exception:
+                        artists_raw_list = None
+                normalized_artists: list[str] = []
+                _seen_norm = set()
+                if artists_raw_list is not None:
+                    _ARTIST_TAGKEY_FROM_QUERY_RE = None
+                    for _ar in artists_raw_list:
+                        s = str(_ar or "").strip()
+                        if not s:
+                            continue
+                        if _ARTIST_TAGKEY_FROM_QUERY_RE is None:
+                            import re as _re
+                            _ARTIST_TAGKEY_FROM_QUERY_RE = _re.compile(
+                                r'^artist\s*:\s*"([^"$]+)\$?"\s*$', _re.IGNORECASE
+                            )
+                        m = _ARTIST_TAGKEY_FROM_QUERY_RE.match(s)
+                        if m:
+                            s = m.group(1).strip()
+                        if "|" in s:
+                            s = s.split("|", 1)[0].strip()
+                        s = s.rstrip("$").strip()
+                        if "%" in s:
+                            try:
+                                from urllib.parse import unquote as _unquote
+                                s = _unquote(s)
+                            except Exception:
+                                pass
+                        s = s.strip()
+                        if s and s.lower() not in _seen_norm:
+                            _seen_norm.add(s.lower())
+                            normalized_artists.append(s)
+                artists_json = json.dumps(normalized_artists, ensure_ascii=False) if normalized_artists else ""
+                category = (r.get("category") or "").strip()
+                added_at = (r.get("added_at") or "").strip()
+                note = (r.get("note") or "").strip()
+                thumb = (r.get("thumbnail_url") or r.get("thumbnail") or "").strip()
+                cursor = await db.execute(
+                    """
+                    INSERT INTO remote_favorites
+                      (source, source_id, favcat, title_en, title_jp, artists_json,
+                       category, added_at, note, thumbnail_url, synced_at, is_removed)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,0)
+                    ON CONFLICT(source, source_id, favcat) DO UPDATE SET
+                        title_en=excluded.title_en,
+                        title_jp=CASE WHEN excluded.title_jp<>'' THEN excluded.title_jp ELSE remote_favorites.title_jp END,
+                        artists_json=CASE WHEN excluded.artists_json<>'' THEN excluded.artists_json ELSE remote_favorites.artists_json END,
+                        category=excluded.category,
+                        added_at=CASE WHEN excluded.added_at<>'' THEN excluded.added_at ELSE remote_favorites.added_at END,
+                        note=excluded.note,
+                        thumbnail_url=CASE WHEN excluded.thumbnail_url<>'' THEN excluded.thumbnail_url ELSE remote_favorites.thumbnail_url END,
+                        synced_at=excluded.synced_at,
+                        is_removed=0
+                    """,
+                    (
+                        source, source_id, int(favcat),
+                        title, title_jp, artists_json,
+                        category, added_at, note, thumb, now,
+                    ),
+                )
+                updated += max(0, cursor.rowcount) if cursor.rowcount is not None else 0
+            await db.commit()
+        return seen, updated
+
+    async def mark_removed_remote_favorites(
+        self,
+        source: str,
+        favcat: int,
+        current_ids: set[str],
+        synced_at: str,
+    ) -> int:
+        """对单个 favcat：没出现在 current_ids 里的条目标记 is_removed=1。
+        返回被标记为移除的行数。
+        """
+        src = (source or "exhentai").strip() or "exhentai"
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT source_id FROM remote_favorites WHERE source=? AND favcat=? AND is_removed=0",
+                (src, int(favcat)),
+            )
+            rows = await cur.fetchall()
+            existing = {row["source_id"] for row in rows}
+            missing = existing - set(current_ids or set())
+            if not missing:
+                return 0
+            placeholders = ",".join("?" for _ in missing)
+            params = [synced_at or datetime.now().isoformat(), src, int(favcat), *list(missing)]
+            cursor = await db.execute(
+                f"UPDATE remote_favorites SET is_removed=1, synced_at=? "
+                f"WHERE source=? AND favcat=? AND source_id IN ({placeholders})",
+                params,
+            )
+            await db.commit()
+            return max(0, cursor.rowcount) if cursor.rowcount is not None else 0
+
+    async def update_remote_favorite_artists(
+        self,
+        source: str,
+        source_id: str,
+        artists: list[str],
+        synced_at: str,
+    ) -> bool:
+        """抓完详情页后，把一本收藏的多作者写回快照表。
+        返回 True 表示更新过。
+        """
+        src = (source or "exhentai").strip() or "exhentai"
+        if not source_id:
+            return False
+        artists_json = json.dumps(list(artists or []), ensure_ascii=False) if artists else ""
+        now = synced_at or datetime.now().isoformat()
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute(
+                "UPDATE remote_favorites SET artists_json=?, synced_at=? "
+                "WHERE source=? AND source_id=?",
+                (artists_json, now, src, source_id),
+            )
+            await db.commit()
+            count = cursor.rowcount or 0
+            return count > 0
+
+    async def upsert_favorite_artist_refresh_targets(
+        self,
+        artist_favcats_map: dict[str, set[int]],
+        no_upsert_name: bool = False,
+    ) -> dict:
+        """根据聚合好的 {artist: set[favcat, ...]} 生成/更新刷新对象。
+        去重键：origin_kind='favorite_artist' AND origin_artist=?
+        返回统计 dict：
+          created, updated, name_skipped_user_custom, skipped_unchanged,
+          skipped_duplicate_existing（完全一致的老对象，跳过）,
+          origin_backfilled（老对象 origin_kind 空，被我们补了 origin 字段）,
+          total_unique_artists
+        """
+        stats = {
+            "created": 0,
+            "updated": 0,
+            "name_skipped_user_custom": 0,
+            "skipped_unchanged": 0,
+            "skipped_duplicate_existing": 0,
+            "origin_backfilled": 0,
+            "total_unique_artists": len(artist_favcats_map or {}),
+        }
+        if not artist_favcats_map:
+            return stats
+
+        DEFAULT_LANGS = "japanese,chinese,speechless,text cleaned"
+        now = datetime.now().isoformat()
+        import re as _re
+        _ARTIST_TAGKEY_FROM_QUERY = _re.compile(r'^artist\s*:\s*"([^"$]+)\$?"\s*$', _re.IGNORECASE)
+        def _normalize_artist_tagkey(raw) -> str:
+            s = str(raw or "").strip()
+            if not s: return ""
+            m = _ARTIST_TAGKEY_FROM_QUERY.match(s)
+            if m: s = m.group(1).strip()
+            if "|" in s:
+                s = s.split("|", 1)[0].strip()
+            s = s.rstrip("$").strip()
+            if "%" in s:
+                try:
+                    from urllib.parse import unquote as _unquote
+                    s = _unquote(s)
+                except Exception:
+                    pass
+            return s.strip()
+
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            for artist, favcats_set in (artist_favcats_map or {}).items():
+                artist_clean = _normalize_artist_tagkey(artist)
+                if not artist_clean:
+                    continue
+                query = f'artist:"{artist_clean}$"'
+                categories = "Doujinshi,Manga,Artist CG,Game CG,Image Set"
+                languages = DEFAULT_LANGS
+                force_crawl = 0
+                enabled_target = 1
+                system_computed_name = await self._resolve_saved_search_name(
+                    db, query, categories, languages, force_crawl
+                )
+                origin_favcats_csv = ",".join(
+                    str(c) for c in sorted({int(c) for c in (favcats_set or set()) if 0 <= int(c) <= 9})
+                )
+
+                existing = await (await db.execute(
+                    "SELECT * FROM refresh_targets WHERE origin_kind='favorite_artist' AND origin_artist=? LIMIT 1",
+                    (artist_clean,),
+                )).fetchone()
+
+                backfill_hit = False
+                if existing is None:
+                    existing_by_query = await (await db.execute(
+                        """SELECT * FROM refresh_targets
+                           WHERE query=? AND COALESCE(categories,'')=? AND COALESCE(languages,'')=?
+                           AND force_crawl=0 AND (COALESCE(origin_kind,'')='' OR origin_kind='favorite_artist')
+                           LIMIT 1""",
+                        (query, categories, languages),
+                    )).fetchone()
+                    if existing_by_query is not None:
+                        existing = existing_by_query
+                        backfill_hit = True
+
+                if existing is None:
+                    cursor = await db.execute(
+                        """INSERT INTO refresh_targets
+                           (preset_id,origin_job_id,name,query,categories,languages,force_crawl,
+                            completed_at,enabled,created_at,origin_kind,origin_artist,origin_favcats)
+                           VALUES (NULL,NULL,?,?,?,?,?, '',1,?, 'favorite_artist',?, ?)""",
+                        (
+                            system_computed_name, query, categories, languages, force_crawl,
+                            now, artist_clean, origin_favcats_csv,
+                        ),
+                    )
+                    if (cursor.rowcount or 0) > 0:
+                        stats["created"] += 1
+                    continue
+
+                target_id = existing["id"]
+                # UPDATE 保护：避免覆盖用户手动值
+                current_name = str(existing["name"] or "")
+                current_origin_favcats = str(existing["origin_favcats"] or "")
+                current_enabled = 1 if bool(existing["enabled"]) else 0
+                current_origin_kind = str(existing["origin_kind"] or "")
+                current_origin_artist = str(existing["origin_artist"] or "")
+                current_query = str(existing["query"] or "")
+                current_languages = str(existing["languages"] or "")
+                current_categories = str(existing["categories"] or "")
+                current_force_crawl = int(existing["force_crawl"]) if str(existing["force_crawl"]).strip() != "" else 0
+
+                user_changed_name = bool(current_name) and current_name != system_computed_name
+                set_clauses = []
+                params = []
+
+                origin_fields_changed = False
+                if current_origin_kind != "favorite_artist":
+                    set_clauses.append("origin_kind=?")
+                    params.append("favorite_artist")
+                    origin_fields_changed = True
+                if current_origin_artist != artist_clean:
+                    set_clauses.append("origin_artist=?")
+                    params.append(artist_clean)
+                    origin_fields_changed = True
+
+                old_set = {
+                    c.strip() for c in (current_origin_favcats or "").split(",") if c.strip()
+                }
+                new_set = {str(c) for c in sorted({int(c) for c in (favcats_set or set()) if 0 <= int(c) <= 9})}
+                merged_favcats_csv = ",".join(sorted(old_set | new_set, key=lambda x: int(x)))
+                if merged_favcats_csv != current_origin_favcats:
+                    set_clauses.append("origin_favcats=?")
+                    params.append(merged_favcats_csv)
+                    origin_fields_changed = True
+
+                if backfill_hit and origin_fields_changed:
+                    stats["origin_backfilled"] += 1
+
+                if (not current_languages) and languages:
+                    set_clauses.append("languages=?")
+                    params.append(languages)
+                if (not current_categories) and categories:
+                    set_clauses.append("categories=?")
+                    params.append(categories)
+                if (not current_query) and query:
+                    set_clauses.append("query=?")
+                    params.append(query)
+
+                changed_any = bool(set_clauses)
+
+                name_updated = False
+                if not no_upsert_name and not user_changed_name and current_name != system_computed_name:
+                    set_clauses.append("name=?")
+                    params.append(system_computed_name)
+                    name_updated = True
+                elif user_changed_name:
+                    stats["name_skipped_user_custom"] += 1
+
+                exactly_matches = (
+                    current_query == query
+                    and (current_categories or "") == categories
+                    and (current_languages or "") == languages
+                    and current_force_crawl == force_crawl
+                    and current_enabled == enabled_target
+                    and current_name == system_computed_name
+                    and (current_origin_kind or "") == "favorite_artist"
+                    and current_origin_artist == artist_clean
+                    and (current_origin_favcats or "") == origin_favcats_csv
+                )
+
+                if exactly_matches and not changed_any and not name_updated:
+                    stats["skipped_duplicate_existing"] += 1
+                    continue
+
+                if not set_clauses:
+                    stats["skipped_unchanged"] += 1
+                    continue
+
+                params.append(target_id)
+                sql = f"UPDATE refresh_targets SET {', '.join(set_clauses)} WHERE id=?"
+                cursor = await db.execute(sql, params)
+                if (cursor.rowcount or 0) > 0:
+                    stats["updated"] += 1
+
+            await db.commit()
+        return stats
+
+
+def ensure_gallery_compression_columns_v1(conn) -> None:
+    """幂等新增压缩状态、临时审核详情与最终压缩率字段。
+
+    Phase 1 起步仅 2 列；列若已存在（含 PR#10 残留）则跳过，不抛错。
+    不走 user_version，避免与现有 downloads_dir / galleries 其他迁移冲突。
+    """
+    import sqlite3
+    if not isinstance(conn, sqlite3.Connection):
+        raise TypeError("ensure_gallery_compression_columns_v1 expects sync sqlite3.Connection")
+    cur = conn.execute("PRAGMA table_info(galleries)")
+    existing = {row[1] for row in cur.fetchall()}
+    if "compression_status" not in existing:
+        conn.execute(
+            "ALTER TABLE galleries ADD COLUMN compression_status TEXT NOT NULL DEFAULT ''"
+        )
+    if "compression_info" not in existing:
+        conn.execute(
+            "ALTER TABLE galleries ADD COLUMN compression_info TEXT NOT NULL DEFAULT ''"
+        )
+    if "compression_savings_pct" not in existing:
+        conn.execute(
+            "ALTER TABLE galleries ADD COLUMN compression_savings_pct REAL DEFAULT NULL"
+        )
+
+    rows = conn.execute(
+        """SELECT id,compression_info FROM galleries
+             WHERE compression_status IN ('applied','compressed','skipped')
+               AND COALESCE(compression_info,'')<>''"""
+    ).fetchall()
+    for gallery_id, info_json in rows:
+        try:
+            info = json.loads(info_json)
+        except (TypeError, ValueError):
+            info = {}
+        savings_pct = info.get("savings_pct_overall") if isinstance(info, dict) else None
+        conn.execute(
+            """UPDATE galleries
+                  SET compression_savings_pct=COALESCE(compression_savings_pct,?), compression_info=''
+                WHERE id=?""",
+            (savings_pct, gallery_id),
+        )
+    conn.execute(
+        "UPDATE galleries SET compression_status='applied' WHERE compression_status='compressed'"
+    )
+    conn.commit()
+

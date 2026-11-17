@@ -239,6 +239,7 @@ function isCrawlTask(t) {
 
 async function checkDownloadProgress() {
     const data = await api('get_download_progress');
+    _updateGlobalDownloadPill(data);
     const tasks = (data && data.tasks) || [];
 
     const card = document.getElementById('active_downloads_card');
@@ -360,6 +361,7 @@ function toggleDownloadsTray() {
     if (btn) {
         btn.innerHTML = isCollapsed ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
     }
+    if (!isCollapsed) checkDownloadProgress();
 }
 function trackDownloadProgress(source, sourceId) {
     _activeProgressKey = source + '__' + sourceId.replace(/\//g, '_');
@@ -374,8 +376,10 @@ function trackDownloadProgress(source, sourceId) {
 }
 
 async function stopCrawl() {
-    if (!await confirmDialog({ title: '终止爬取', message: '确定终止正在运行的后台爬取任务吗？', okText: '终止', okClass: 'btn-danger' })) return;
-    await api('stop_crawl', { form: { action: 'stop_crawl', source: 'exhentai' } });
+    var queue = await api('crawl_queue');
+    var running = queue.ok ? (queue.jobs || []).find(function(job) { return job.status === 'running'; }) : null;
+    if (!running) { showToast('当前没有正在执行的爬取任务', 'warning'); return; }
+    await stopCrawlJob(running.id);
     checkDownloadProgress();
 }
 
@@ -395,3 +399,40 @@ function clearDownloadProgress() {
         bar.textContent = '';
     }
 }
+
+// ─── Global Download Pill refresh ───
+function _updateGlobalDownloadPill(data) {
+    const pill = document.getElementById('global_dl_pill');
+    const countEl = document.getElementById('global_dl_count');
+    const barEl = document.getElementById('global_dl_bar');
+    if (!pill || !countEl || !barEl) return;
+    const tasks = (data && data.tasks) || [];
+    const realTasks = tasks.filter(function(t) { return !isCrawlTask(t); });
+    if (realTasks.length === 0 && tasks.length === 0) {
+        pill.classList.add('d-none');
+        pill.classList.remove('pill-active', 'pill-error');
+        barEl.style.width = '0%';
+        countEl.textContent = '0';
+        return;
+    }
+    pill.classList.remove('d-none');
+    countEl.textContent = String(realTasks.length || tasks.length);
+
+    // Aggregate progress across real download tasks
+    let totalSum = 0, doneSum = 0, hasError = false, isRunning = false;
+    realTasks.forEach(function(t) {
+        const tot = parseInt(t.total_pages, 10) || 0;
+        const cur = parseInt(t.current, 10) || 0;
+        const s = String(t.status || '');
+        if (s === 'error' || s === 'failed') hasError = true;
+        else if (s === 'running' || s === 'downloading') isRunning = true;
+        totalSum += tot;
+        doneSum += Math.min(cur, tot);
+    });
+    const pct = totalSum > 0 ? Math.max(0, Math.min(100, Math.round(doneSum / totalSum * 100))) : 0;
+    barEl.style.width = pct + '%';
+
+    pill.classList.toggle('pill-active', isRunning && !hasError);
+    pill.classList.toggle('pill-error', hasError);
+}
+

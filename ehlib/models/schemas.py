@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
 
@@ -7,6 +7,15 @@ class Tag:
     id: int | None = None
     type: str = ""
     name: str = ""
+    match_keys: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "type": self.type,
+            "name": self.name,
+            "match_keys": list(self.match_keys) if self.match_keys else [],
+        }
 
 
 @dataclass
