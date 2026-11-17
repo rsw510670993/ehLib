@@ -86,16 +86,16 @@ $parts = __DIR__ . '/parts';
                     <span class="toolbar-label">分类</span>
                     <div class="chips" id="cache_category_tags">
                         <button class="cat-tag active" data-cat="all" onclick="cacheToggleCategory(this)" style="--cat-color:#6d8bff">全部</button>
-                        <button class="cat-tag" data-cat="Doujinshi" onclick="cacheToggleCategory(this)" style="--cat-color:#e2565f">Doujinshi</button>
-                        <button class="cat-tag" data-cat="Manga" onclick="cacheToggleCategory(this)" style="--cat-color:#4a72c4">Manga</button>
-                        <button class="cat-tag" data-cat="Artist CG" onclick="cacheToggleCategory(this)" style="--cat-color:#8b5cc7">Artist CG</button>
-                        <button class="cat-tag" data-cat="Game CG" onclick="cacheToggleCategory(this)" style="--cat-color:#c07f34">Game CG</button>
-                        <button class="cat-tag" data-cat="Western" onclick="cacheToggleCategory(this)" style="--cat-color:#3f8a63">Western</button>
-                        <button class="cat-tag" data-cat="Non-H" onclick="cacheToggleCategory(this)" style="--cat-color:#7c8598">Non-H</button>
-                        <button class="cat-tag" data-cat="Image Set" onclick="cacheToggleCategory(this)" style="--cat-color:#3d8f9c">Image Set</button>
-                        <button class="cat-tag" data-cat="Cosplay" onclick="cacheToggleCategory(this)" style="--cat-color:#b7568f">Cosplay</button>
-                        <button class="cat-tag" data-cat="Asian Porn" onclick="cacheToggleCategory(this)" style="--cat-color:#8a6a4f">Asian Porn</button>
-                        <button class="cat-tag" data-cat="Misc" onclick="cacheToggleCategory(this)" style="--cat-color:#5b6b86">Misc</button>
+                        <button class="cat-tag" data-cat="Doujinshi" onclick="cacheToggleCategory(this)" style="--cat-color:#e2565f">同人志</button>
+                        <button class="cat-tag" data-cat="Manga" onclick="cacheToggleCategory(this)" style="--cat-color:#4a72c4">漫画</button>
+                        <button class="cat-tag" data-cat="Artist CG" onclick="cacheToggleCategory(this)" style="--cat-color:#8b5cc7">艺术家CG</button>
+                        <button class="cat-tag" data-cat="Game CG" onclick="cacheToggleCategory(this)" style="--cat-color:#c07f34">游戏CG</button>
+                        <button class="cat-tag" data-cat="Western" onclick="cacheToggleCategory(this)" style="--cat-color:#3f8a63">西方</button>
+                        <button class="cat-tag" data-cat="Non-H" onclick="cacheToggleCategory(this)" style="--cat-color:#7c8598">非H</button>
+                        <button class="cat-tag" data-cat="Image Set" onclick="cacheToggleCategory(this)" style="--cat-color:#3d8f9c">图集</button>
+                        <button class="cat-tag" data-cat="Cosplay" onclick="cacheToggleCategory(this)" style="--cat-color:#b7568f">角色扮演</button>
+                        <button class="cat-tag" data-cat="Asian Porn" onclick="cacheToggleCategory(this)" style="--cat-color:#8a6a4f">亚洲色情</button>
+                        <button class="cat-tag" data-cat="Misc" onclick="cacheToggleCategory(this)" style="--cat-color:#5b6b86">其他</button>
                     </div>
                 </div>
                 <div class="toolbar-row">

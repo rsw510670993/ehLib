@@ -142,7 +142,9 @@ function _buildLanguageTags(container, langs, stateSet, onToggle) {
         btn.className = 'cat-tag' + (stateSet.has(l) ? ' active' : '');
         btn.dataset.lang = l;
         btn.style.setProperty('--cat-color', '#6b7280');
-        btn.textContent = l;
+        // 显示走紧凑译名（日/中/无字/去字），data-lang 仍保留原文给筛选逻辑
+        btn.textContent = (typeof compactGalleryLanguage === 'function') ? compactGalleryLanguage(l) : l;
+        btn.title = l;
         btn.onclick = function() { onToggle(this); };
         container.appendChild(btn);
     });
@@ -165,7 +167,8 @@ function _buildLanguageTags(container, langs, stateSet, onToggle) {
             btn.className = 'cat-tag' + (stateSet.has(l) ? ' active' : '');
             btn.dataset.lang = l;
             btn.style.setProperty('--cat-color', '#6b7280');
-            btn.textContent = l;
+            btn.textContent = (typeof compactGalleryLanguage === 'function') ? compactGalleryLanguage(l) : l;
+            btn.title = l;
             btn.onclick = function() { onToggle(this); };
             content.appendChild(btn);
         });
