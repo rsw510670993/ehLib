@@ -1380,3 +1380,12 @@ body.modal-open { overflow: hidden; }
     left: 6px; top: 6px; width: 20px; height: 20px; font-size: 12px;
   }
 }
+
+/* 缓存页沿用图库的页数标记：放在封面里，纯标记不可点（不压信息区按钮行） */
+#cache_grid .gallery-card .cache-page-count { cursor: default; }
+#cache_grid .gallery-card .cache-page-count:active { transform: none; }
+@media (max-width: 639px) {
+  #cache_grid .gallery-card .cache-page-count {
+    font-size: 22px !important; right: 8px; bottom: 7px; padding: 3px 7px 4px !important;
+  }
+}

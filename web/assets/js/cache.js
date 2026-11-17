@@ -470,6 +470,8 @@ function renderCacheGrid() {
                 '<div class="card-img-wrapper" data-sid="' + escapedSid + '" aria-pressed="' + (_selectedIds.has(source_id) ? 'true' : 'false') + '" style="aspect-ratio:3/4;overflow:hidden;background:#f0f0f0;cursor:pointer" onclick="cacheCardClick(event,\'' + escapedSid + '\')">' +
                 thumbHtml +
                 '<div class="delete-overlay"><button class="btn btn-sm btn-dark py-0 px-1" style="font-size:.7rem;line-height:1.4" onclick="event.stopPropagation();cacheDeleteItem(\'' + escapedSid + '\')" title="删除缓存"><i class="fas fa-trash-alt"></i></button></div>' +
+                // 沿用图库 F4 的页数标记：封面右下大字实底胶囊（纯标记，不可点）
+                '<span class="gallery-page-count cache-page-count" aria-label="共 ' + (g.total_pages || 0) + ' 页">' + (g.total_pages || 0) + '<small>页</small></span>' +
                 '</div>' +
                 '<div class="card-body px-2 py-1 card-info-body">' +
                 // 第 1~3 行：中文标题 + 日语标题，合占严格 3 行（主最多 2 行 / 副 1 行；无副时主占满 3 行）
@@ -478,11 +480,10 @@ function renderCacheGrid() {
                 '<div class="title-primary" style="color:var(--bs-link-color)">' + _zwspWrap(escapeHtml(displayTitles.primary)) + '</div>' +
                 (displayTitles.secondary ? '<div class="title-secondary text-muted">' + _zwspWrap(escapeHtml(displayTitles.secondary)) + '</div>' : '') +
                 '</div>' +
-                // 第 4 行（左对齐）：分类 badge + 语种 badge + 页数
+                // 第 4 行（左对齐）：分类 badge + 语种 badge（页数已挪到封面右下，见下方页数标记）
                 '<div class="d-flex align-items-center gap-1 card-info-row card-row-top">' +
                 catBadge +
                 langBadge +
-                '<span class="small text-muted">' + (g.total_pages || 0) + 'p</span>' +
                 '</div>' +
                 // 第 5 行（右对齐）：本地阅览 / 下载 / ExHentai 外链
                 '<div class="d-flex align-items-center gap-1 card-info-row card-row-bottom">' +
