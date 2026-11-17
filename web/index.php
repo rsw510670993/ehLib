@@ -112,7 +112,7 @@ $jsBase = is_dir(__DIR__ . '/assets/js') ? 'assets/js' : '../web/assets/js';
 <script src="<?= $jsBase ?>/navigation.js?v=7"></script>
 <script src="<?= $jsBase ?>/config.js?v=2"></script>
 <script src="<?= $jsBase ?>/download.js?v=3"></script>
-<script src="<?= $jsBase ?>/cache.js?v=31"></script>
+<script src="<?= $jsBase ?>/cache.js?v=32"></script>
 <script src="<?= $jsBase ?>/gallery.js?v=20"></script>
 <script src="<?= $jsBase ?>/compress_compare.js?v=5"></script>
 <script src="<?= $jsBase ?>/compression.js?v=5"></script>

@@ -452,10 +452,14 @@ function renderCacheGrid() {
         _cacheResults.map(function(g, idx) {
             var displayTitles = getGalleryDisplayTitles(g);
             var catColor = CAT_COLORS[g.category] || '#6c757d';
-            var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(g.category) + '</span>' : '';
+            // 分类与语种沿用图库的紧凑译名（gallery.js 的 compactGalleryCategory / compactGalleryLanguage），
+            // 两页同一套写法，短译名才放得进一行；任一函数缺失时退回原文
+            var catLabel = (typeof compactGalleryCategory === 'function') ? compactGalleryCategory(g.category) : (g.category || '');
+            var catBadge = g.category ? '<span class="badge" style="background:' + catColor + ';font-size:.65rem">' + escapeHtml(catLabel) + '</span>' : '';
             var langColor = { 'japanese': '#0dcaf0', 'chinese': '#dc3545' };
             var lang = g.language || '';
-            var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(lang) + '</span>' : '';
+            var langLabel = (typeof compactGalleryLanguage === 'function') ? compactGalleryLanguage(lang) : lang;
+            var langBadge = lang ? '<span class="lang-badge" style="color:' + (langColor[lang.toLowerCase()] || '#6b7280') + '">' + escapeHtml(langLabel) + '</span>' : '';
             var thumbHtml = g.thumb_url
                 ? '<img src="' + g.thumb_url + '" class="card-img-top" alt="cover" loading="lazy" style="aspect-ratio:3/4;object-fit:cover" onerror="this.style.display=\'none\'" onload="onCoverLoad(this)">'
                 : '<div class="placeholder-thumb" style="aspect-ratio:3/4;background:#f0f0f0;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:2rem"><i class="far fa-image"></i></div>';
